@@ -489,12 +489,14 @@ function WaitingPrompt({
 }) {
   const [value, setValue] = useState("");
   const [feedback, setFeedback] = useState("");
+  const [isDismissed, setIsDismissed] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const needsApproval = waitingFor.kind === "approval" || waitingFor.kind === "authentication";
 
   useEffect(() => {
     setValue("");
     setFeedback("");
+    setIsDismissed(false);
     setIsSubmitting(false);
   }, [waitingKey]);
 
@@ -507,6 +509,7 @@ function WaitingPrompt({
         approved,
         response: value.trim() || undefined,
       });
+      setIsDismissed(true);
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Request failed.");
       setIsSubmitting(false);
@@ -519,11 +522,16 @@ function WaitingPrompt({
 
     try {
       await onCancel();
+      setIsDismissed(true);
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Cancel failed.");
       setIsSubmitting(false);
     }
   };
+
+  if (isDismissed) {
+    return null;
+  }
 
   return (
     <div className="mt-4 rounded-[1.4rem] border border-amber-200/80 bg-amber-50/70 p-4 shadow-sm">
