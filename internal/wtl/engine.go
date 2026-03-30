@@ -1,0 +1,732 @@
+package wtl
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
+	"github.com/siisee11/CodexVirtualAssistant/internal/policy/gan"
+	"github.com/siisee11/CodexVirtualAssistant/internal/prompting"
+	"github.com/siisee11/CodexVirtualAssistant/internal/store"
+)
+
+var ErrInvalidRunState = errors.New("wtl: invalid run state")
+
+type Repository interface {
+	SaveRun(context.Context, assistant.Run) error
+	AddRunEvent(context.Context, assistant.RunEvent) error
+	AddAttempt(context.Context, assistant.Attempt) error
+	AddArtifact(context.Context, assistant.Artifact) error
+	AddEvidence(context.Context, assistant.Evidence) error
+	AddEvaluation(context.Context, assistant.Evaluation) error
+	AddToolCall(context.Context, assistant.ToolCall) error
+	AddWebStep(context.Context, assistant.WebStep) error
+	AddWaitRequest(context.Context, assistant.WaitRequest) error
+	GetRun(context.Context, string) (assistant.Run, error)
+	GetRunRecord(context.Context, string) (store.RunRecord, error)
+}
+
+type ProjectManager interface {
+	SelectionRoot() string
+	EnsureProject(assistant.ProjectContext) (assistant.ProjectContext, error)
+}
+
+type RunEngine struct {
+	repo     Repository
+	runtime  Runtime
+	observer Observer
+	policy   gan.Policy
+	projects ProjectManager
+	now      func() time.Time
+}
+
+func NewRunEngine(repo Repository, runtime Runtime, observer Observer, policy gan.Policy, projects ProjectManager, now func() time.Time) *RunEngine {
+	if observer == nil {
+		observer = noopObserver{}
+	}
+	if now == nil {
+		now = time.Now
+	}
+	return &RunEngine{
+		repo:     repo,
+		runtime:  runtime,
+		observer: observer,
+		policy:   policy,
+		projects: projects,
+		now:      now,
+	}
+}
+
+func (e *RunEngine) Start(ctx context.Context, run assistant.Run) error {
+	if err := run.Validate(); err != nil {
+		return err
+	}
+
+	_, err := e.repo.GetRun(ctx, run.ID)
+	switch {
+	case err == nil:
+		return fmt.Errorf("%w: run %s already exists", ErrInvalidRunState, run.ID)
+	case !errors.Is(err, store.ErrNotFound):
+		return err
+	}
+
+	run.Status = assistant.RunStatusQueued
+	run.Phase = assistant.RunPhaseQueued
+	run.WaitingFor = nil
+	run.LatestEvaluation = nil
+	run.AttemptCount = 0
+	run.CreatedAt = run.CreatedAt.UTC()
+	run.UpdatedAt = run.CreatedAt
+	if err := e.repo.SaveRun(ctx, run); err != nil {
+		return err
+	}
+	if err := e.publishEvent(ctx, run.ID, assistant.EventTypeRunCreated, assistant.RunPhaseQueued, "Run created from the user request."); err != nil {
+		return err
+	}
+
+	return e.continueRun(ctx, run.ID, assistant.AttemptRoleProjectSelector, nil)
+}
+
+func (e *RunEngine) Resume(ctx context.Context, runID string, input map[string]string) error {
+	record, err := e.repo.GetRunRecord(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if record.Run.Status != assistant.RunStatusWaiting {
+		return fmt.Errorf("%w: run %s is not waiting", ErrInvalidRunState, runID)
+	}
+	if record.Run.Status == assistant.RunStatusCancelled {
+		return fmt.Errorf("%w: run %s is cancelled", ErrInvalidRunState, runID)
+	}
+
+	role := assistant.AttemptRolePlanner
+	if len(record.Attempts) > 0 {
+		role = record.Attempts[len(record.Attempts)-1].Role
+	}
+
+	record.Run.WaitingFor = nil
+	record.Run.UpdatedAt = e.now().UTC()
+	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+		return err
+	}
+	if err := e.publishEvent(ctx, runID, assistant.EventTypePhaseChanged, record.Run.Phase, "External input received and the run resumed."); err != nil {
+		return err
+	}
+	return e.continueRun(ctx, runID, role, input)
+}
+
+func (e *RunEngine) Cancel(ctx context.Context, runID string) error {
+	run, err := e.repo.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if isTerminalStatus(run.Status) {
+		return nil
+	}
+
+	now := e.now().UTC()
+	run.Status = assistant.RunStatusCancelled
+	run.Phase = assistant.RunPhaseCancelled
+	run.WaitingFor = nil
+	run.UpdatedAt = now
+	if err := e.repo.SaveRun(ctx, run); err != nil {
+		return err
+	}
+	return e.publishEvent(ctx, run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseCancelled, "Run cancelled.")
+}
+
+func (e *RunEngine) continueRun(ctx context.Context, runID string, role assistant.AttemptRole, resumeInput map[string]string) error {
+	for {
+		record, err := e.repo.GetRunRecord(ctx, runID)
+		if err != nil {
+			return err
+		}
+		if isTerminalStatus(record.Run.Status) {
+			return nil
+		}
+
+		switch role {
+		case assistant.AttemptRoleProjectSelector:
+			if err := e.executeProjectSelector(ctx, &record, resumeInput); err != nil {
+				return err
+			}
+			record, err = e.repo.GetRunRecord(ctx, runID)
+			if err != nil {
+				return err
+			}
+			if record.Run.Status == assistant.RunStatusWaiting || isTerminalStatus(record.Run.Status) {
+				return nil
+			}
+			role = assistant.AttemptRolePlanner
+			resumeInput = nil
+		case assistant.AttemptRolePlanner:
+			if err := e.executePlanner(ctx, &record, resumeInput); err != nil {
+				return err
+			}
+			record, err = e.repo.GetRunRecord(ctx, runID)
+			if err != nil {
+				return err
+			}
+			if record.Run.Status == assistant.RunStatusWaiting || isTerminalStatus(record.Run.Status) {
+				return nil
+			}
+			role = assistant.AttemptRoleContractor
+			resumeInput = nil
+		case assistant.AttemptRoleContractor:
+			advance, err := e.executeContract(ctx, &record, resumeInput)
+			if err != nil {
+				return err
+			}
+			record, err = e.repo.GetRunRecord(ctx, runID)
+			if err != nil {
+				return err
+			}
+			if record.Run.Status == assistant.RunStatusWaiting || isTerminalStatus(record.Run.Status) {
+				return nil
+			}
+			if advance {
+				role = assistant.AttemptRoleGenerator
+			} else {
+				role = assistant.AttemptRoleContractor
+			}
+			resumeInput = nil
+		case assistant.AttemptRoleGenerator:
+			if err := e.executeGenerator(ctx, &record, resumeInput); err != nil {
+				return err
+			}
+			record, err = e.repo.GetRunRecord(ctx, runID)
+			if err != nil {
+				return err
+			}
+			if record.Run.Status == assistant.RunStatusWaiting || isTerminalStatus(record.Run.Status) {
+				return nil
+			}
+			role = assistant.AttemptRoleEvaluator
+			resumeInput = nil
+		case assistant.AttemptRoleEvaluator:
+			directive, err := e.executeEvaluator(ctx, &record, resumeInput)
+			if err != nil {
+				return err
+			}
+			record, err = e.repo.GetRunRecord(ctx, runID)
+			if err != nil {
+				return err
+			}
+			switch directive {
+			case DirectiveWait:
+				return nil
+			case DirectiveComplete, DirectiveFail:
+				return nil
+			case DirectiveRetry:
+				role = assistant.AttemptRoleGenerator
+				resumeInput = nil
+			default:
+				return fmt.Errorf("wtl: unsupported directive %q", directive)
+			}
+		default:
+			return fmt.Errorf("wtl: unsupported role %q", role)
+		}
+	}
+}
+
+func (e *RunEngine) executeProjectSelector(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) error {
+	if e.projects == nil {
+		return e.failRun(ctx, record.Run, "Project selection is not configured.", ErrInvalidRunState)
+	}
+	now := e.now().UTC()
+	record.Run.Status = assistant.RunStatusSelectingProject
+	record.Run.Phase = assistant.RunPhaseSelectingProject
+	record.Run.WaitingFor = nil
+	record.Run.UpdatedAt = now
+	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+		return err
+	}
+	if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseSelectingProject, "Selecting the project workspace for this request."); err != nil {
+		return err
+	}
+
+	prompt := prompting.BuildProjectSelectorPrompt(prompting.ProjectSelectorInput{
+		UserRequestRaw: record.Run.UserRequestRaw,
+	})
+
+	attempt, response, err := e.executeAttempt(ctx, record.Run, record.Attempts, assistant.AttemptRoleProjectSelector, prompt, "", resumeInput, e.projects.SelectionRoot())
+	if err != nil {
+		return e.failRun(ctx, record.Run, fmt.Sprintf("Project selection failed: %v", err), err)
+	}
+	if response.WaitRequest != nil {
+		return e.enterWaiting(ctx, record.Run, attempt, response.WaitRequest)
+	}
+
+	projectSelection, summary, err := prompting.DecodeProjectSelectorOutput([]byte(response.Output))
+	if err != nil {
+		return e.failRun(ctx, record.Run, fmt.Sprintf("Project selector output could not be decoded: %v", err), err)
+	}
+	projectSelection, err = e.projects.EnsureProject(projectSelection)
+	if err != nil {
+		return e.failRun(ctx, record.Run, fmt.Sprintf("Selected project could not be prepared: %v", err), err)
+	}
+
+	record.Run.Project = projectSelection
+	record.Run.UpdatedAt = e.now().UTC()
+	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+		return err
+	}
+	return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhasePlanning, firstNonEmpty(summary, fmt.Sprintf("Project %s selected. Starting planning.", projectSelection.Slug)))
+}
+
+func (e *RunEngine) executePlanner(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) error {
+	now := e.now().UTC()
+	record.Run.Status = assistant.RunStatusPlanning
+	record.Run.Phase = assistant.RunPhasePlanning
+	record.Run.WaitingFor = nil
+	record.Run.UpdatedAt = now
+	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+		return err
+	}
+	if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhasePlanning, "Planning the task into a structured TaskSpec."); err != nil {
+		return err
+	}
+
+	prompt := prompting.BuildPlannerPrompt(prompting.PlannerInput{
+		UserRequestRaw:        record.Run.UserRequestRaw,
+		MaxGenerationAttempts: record.Run.MaxGenerationAttempts,
+		Project:               record.Run.Project,
+	})
+
+	attempt, response, err := e.executeAttempt(ctx, record.Run, record.Attempts, assistant.AttemptRolePlanner, prompt, "", resumeInput, record.Run.Project.WorkspaceDir)
+	if err != nil {
+		return e.failRun(ctx, record.Run, fmt.Sprintf("Planner execution failed: %v", err), err)
+	}
+	if response.WaitRequest != nil {
+		return e.enterWaiting(ctx, record.Run, attempt, response.WaitRequest)
+	}
+
+	spec, err := prompting.DecodePlannerOutput([]byte(response.Output), prompting.PlannerInput{
+		UserRequestRaw:        record.Run.UserRequestRaw,
+		MaxGenerationAttempts: record.Run.MaxGenerationAttempts,
+	})
+	if err != nil {
+		return e.failRun(ctx, record.Run, fmt.Sprintf("Planner output could not be decoded: %v", err), err)
+	}
+
+	record.Run.TaskSpec = spec
+	record.Run.AttemptCount = len(record.Attempts) + 1
+	record.Run.UpdatedAt = e.now().UTC()
+	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+		return err
+	}
+	return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseContracting, "Planning complete. Negotiating the acceptance contract before generation starts.")
+}
+
+func (e *RunEngine) executeContract(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) (bool, error) {
+	now := e.now().UTC()
+	record.Run.Status = assistant.RunStatusContracting
+	record.Run.Phase = assistant.RunPhaseContracting
+	record.Run.WaitingFor = nil
+	record.Run.UpdatedAt = now
+	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+		return false, err
+	}
+	if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseContracting, contractPhaseSummary(record.Run)); err != nil {
+		return false, err
+	}
+
+	prompt := prompting.BuildContractPrompt(prompting.ContractInput{
+		Run: record.Run,
+	})
+
+	attempt, response, err := e.executeAttempt(ctx, record.Run, record.Attempts, assistant.AttemptRoleContractor, prompt, "", resumeInput, record.Run.Project.WorkspaceDir)
+	if err != nil {
+		return false, e.failRun(ctx, record.Run, fmt.Sprintf("Contract execution failed: %v", err), err)
+	}
+	if response.WaitRequest != nil {
+		return false, e.enterWaiting(ctx, record.Run, attempt, response.WaitRequest)
+	}
+
+	contract, decision, err := prompting.DecodeContractOutput([]byte(response.Output), record.Run.TaskSpec)
+	if err != nil {
+		return false, e.failRun(ctx, record.Run, fmt.Sprintf("Contract output could not be decoded: %v", err), err)
+	}
+
+	record.Run.TaskSpec.AcceptanceContract = &contract
+	record.Run.AttemptCount = len(record.Attempts) + 1
+	record.Run.UpdatedAt = e.now().UTC()
+	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+		return false, err
+	}
+
+	switch decision {
+	case prompting.ContractDecisionAgreed:
+		if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseGenerating, "Acceptance contract agreed. Starting the first generation attempt."); err != nil {
+			return false, err
+		}
+		return true, nil
+	case prompting.ContractDecisionRevise:
+		if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseContracting, firstNonEmpty(contract.RevisionNotes, "Acceptance contract needs another revision before generation starts.")); err != nil {
+			return false, err
+		}
+		return false, nil
+	case prompting.ContractDecisionFail:
+		return false, e.failRun(ctx, record.Run, firstNonEmpty(contract.RevisionNotes, contract.Summary, "Acceptance contract could not be agreed."), ErrInvalidRunState)
+	default:
+		return false, fmt.Errorf("wtl: unknown contract decision %q", decision)
+	}
+}
+
+func (e *RunEngine) executeGenerator(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) error {
+	if !e.policy.CanGenerate(record.Run) {
+		return e.failRun(ctx, record.Run, "Generation cannot start before the acceptance contract is agreed.", ErrInvalidRunState)
+	}
+
+	now := e.now().UTC()
+	record.Run.Status = assistant.RunStatusGenerating
+	record.Run.Phase = assistant.RunPhaseGenerating
+	record.Run.WaitingFor = nil
+	record.Run.UpdatedAt = now
+	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+		return err
+	}
+	if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseGenerating, generatorPhaseSummary(record)); err != nil {
+		return err
+	}
+
+	critique := ""
+	if record.Run.LatestEvaluation != nil {
+		critique = record.Run.LatestEvaluation.NextActionForGenerator
+	}
+
+	prompt := prompting.BuildGeneratorPrompt(prompting.GeneratorInput{
+		Run:           record.Run,
+		Attempt:       assistant.Attempt{},
+		PriorCritique: critique,
+	})
+
+	attempt, response, err := e.executeAttempt(ctx, record.Run, record.Attempts, assistant.AttemptRoleGenerator, prompt, critique, resumeInput, record.Run.Project.WorkspaceDir)
+	if err != nil {
+		return e.failRun(ctx, record.Run, fmt.Sprintf("Generator execution failed: %v", err), err)
+	}
+	if response.WaitRequest != nil {
+		return e.enterWaiting(ctx, record.Run, attempt, response.WaitRequest)
+	}
+
+	record.Run.AttemptCount = len(record.Attempts) + 1
+	record.Run.UpdatedAt = e.now().UTC()
+	return e.repo.SaveRun(ctx, record.Run)
+}
+
+func (e *RunEngine) executeEvaluator(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) (Directive, error) {
+	if !e.policy.HasAcceptedContract(record.Run) {
+		return "", e.failRun(ctx, record.Run, "Evaluation cannot start before the acceptance contract is agreed.", ErrInvalidRunState)
+	}
+
+	now := e.now().UTC()
+	record.Run.Status = assistant.RunStatusEvaluating
+	record.Run.Phase = assistant.RunPhaseEvaluating
+	record.Run.WaitingFor = nil
+	record.Run.UpdatedAt = now
+	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+		return "", err
+	}
+	if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseEvaluating, "Evaluating the latest generated result against the done definition."); err != nil {
+		return "", err
+	}
+
+	generatorAttempt := latestAttemptByRole(record.Attempts, assistant.AttemptRoleGenerator)
+	if generatorAttempt == nil {
+		return "", e.failRun(ctx, record.Run, "Cannot evaluate because no generator attempt was found.", ErrInvalidRunState)
+	}
+
+	prompt := prompting.BuildEvaluatorPrompt(prompting.EvaluatorInput{
+		Run:       record.Run,
+		Attempt:   *generatorAttempt,
+		Artifacts: record.Artifacts,
+		Evidence:  record.Evidence,
+	})
+
+	attempt, response, err := e.executeAttempt(ctx, record.Run, record.Attempts, assistant.AttemptRoleEvaluator, prompt, "", resumeInput, record.Run.Project.WorkspaceDir)
+	if err != nil {
+		return "", e.failRun(ctx, record.Run, fmt.Sprintf("Evaluator execution failed: %v", err), err)
+	}
+	if response.WaitRequest != nil {
+		return DirectiveWait, e.enterWaiting(ctx, record.Run, attempt, response.WaitRequest)
+	}
+
+	evaluation, err := prompting.DecodeEvaluatorOutput([]byte(response.Output), record.Run.ID, attempt.ID, e.now())
+	if err != nil {
+		return "", e.failRun(ctx, record.Run, fmt.Sprintf("Evaluator output could not be decoded: %v", err), err)
+	}
+	if err := e.repo.AddEvaluation(ctx, evaluation); err != nil {
+		return "", err
+	}
+	record.Run.LatestEvaluation = &evaluation
+	if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypeEvaluation, assistant.RunPhaseEvaluating, evaluation.Summary); err != nil {
+		return "", err
+	}
+
+	updatedRecord, err := e.repo.GetRunRecord(ctx, record.Run.ID)
+	if err != nil {
+		return "", err
+	}
+	switch e.policy.DecideEvaluation(updatedRecord.Run, updatedRecord.Attempts, evaluation) {
+	case gan.EvaluationDecisionComplete:
+		return DirectiveComplete, e.completeRun(ctx, updatedRecord.Run, evaluation.Summary)
+	case gan.EvaluationDecisionFail:
+		return DirectiveFail, e.exhaustRun(ctx, updatedRecord.Run, evaluation.Summary)
+	case gan.EvaluationDecisionRetry:
+		if err := e.publishEvent(ctx, updatedRecord.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseGenerating, "Evaluation requested another generation attempt with critique."); err != nil {
+			return "", err
+		}
+		return DirectiveRetry, nil
+	default:
+		return "", fmt.Errorf("wtl: unknown evaluation decision")
+	}
+}
+
+func (e *RunEngine) executeAttempt(ctx context.Context, run assistant.Run, existingAttempts []assistant.Attempt, role assistant.AttemptRole, prompt prompting.Bundle, critique string, resumeInput map[string]string, workingDir string) (assistant.Attempt, PhaseResponse, error) {
+	startedAt := e.now().UTC()
+	attempt := assistant.Attempt{
+		ID:           assistant.NewID("attempt", startedAt),
+		RunID:        run.ID,
+		Sequence:     len(existingAttempts) + 1,
+		Role:         role,
+		InputSummary: summarizePrompt(prompt),
+		Critique:     critique,
+		StartedAt:    startedAt,
+	}
+
+	response, err := e.runtime.Execute(ctx, role, PhaseRequest{
+		Run:         run,
+		Attempt:     attempt,
+		Critique:    critique,
+		ResumeInput: resumeInput,
+		Prompt:      prompt,
+		WorkingDir:  workingDir,
+		LiveEmit: func(event assistant.RunEvent) {
+			if event.RunID == "" {
+				event.RunID = run.ID
+			}
+			if event.ID == "" {
+				event.ID = assistant.NewID("event", e.now().UTC())
+			}
+			if event.CreatedAt.IsZero() {
+				event.CreatedAt = e.now().UTC()
+			}
+			_ = e.observer.Publish(ctx, event)
+		},
+	})
+
+	finishedAt := e.now().UTC()
+	attempt.FinishedAt = &finishedAt
+	if err != nil {
+		attempt.OutputSummary = err.Error()
+		if saveErr := e.repo.AddAttempt(ctx, attempt); saveErr != nil {
+			return assistant.Attempt{}, PhaseResponse{}, saveErr
+		}
+		return attempt, PhaseResponse{}, err
+	}
+
+	attempt.OutputSummary = firstNonEmpty(strings.TrimSpace(response.Summary), summarizeOutput(response.Output))
+	if err := e.repo.AddAttempt(ctx, attempt); err != nil {
+		return assistant.Attempt{}, PhaseResponse{}, err
+	}
+	if err := e.persistPhaseResponse(ctx, run.ID, attempt.ID, response, finishedAt); err != nil {
+		return assistant.Attempt{}, PhaseResponse{}, err
+	}
+	return attempt, response, nil
+}
+
+func (e *RunEngine) persistPhaseResponse(ctx context.Context, runID, attemptID string, response PhaseResponse, now time.Time) error {
+	for _, artifact := range response.Artifacts {
+		artifact.ID = firstNonEmpty(artifact.ID, assistant.NewID("artifact", now))
+		artifact.RunID = runID
+		artifact.AttemptID = attemptID
+		artifact.CreatedAt = normalizeTime(artifact.CreatedAt, now)
+		if err := e.repo.AddArtifact(ctx, artifact); err != nil {
+			return err
+		}
+	}
+	for _, evidence := range response.Evidence {
+		evidence.ID = firstNonEmpty(evidence.ID, assistant.NewID("evidence", now))
+		evidence.RunID = runID
+		evidence.AttemptID = attemptID
+		evidence.CreatedAt = normalizeTime(evidence.CreatedAt, now)
+		if err := e.repo.AddEvidence(ctx, evidence); err != nil {
+			return err
+		}
+	}
+	for _, toolCall := range response.ToolCalls {
+		toolCall.ID = firstNonEmpty(toolCall.ID, assistant.NewID("tool", now))
+		toolCall.RunID = runID
+		toolCall.AttemptID = attemptID
+		toolCall.StartedAt = normalizeTime(toolCall.StartedAt, now)
+		toolCall.FinishedAt = normalizeTime(toolCall.FinishedAt, now)
+		if err := e.repo.AddToolCall(ctx, toolCall); err != nil {
+			return err
+		}
+	}
+	for _, webStep := range response.WebSteps {
+		webStep.ID = firstNonEmpty(webStep.ID, assistant.NewID("webstep", now))
+		webStep.RunID = runID
+		webStep.AttemptID = attemptID
+		webStep.OccurredAt = normalizeTime(webStep.OccurredAt, now)
+		if err := e.repo.AddWebStep(ctx, webStep); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *RunEngine) enterWaiting(ctx context.Context, run assistant.Run, attempt assistant.Attempt, waitRequest *assistant.WaitRequest) error {
+	now := e.now().UTC()
+	wait := *waitRequest
+	wait.ID = firstNonEmpty(wait.ID, assistant.NewID("wait", now))
+	wait.RunID = run.ID
+	wait.CreatedAt = normalizeTime(wait.CreatedAt, now)
+	if err := e.repo.AddWaitRequest(ctx, wait); err != nil {
+		return err
+	}
+
+	run.Status = assistant.RunStatusWaiting
+	run.Phase = assistant.RunPhaseWaiting
+	run.WaitingFor = &wait
+	run.AttemptCount = attempt.Sequence
+	run.UpdatedAt = now
+	if err := e.repo.SaveRun(ctx, run); err != nil {
+		return err
+	}
+	return e.publishEvent(ctx, run.ID, assistant.EventTypeWaiting, assistant.RunPhaseWaiting, wait.Title)
+}
+
+func (e *RunEngine) completeRun(ctx context.Context, run assistant.Run, summary string) error {
+	now := e.now().UTC()
+	run.Status = assistant.RunStatusCompleted
+	run.Phase = assistant.RunPhaseCompleted
+	run.WaitingFor = nil
+	run.UpdatedAt = now
+	run.CompletedAt = &now
+	if err := e.repo.SaveRun(ctx, run); err != nil {
+		return err
+	}
+	return e.publishEvent(ctx, run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseCompleted, firstNonEmpty(summary, "Run completed."))
+}
+
+func (e *RunEngine) exhaustRun(ctx context.Context, run assistant.Run, summary string) error {
+	now := e.now().UTC()
+	run.Status = assistant.RunStatusExhausted
+	run.Phase = assistant.RunPhaseFailed
+	run.WaitingFor = nil
+	run.UpdatedAt = now
+	if err := e.repo.SaveRun(ctx, run); err != nil {
+		return err
+	}
+	return e.publishEvent(ctx, run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseFailed, firstNonEmpty(summary, "Run exhausted the available generation attempts."))
+}
+
+func (e *RunEngine) failRun(ctx context.Context, run assistant.Run, summary string, cause error) error {
+	now := e.now().UTC()
+	run.Status = assistant.RunStatusFailed
+	run.Phase = assistant.RunPhaseFailed
+	run.WaitingFor = nil
+	run.UpdatedAt = now
+	if err := e.repo.SaveRun(ctx, run); err != nil {
+		return err
+	}
+	if eventErr := e.publishEvent(ctx, run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseFailed, summary); eventErr != nil {
+		return eventErr
+	}
+	return cause
+}
+
+func (e *RunEngine) publishEvent(ctx context.Context, runID string, eventType assistant.EventType, phase assistant.RunPhase, summary string) error {
+	event := assistant.RunEvent{
+		ID:        assistant.NewID("event", e.now()),
+		RunID:     runID,
+		Type:      eventType,
+		Phase:     phase,
+		Summary:   summary,
+		CreatedAt: e.now().UTC(),
+	}
+	if err := e.repo.AddRunEvent(ctx, event); err != nil {
+		return err
+	}
+	return e.observer.Publish(ctx, event)
+}
+
+func summarizePrompt(bundle prompting.Bundle) string {
+	parts := []string{strings.TrimSpace(bundle.System), strings.TrimSpace(bundle.User)}
+	text := strings.TrimSpace(strings.Join(parts, "\n"))
+	if len(text) > 240 {
+		return text[:240]
+	}
+	return text
+}
+
+func summarizeOutput(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) > 240 {
+		return trimmed[:240]
+	}
+	return trimmed
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func normalizeTime(value time.Time, fallback time.Time) time.Time {
+	if value.IsZero() {
+		return fallback.UTC()
+	}
+	return value.UTC()
+}
+
+func latestAttemptByRole(attempts []assistant.Attempt, role assistant.AttemptRole) *assistant.Attempt {
+	for idx := len(attempts) - 1; idx >= 0; idx-- {
+		if attempts[idx].Role == role {
+			attempt := attempts[idx]
+			return &attempt
+		}
+	}
+	return nil
+}
+
+func generatorPhaseSummary(record *store.RunRecord) string {
+	attempt := 1
+	if record.Run.LatestEvaluation != nil {
+		attempt = len(record.Attempts) + 1
+	}
+	if record.Run.LatestEvaluation != nil && strings.TrimSpace(record.Run.LatestEvaluation.NextActionForGenerator) != "" {
+		return fmt.Sprintf("Generator retry %d is addressing evaluator critique.", attempt)
+	}
+	return fmt.Sprintf("Generator attempt %d is producing work artifacts.", attempt)
+}
+
+func contractPhaseSummary(run assistant.Run) string {
+	if run.TaskSpec.AcceptanceContract != nil && strings.TrimSpace(run.TaskSpec.AcceptanceContract.RevisionNotes) != "" {
+		return "Revising the acceptance contract to remove ambiguity before generation."
+	}
+	return "Negotiating the acceptance contract that will gate generation and evaluation."
+}
+
+func isTerminalStatus(status assistant.RunStatus) bool {
+	switch status {
+	case assistant.RunStatusCompleted, assistant.RunStatusFailed, assistant.RunStatusExhausted, assistant.RunStatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+type noopObserver struct{}
+
+func (noopObserver) Publish(context.Context, assistant.RunEvent) error {
+	return nil
+}

@@ -1,0 +1,15 @@
+/assistantd
+/data/
+/workspace/
+/.worktree/
+/.worktrees/
+.agents/
+.claude/
+/artifacts/
+/tmp-shots/
+/webapp/node_modules/
+/webapp/dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "skills": {
+    "motion": {
+      "source": "hairyf/skills",
+      "sourceType": "github",
+      "computedHash": "f9570a39ae54cba08f40345f68007a66130904224ab45656582c1719dfcad0b9"
+    },
+    "remotion-best-practices": {
+      "source": "remotion-dev/skills",
+      "sourceType": "github",
+      "computedHash": "2f673b7710813ac07c71c0a54657f740078aec6585f15edf351494499e1f9ac3"
+    }
+  }
+}

@@ -1,0 +1,331 @@
+package api
+
+import (
+	"bufio"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
+	"github.com/siisee11/CodexVirtualAssistant/internal/assistantapp"
+	"github.com/siisee11/CodexVirtualAssistant/internal/config"
+	"github.com/siisee11/CodexVirtualAssistant/internal/store"
+	"github.com/siisee11/CodexVirtualAssistant/web"
+)
+
+type BootstrapResponse struct {
+	ProductName                  string                `json:"product_name"`
+	ProductTagline               string                `json:"product_tagline"`
+	DefaultModel                 string                `json:"default_model"`
+	DefaultMaxGenerationAttempts int                   `json:"default_max_generation_attempts"`
+	RunStatuses                  []assistant.RunStatus `json:"run_statuses"`
+	RunPhases                    []assistant.RunPhase  `json:"run_phases"`
+	APIBasePath                  string                `json:"api_base_path"`
+	RunsPath                     string                `json:"runs_path"`
+}
+
+type RunAPI struct {
+	cfg    config.Config
+	runs   *assistantapp.RunService
+	events *EventBroker
+	static fs.FS
+}
+
+type createRunRequest struct {
+	UserRequestRaw        string `json:"user_request_raw"`
+	MaxGenerationAttempts int    `json:"max_generation_attempts"`
+}
+
+type runActionRequest struct {
+	Input map[string]string `json:"input"`
+}
+
+type createRunResponse struct {
+	Run       assistant.Run `json:"run"`
+	StatusURL string        `json:"status_url"`
+	EventsURL string        `json:"events_url"`
+}
+
+func NewHandler(cfg config.Config, runs *assistantapp.RunService, events *EventBroker) (http.Handler, error) {
+	staticFS, err := web.StaticFS()
+	if err != nil {
+		return nil, err
+	}
+
+	api := &RunAPI{
+		cfg:    cfg,
+		runs:   runs,
+		events: events,
+		static: staticFS,
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", api.handleHealth)
+	mux.HandleFunc("/api/v1/bootstrap", api.handleBootstrap)
+	mux.HandleFunc("/api/v1/runs", api.handleRuns)
+	mux.HandleFunc("/api/v1/runs/", api.handleRunByID)
+	mux.Handle("/artifacts/", http.StripPrefix("/artifacts/", http.FileServer(http.Dir(cfg.ArtifactDir))))
+	mux.Handle("/assets/", http.StripPrefix("/", http.FileServer(http.FS(staticFS))))
+	mux.HandleFunc("/", api.serveIndex)
+	return mux, nil
+}
+
+func (a *RunAPI) handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (a *RunAPI) handleBootstrap(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, BootstrapResponse{
+		ProductName:                  "Codex Virtual Assistant",
+		ProductTagline:               "WTL GAN-policy based web personal virtual assistant",
+		DefaultModel:                 a.cfg.DefaultModel,
+		DefaultMaxGenerationAttempts: a.cfg.MaxGenerationAttempts,
+		RunStatuses:                  assistant.AllRunStatuses(),
+		RunPhases:                    assistant.AllRunPhases(),
+		APIBasePath:                  "/api/v1",
+		RunsPath:                     "/api/v1/runs",
+	})
+}
+
+func (a *RunAPI) handleRuns(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		var request createRunRequest
+		if err := decodeJSONBody(r.Body, &request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		run, err := a.runs.CreateRun(r.Context(), request.UserRequestRaw, request.MaxGenerationAttempts)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		writeJSON(w, http.StatusAccepted, createRunResponse{
+			Run:       run,
+			StatusURL: fmt.Sprintf("/api/v1/runs/%s", run.ID),
+			EventsURL: fmt.Sprintf("/api/v1/runs/%s/events", run.ID),
+		})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *RunAPI) handleRunByID(w http.ResponseWriter, r *http.Request) {
+	runID, action, ok := parseRunPath(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	switch {
+	case action == "" && r.Method == http.MethodGet:
+		record, err := a.runs.GetRunRecord(r.Context(), runID)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		a.enrichArtifactURLs(&record)
+		writeJSON(w, http.StatusOK, record)
+	case action == "events" && r.Method == http.MethodGet:
+		if err := a.streamRunEvents(w, r, runID); err != nil && !errors.Is(err, io.EOF) {
+			return
+		}
+	case action == "input" && r.Method == http.MethodPost:
+		var request runActionRequest
+		if err := decodeJSONBody(r.Body, &request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := a.runs.SubmitInput(r.Context(), runID, request.Input); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+	case action == "resume" && r.Method == http.MethodPost:
+		var request runActionRequest
+		if err := decodeJSONBody(r.Body, &request); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := a.runs.ResumeRun(r.Context(), runID, request.Input); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+	case action == "cancel" && r.Method == http.MethodPost:
+		if err := a.runs.CancelRun(r.Context(), runID); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		record, err := a.runs.GetRunRecord(r.Context(), runID)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		a.enrichArtifactURLs(&record)
+		writeJSON(w, http.StatusOK, record)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *RunAPI) enrichArtifactURLs(record *store.RunRecord) {
+	for idx := range record.Artifacts {
+		record.Artifacts[idx].URL = a.artifactURL(record.Artifacts[idx].Path)
+	}
+}
+
+func (a *RunAPI) artifactURL(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		return path
+	}
+	cleaned := filepath.Clean(path)
+	if filepath.IsAbs(cleaned) {
+		rel, err := filepath.Rel(a.cfg.ArtifactDir, cleaned)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return ""
+		}
+		cleaned = rel
+	}
+	cleaned = filepath.ToSlash(cleaned)
+	if cleaned == "." || cleaned == "" || strings.HasPrefix(cleaned, "../") {
+		return ""
+	}
+	if _, err := os.Stat(filepath.Join(a.cfg.ArtifactDir, filepath.FromSlash(cleaned))); err != nil {
+		return ""
+	}
+	return "/artifacts/" + cleaned
+}
+
+func (a *RunAPI) streamRunEvents(w http.ResponseWriter, r *http.Request, runID string) error {
+	if _, err := a.runs.GetRunRecord(r.Context(), runID); err != nil {
+		writeStoreError(w, err)
+		return err
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return errors.New("streaming unsupported")
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	events, err := a.runs.ListRunEvents(r.Context(), runID)
+	if err != nil {
+		writeStoreError(w, err)
+		return err
+	}
+	for _, event := range events {
+		if err := writeSSEEvent(w, event); err != nil {
+			return err
+		}
+	}
+	flusher.Flush()
+
+	stream, unsubscribe := a.events.Subscribe(runID)
+	defer unsubscribe()
+
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case event, ok := <-stream:
+			if !ok {
+				return nil
+			}
+			if err := writeSSEEvent(w, event); err != nil {
+				return err
+			}
+			flusher.Flush()
+		case <-heartbeat.C:
+			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
+				return err
+			}
+			flusher.Flush()
+		case <-r.Context().Done():
+			return r.Context().Err()
+		}
+	}
+}
+
+func (a *RunAPI) serveIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	index, err := fs.ReadFile(a.static, "index.html")
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read index: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(index)
+}
+
+func parseRunPath(path string) (runID, action string, ok bool) {
+	const prefix = "/api/v1/runs/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(path, prefix), "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return "", "", false
+	}
+	runID = parts[0]
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+	return runID, action, true
+}
+
+func decodeJSONBody(body io.ReadCloser, target any) error {
+	defer body.Close()
+	if body == nil {
+		return io.EOF
+	}
+	buffered := bufio.NewReader(body)
+	if _, err := buffered.Peek(1); err != nil {
+		return err
+	}
+	return json.NewDecoder(buffered).Decode(target)
+}
+
+func writeSSEEvent(w io.Writer, event assistant.RunEvent) error {
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "event: run_event\ndata: %s\n\n", payload)
+	return err
+}
+
+func writeStoreError(w http.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	if errors.Is(err, store.ErrNotFound) {
+		status = http.StatusNotFound
+	}
+	http.Error(w, err.Error(), status)
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
+}
