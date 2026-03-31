@@ -3,6 +3,7 @@ package assistantapp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 	"github.com/siisee11/CodexVirtualAssistant/internal/store"
 	"github.com/siisee11/CodexVirtualAssistant/internal/wtl"
 )
+
+var ErrRunNotWaiting = errors.New("assistant: run is not waiting")
 
 type InitialRunPolicy interface {
 	InitialRun(string, time.Time) assistant.Run
@@ -39,9 +42,15 @@ func NewRunService(bgCtx context.Context, repo *store.SQLiteRepository, engine w
 	}
 }
 
-func (s *RunService) CreateRun(ctx context.Context, userRequest string, maxGenerationAttempts int) (assistant.Run, error) {
+func (s *RunService) CreateRun(ctx context.Context, userRequest string, maxGenerationAttempts int, parentRunID string) (assistant.Run, error) {
 	if strings.TrimSpace(userRequest) == "" {
 		return assistant.Run{}, errors.New("assistant: user request is required")
+	}
+	parentRunID = strings.TrimSpace(parentRunID)
+	if parentRunID != "" {
+		if _, err := s.repo.GetRun(ctx, parentRunID); err != nil {
+			return assistant.Run{}, err
+		}
 	}
 
 	now := s.now().UTC()
@@ -49,6 +58,7 @@ func (s *RunService) CreateRun(ctx context.Context, userRequest string, maxGener
 	if maxGenerationAttempts > 0 {
 		run = assistant.NewRun(userRequest, now, maxGenerationAttempts)
 	}
+	run.ParentRunID = parentRunID
 
 	go func(run assistant.Run) {
 		_ = s.engine.Start(s.bgCtx, run)
@@ -73,8 +83,12 @@ func (s *RunService) SubmitInput(ctx context.Context, runID string, input map[st
 }
 
 func (s *RunService) ResumeRun(ctx context.Context, runID string, input map[string]string) error {
-	if _, err := s.repo.GetRunRecord(ctx, runID); err != nil {
+	record, err := s.repo.GetRunRecord(ctx, runID)
+	if err != nil {
 		return err
+	}
+	if record.Run.Status != assistant.RunStatusWaiting {
+		return fmt.Errorf("%w: run %s; create a follow-up run with parent_run_id instead", ErrRunNotWaiting, runID)
 	}
 	go func() {
 		_ = s.engine.Resume(s.bgCtx, runID, input)
