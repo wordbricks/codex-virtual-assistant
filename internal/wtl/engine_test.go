@@ -233,6 +233,47 @@ func TestRunEngineGateRoutesToAnswerAndCompletes(t *testing.T) {
 	}
 }
 
+func TestRunEngineRetriesAnswerAfterTransientExecutorClosure(t *testing.T) {
+	t.Parallel()
+
+	repo, dataDir := openEngineTestRepository(t)
+	now := time.Date(2026, time.March, 27, 16, 45, 0, 0, time.UTC)
+	runtime := &scriptedRuntime{
+		steps: map[assistant.AttemptRole][]runtimeStep{
+			assistant.AttemptRoleGate: {
+				{response: PhaseResponse{Summary: "Gate routed to answer.", Output: gateJSON("answer", "The request is a simple greeting.")}},
+			},
+			assistant.AttemptRoleAnswer: {
+				{err: errors.New("codex app server closed during phase execution")},
+				{response: PhaseResponse{Summary: "Greeted the user.", Output: "Hi there!"}},
+			},
+		},
+	}
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fixedClock(now))
+
+	run := assistant.NewRun("hi", now, 1)
+	if err := engine.Start(context.Background(), run); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	record, err := repo.GetRunRecord(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("GetRunRecord() error = %v", err)
+	}
+	if record.Run.Status != assistant.RunStatusCompleted {
+		t.Fatalf("Run.Status = %q, want %q", record.Run.Status, assistant.RunStatusCompleted)
+	}
+	if len(record.Attempts) != 3 {
+		t.Fatalf("len(Attempts) = %d, want 3", len(record.Attempts))
+	}
+	if record.Attempts[1].Role != assistant.AttemptRoleAnswer || record.Attempts[2].Role != assistant.AttemptRoleAnswer {
+		t.Fatalf("attempt roles = %#v, want gate -> answer -> answer", []assistant.AttemptRole{record.Attempts[0].Role, record.Attempts[1].Role, record.Attempts[2].Role})
+	}
+	if got := runtime.index[assistant.AttemptRoleAnswer]; got != 2 {
+		t.Fatalf("answer runtime calls = %d, want 2", got)
+	}
+}
+
 func TestRunEnginePreservesWorkflowOrderAfterGate(t *testing.T) {
 	t.Parallel()
 

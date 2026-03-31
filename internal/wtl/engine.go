@@ -342,6 +342,13 @@ func (e *RunEngine) executeAnswer(ctx context.Context, record *store.RunRecord, 
 	})
 
 	attempt, response, err := e.executeAttempt(ctx, record.Run, record.Attempts, assistant.AttemptRoleAnswer, prompt, "", resumeInput, record.Run.Project.WorkspaceDir)
+	if err != nil && isTransientPhaseExecutionError(err) {
+		latestRecord, reloadErr := e.repo.GetRunRecord(ctx, record.Run.ID)
+		if reloadErr != nil {
+			return e.failRun(ctx, record.Run, fmt.Sprintf("Answer phase execution failed: %v", err), err)
+		}
+		attempt, response, err = e.executeAttempt(ctx, latestRecord.Run, latestRecord.Attempts, assistant.AttemptRoleAnswer, prompt, "", resumeInput, latestRecord.Run.Project.WorkspaceDir)
+	}
 	if err != nil {
 		return e.failRun(ctx, record.Run, fmt.Sprintf("Answer phase execution failed: %v", err), err)
 	}
@@ -873,6 +880,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func isTransientPhaseExecutionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(message, "codex app server closed during phase execution") ||
+		strings.Contains(message, "codex app server closed")
 }
 
 func normalizeTime(value time.Time, fallback time.Time) time.Time {
