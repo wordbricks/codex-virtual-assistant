@@ -233,6 +233,57 @@ func TestRunEngineGateRoutesToAnswerAndCompletes(t *testing.T) {
 	}
 }
 
+func TestRunEnginePreservesWorkflowOrderAfterGate(t *testing.T) {
+	t.Parallel()
+
+	repo, dataDir := openEngineTestRepository(t)
+	now := time.Date(2026, time.March, 27, 17, 0, 0, 0, time.UTC)
+	runtime := &orderedRuntime{
+		steps: []orderedRuntimeStep{
+			{role: assistant.AttemptRoleGate, response: PhaseResponse{Summary: "Gate routed to workflow.", Output: gateJSON("workflow", "This request needs execution.")}},
+			{role: assistant.AttemptRoleProjectSelector, response: PhaseResponse{Summary: "Project selected.", Output: selectorJSON("workflow-check", "Workflow Check", "Validate workflow order.")}},
+			{role: assistant.AttemptRolePlanner, response: PhaseResponse{Summary: "Planner complete.", Output: plannerJSON("Validate workflow order", []string{"Validation report"})}},
+			{role: assistant.AttemptRoleContractor, response: PhaseResponse{Summary: "Contract agreed.", Output: contractJSON("agreed", []string{"Validation report"}, []string{"Workflow executes in order"}, "")}},
+			{role: assistant.AttemptRoleGenerator, response: PhaseResponse{Summary: "Generator produced output."}},
+			{role: assistant.AttemptRoleEvaluator, response: PhaseResponse{Summary: "Evaluator passed.", Output: evaluatorJSON(true, 95, "Workflow order is correct.", nil, "")}},
+		},
+	}
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fixedClock(now))
+
+	run := assistant.NewRun("Validate workflow ordering after gate.", now, 1)
+	if err := engine.Start(context.Background(), run); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	if runtime.index != len(runtime.steps) {
+		t.Fatalf("runtime calls = %d, want %d", runtime.index, len(runtime.steps))
+	}
+
+	record, err := repo.GetRunRecord(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("GetRunRecord() error = %v", err)
+	}
+	if record.Run.Status != assistant.RunStatusCompleted {
+		t.Fatalf("Run.Status = %q, want %q", record.Run.Status, assistant.RunStatusCompleted)
+	}
+	wantRoles := []assistant.AttemptRole{
+		assistant.AttemptRoleGate,
+		assistant.AttemptRoleProjectSelector,
+		assistant.AttemptRolePlanner,
+		assistant.AttemptRoleContractor,
+		assistant.AttemptRoleGenerator,
+		assistant.AttemptRoleEvaluator,
+	}
+	if len(record.Attempts) != len(wantRoles) {
+		t.Fatalf("len(Attempts) = %d, want %d", len(record.Attempts), len(wantRoles))
+	}
+	for idx, want := range wantRoles {
+		if got := record.Attempts[idx].Role; got != want {
+			t.Fatalf("Attempts[%d].Role = %q, want %q", idx, got, want)
+		}
+	}
+}
+
 type scriptedRuntime struct {
 	steps map[assistant.AttemptRole][]runtimeStep
 	index map[assistant.AttemptRole]int
@@ -271,6 +322,33 @@ func (r *scriptedRuntime) Execute(_ context.Context, role assistant.AttemptRole,
 }
 
 func (r *scriptedRuntime) Close() error {
+	return nil
+}
+
+type orderedRuntime struct {
+	steps []orderedRuntimeStep
+	index int
+}
+
+type orderedRuntimeStep struct {
+	role     assistant.AttemptRole
+	response PhaseResponse
+	err      error
+}
+
+func (r *orderedRuntime) Execute(_ context.Context, role assistant.AttemptRole, _ PhaseRequest) (PhaseResponse, error) {
+	if r.index >= len(r.steps) {
+		return PhaseResponse{}, fmt.Errorf("unexpected runtime call for role %s", role)
+	}
+	step := r.steps[r.index]
+	r.index++
+	if step.role != role {
+		return PhaseResponse{}, fmt.Errorf("runtime role at step %d = %s, want %s", r.index-1, role, step.role)
+	}
+	return step.response, step.err
+}
+
+func (r *orderedRuntime) Close() error {
 	return nil
 }
 

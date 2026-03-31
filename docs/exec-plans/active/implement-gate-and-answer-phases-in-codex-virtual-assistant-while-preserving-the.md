@@ -13,7 +13,7 @@ The current system already has a persisted run/attempt/evidence/artifact model, 
 - [x] Milestone 3: Update the run engine/state machine to execute gate first, branch to answer or workflow, preserve post-gate workflow order, and keep waiting/resume behavior for in-progress runs.
 - [x] Milestone 4: Add parent-run-based follow-up creation semantics in app/API layers so follow-ups always create a new run (never resume a completed run).
 - [x] Milestone 5: Update UI run creation/follow-up flows and run detail rendering for gate-routed answer runs and parent-linked context.
-- [ ] Milestone 6: Add and pass tests for gate routing, answer-run lifecycle, parent_run_id follow-up creation, and waiting/resume regression coverage.
+- [x] Milestone 6: Add and pass tests for gate routing, answer-run lifecycle, parent_run_id follow-up creation, and waiting/resume regression coverage.
 
 ## Current progress
 
@@ -67,6 +67,20 @@ The current system already has a persisted run/attempt/evidence/artifact model, 
     - follow-up parent run id with inline navigation action.
   - Updated status-pill styling for new gate/answer statuses and added report metadata/link styles.
   - Validation note: attempted `npm --prefix webapp run build`, but local toolchain lacked `vite` in this sandbox; no frontend build artifact validation could be executed in this iteration.
+- Milestone 6 completed:
+  - Added strict engine regression coverage for workflow order after gate with role-sequenced runtime assertions:
+    - `gate -> selecting_project -> planning -> contracting -> generating -> evaluating`.
+  - Expanded engine answer-route lifecycle coverage to assert gate->answer terminal completion with persisted answer artifact.
+  - Added assistantapp service-layer tests for parent-run follow-up semantics:
+    - create run with valid `parent_run_id`,
+    - reject create when parent does not exist.
+  - Added assistantapp waiting/resume regression tests:
+    - reject resume on non-waiting runs with `ErrRunNotWaiting`,
+    - confirm waiting runs still resume through engine dispatch.
+  - Confirmed API-level follow-up and resume semantics coverage from previous milestone remains passing:
+    - follow-up creation via `parent_run_id`,
+    - completed-run input/resume rejection with follow-up guidance.
+  - Full backend test sweep passed (`go test ./internal/...`), including `assistantapp`, `wtl`, `api`, and `app` packages.
 
 ## Key decisions
 
@@ -86,7 +100,7 @@ The current system already has a persisted run/attempt/evidence/artifact model, 
 
 ## Remaining issues / open questions
 
-- No major product-design blockers remain; final milestone is test completion and regression coverage confirmation across gate/answer/follow-up flows.
+- None.
 
 ## Links to related documents
 
