@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -135,6 +136,49 @@ func TestNewAppCompletesRunEndToEnd(t *testing.T) {
 	}
 	if record.Run.WaitingFor != nil {
 		t.Fatalf("WaitingFor = %#v, want nil after completed run", record.Run.WaitingFor)
+	}
+}
+
+func TestNewAppDispatchesRunCompletedHook(t *testing.T) {
+	t.Parallel()
+
+	app := newTestApp(t)
+	hooks := make(chan api.HookPayload, 1)
+	unregister := app.RegisterHook(api.HookOnRunCompleted, func(_ context.Context, payload api.HookPayload) error {
+		hooks <- payload
+		return nil
+	})
+	defer unregister()
+
+	create := doJSONRequest(t, app.Handler(), http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "Research five competitor pricing pages and draft a comparison summary.",
+	})
+	if create.Code != http.StatusAccepted {
+		t.Fatalf("POST /api/v1/runs status = %d, want %d", create.Code, http.StatusAccepted)
+	}
+
+	var response struct {
+		Run assistant.Run `json:"run"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	record := waitForRunStatus(t, app.Handler(), response.Run.ID, assistant.RunStatusCompleted)
+
+	select {
+	case payload := <-hooks:
+		if payload.Event.RunID != response.Run.ID {
+			t.Fatalf("payload.Event.RunID = %q, want %q", payload.Event.RunID, response.Run.ID)
+		}
+		if payload.Record == nil || payload.Record.Run.Status != assistant.RunStatusCompleted {
+			t.Fatalf("payload.Record = %#v, want completed snapshot", payload.Record)
+		}
+		if payload.Record.Run.CompletedAt == nil {
+			t.Fatalf("payload.Record.Run.CompletedAt = nil, want terminal timestamp")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for completed hook for run %s; final record = %#v", response.Run.ID, record.Run)
 	}
 }
 

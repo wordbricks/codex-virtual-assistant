@@ -349,6 +349,7 @@ func newTestAPIHandler(t *testing.T, executor *sequenceExecutor) http.Handler {
 	}
 	policy := gan.New(gan.Config{MaxGenerationAttempts: cfg.MaxGenerationAttempts})
 	events := NewEventBroker()
+	events.SetSnapshotLoader(repo)
 	runtime := wtl.NewCodexRuntime(executor, cfg.DefaultModel, time.Now)
 	engine := wtl.NewRunEngine(repo, runtime, events, policy, projectManager, time.Now)
 	runs := assistantapp.NewRunService(context.Background(), repo, engine, policy, time.Now)

@@ -19,6 +19,7 @@ type App struct {
 	cfg     config.Config
 	store   *store.SQLiteRepository
 	runtime wtl.Runtime
+	events  *api.EventBroker
 	server  *http.Server
 }
 
@@ -51,6 +52,7 @@ func NewWithExecutor(cfg config.Config, executor wtl.CodexPhaseExecutor) (*App, 
 
 	policy := gan.New(gan.Config{MaxGenerationAttempts: cfg.MaxGenerationAttempts})
 	events := api.NewEventBroker()
+	events.SetSnapshotLoader(repo)
 	if executor == nil {
 		return nil, errors.New("codex executor is required")
 	}
@@ -67,6 +69,7 @@ func NewWithExecutor(cfg config.Config, executor wtl.CodexPhaseExecutor) (*App, 
 		cfg:     cfg,
 		store:   repo,
 		runtime: runtime,
+		events:  events,
 		server: &http.Server{
 			Addr:              cfg.HTTPAddr,
 			Handler:           handler,
@@ -77,6 +80,13 @@ func NewWithExecutor(cfg config.Config, executor wtl.CodexPhaseExecutor) (*App, 
 
 func (a *App) Handler() http.Handler {
 	return a.server.Handler
+}
+
+func (a *App) RegisterHook(name api.HookName, hook api.HookFunc) func() {
+	if a.events == nil {
+		return func() {}
+	}
+	return a.events.RegisterHook(name, hook)
 }
 
 func (a *App) Run(ctx context.Context) error {
