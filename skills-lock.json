@@ -1,6 +1,11 @@
 {
   "version": 1,
   "skills": {
+    "agent-messenger-cli": {
+      "source": "siisee11/agent-messenger",
+      "sourceType": "github",
+      "computedHash": "67155cd347a61d7306394eeec7dd4797ecf9364156b18c5315d866d9b5d1bf83"
+    },
     "assistant-ui": {
       "source": "assistant-ui/skills",
       "sourceType": "github",

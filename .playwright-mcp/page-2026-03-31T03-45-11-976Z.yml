@@ -1,0 +1,83 @@
+- generic [ref=e194]:
+  - complementary [ref=e195]:
+    - generic [ref=e196]:
+      - generic [ref=e197]: C
+      - generic [ref=e198]:
+        - paragraph [ref=e199]: Workspace
+        - heading "Codex Virtual Assistant" [level=1] [ref=e200]
+    - button "+ New chat" [ref=e201] [cursor=pointer]
+    - navigation [ref=e202]:
+      - button "hi Answering · just now" [ref=e312] [cursor=pointer]:
+        - generic [ref=e204]: hi
+        - generic [ref=e205]: Answering · just now
+    - generic [ref=e206]:
+      - generic [ref=e207]:
+        - generic [ref=e208]: Model
+        - generic [ref=e209]: gpt-5.4
+      - generic [ref=e210]:
+        - generic [ref=e211]: Retries
+        - spinbutton [ref=e212]: "3"
+  - main [ref=e213]:
+    - generic [ref=e214]:
+      - heading "hi" [level=2] [ref=e215]
+      - generic [ref=e216]: Answering
+    - generic [ref=e221]:
+      - generic [ref=e222]:
+        - paragraph [ref=e225]: hi
+        - generic [ref=e226]:
+          - button "Previous" [disabled]:
+            - img
+            - generic: Previous
+          - generic [ref=e227]: 2 / 2
+          - button "Next" [disabled]:
+            - img
+            - generic: Next
+      - generic [ref=e313]:
+        - generic [ref=e314]:
+          - img [ref=e316]
+          - generic [ref=e319]: Gate
+        - generic [ref=e322]:
+          - button "Reasoning" [ref=e324] [cursor=pointer]:
+            - img [ref=e325]
+            - generic [ref=e333]: Reasoning
+            - img [ref=e334]
+          - paragraph [ref=e337]: "{\"reason\":\"The original user request is a simple greeting and can be handled directly without project selection, planning, tool execution, or any side-effecting workflow steps.\",\"route\":\"answer\",\"summary\":\"Route to answer for a direct conve"
+          - generic [ref=e339]:
+            - button "Previous" [disabled]:
+              - img
+              - generic: Previous
+            - generic [ref=e340]: 3 / 3
+            - button "Next" [disabled]:
+              - img
+              - generic: Next
+      - generic [ref=e341]:
+        - generic [ref=e342]:
+          - img [ref=e344]
+          - generic [ref=e347]: Answer
+        - paragraph [ref=e352]: Preparing a read-oriented answer using available run context and ev●
+      - generic [ref=e243]:
+        - generic [ref=e244]:
+          - generic [ref=e246]:
+            - generic [ref=e247]: Answering
+            - generic [ref=e248]: Attempts 0/3
+          - generic [ref=e249]:
+            - generic [ref=e250]:
+              - generic [ref=e252]: "1"
+              - paragraph [ref=e255]: Queued
+            - generic [ref=e256]:
+              - generic [ref=e259]: "2"
+              - paragraph [ref=e263]: Gate
+            - generic [ref=e354]:
+              - generic [ref=e357]: "3"
+              - paragraph [ref=e361]: Answer
+            - generic [ref=e299]:
+              - generic [ref=e302]: "4"
+              - paragraph [ref=e304]: Complete
+        - generic [ref=e306]:
+          - textbox "Message input" [active] [ref=e307]:
+            - /placeholder: Send a message...
+          - generic [ref=e308]:
+            - button [ref=e309] [cursor=pointer]:
+              - img [ref=e310]
+            - button "Stop generating" [ref=e311] [cursor=pointer]:
+              - img

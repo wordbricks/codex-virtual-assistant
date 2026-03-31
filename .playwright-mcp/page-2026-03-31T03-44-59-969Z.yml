@@ -1,0 +1,86 @@
+- generic [ref=e194]:
+  - complementary [ref=e195]:
+    - generic [ref=e196]:
+      - generic [ref=e197]: C
+      - generic [ref=e198]:
+        - paragraph [ref=e199]: Workspace
+        - heading "Codex Virtual Assistant" [level=1] [ref=e200]
+    - button "+ New chat" [ref=e201] [cursor=pointer]
+    - navigation [ref=e202]:
+      - button "hi Gating · just now" [ref=e203] [cursor=pointer]:
+        - generic [ref=e204]: hi
+        - generic [ref=e205]: Gating · just now
+    - generic [ref=e206]:
+      - generic [ref=e207]:
+        - generic [ref=e208]: Model
+        - generic [ref=e209]: gpt-5.4
+      - generic [ref=e210]:
+        - generic [ref=e211]: Retries
+        - spinbutton [ref=e212]: "3"
+  - main [ref=e213]:
+    - generic [ref=e214]:
+      - heading "hi" [level=2] [ref=e215]
+      - generic [ref=e216]: Gating
+    - generic [ref=e221]:
+      - generic [ref=e222]:
+        - paragraph [ref=e225]: hi
+        - generic [ref=e226]:
+          - button "Previous" [disabled]:
+            - img
+            - generic: Previous
+          - generic [ref=e227]: 2 / 2
+          - button "Next" [disabled]:
+            - img
+            - generic: Next
+      - generic [ref=e228]:
+        - generic [ref=e229]:
+          - img [ref=e231]
+          - generic [ref=e234]: Gate
+        - generic [ref=e237]:
+          - paragraph [ref=e239]: Gating the run to decide between answer mode and workflow execution.●
+          - generic [ref=e241]:
+            - button "Previous" [disabled]:
+              - img
+              - generic: Previous
+            - generic [ref=e242]: 2 / 2
+            - button "Next" [disabled]:
+              - img
+              - generic: Next
+      - generic [ref=e243]:
+        - generic [ref=e244]:
+          - generic [ref=e246]:
+            - generic [ref=e247]: Gating
+            - generic [ref=e248]: Attempts 0/3
+          - generic [ref=e249]:
+            - generic [ref=e250]:
+              - generic [ref=e252]: "1"
+              - paragraph [ref=e255]: Queued
+            - generic [ref=e256]:
+              - generic [ref=e259]: "2"
+              - paragraph [ref=e263]: Gate
+            - generic [ref=e264]:
+              - generic [ref=e267]: "3"
+              - paragraph [ref=e270]: Project
+            - generic [ref=e271]:
+              - generic [ref=e274]: "4"
+              - paragraph [ref=e277]: Planner
+            - generic [ref=e278]:
+              - generic [ref=e281]: "5"
+              - paragraph [ref=e284]: Contract
+            - generic [ref=e285]:
+              - generic [ref=e288]: "6"
+              - paragraph [ref=e291]: Generator
+            - generic [ref=e292]:
+              - generic [ref=e295]: "7"
+              - paragraph [ref=e298]: Evaluator
+            - generic [ref=e299]:
+              - generic [ref=e302]: "8"
+              - paragraph [ref=e304]: Complete
+        - generic [ref=e306]:
+          - textbox "Message input" [active] [ref=e307]:
+            - /placeholder: Send a message...
+          - generic [ref=e308]:
+            - button [ref=e309] [cursor=pointer]:
+              - img [ref=e310]
+            - button "Stop generating" [ref=e311] [cursor=pointer]:
+              - img
