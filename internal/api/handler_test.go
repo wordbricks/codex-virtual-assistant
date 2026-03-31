@@ -28,6 +28,7 @@ func TestRunsAPICreateAndGetRun(t *testing.T) {
 
 	handler := newTestAPIHandler(t, &sequenceExecutor{
 		steps: []executorStep{
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request requires full workflow execution.")},
 			{role: assistant.AttemptRoleProjectSelector, result: projectSelectorPhaseResult("competitor-pricing", "Competitor Pricing", "Track repeat competitor pricing research.")},
 			{role: assistant.AttemptRolePlanner, result: plannerPhaseResult("Compare competitor pricing", []string{"Pricing table", "Summary memo"})},
 			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Pricing table", "Summary memo"})},
@@ -64,6 +65,7 @@ func TestRunsAPIInputAndResumeFlow(t *testing.T) {
 
 	handler := newTestAPIHandler(t, &sequenceExecutor{
 		steps: []executorStep{
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request needs planning and execution.")},
 			{role: assistant.AttemptRoleProjectSelector, result: projectSelectorPhaseResult("competitor-pricing", "Competitor Pricing", "Track repeat competitor pricing research.")},
 			{role: assistant.AttemptRolePlanner, result: wtl.CodexPhaseResult{
 				Summary: "Need clarification before planning.",
@@ -114,6 +116,7 @@ func TestRunsAPICancelAndEventsStream(t *testing.T) {
 	block := make(chan struct{})
 	handler := newTestAPIHandler(t, &sequenceExecutor{
 		steps: []executorStep{
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request needs browser execution.")},
 			{role: assistant.AttemptRoleProjectSelector, result: projectSelectorPhaseResult("dashboard-inspection", "Dashboard Inspection", "Inspect and summarize dashboard work.")},
 			{role: assistant.AttemptRolePlanner, result: plannerPhaseResult("Inspect the dashboard", []string{"Dashboard summary"})},
 			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Dashboard summary"})},
@@ -143,7 +146,7 @@ func TestRunsAPICancelAndEventsStream(t *testing.T) {
 
 	close(block)
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(4 * time.Second)
 	for time.Now().Before(deadline) {
 		if strings.Contains(streamResponse.Body.String(), `"phase":"completed"`) {
 			break
@@ -158,6 +161,7 @@ func TestRunsAPICancelAndEventsStream(t *testing.T) {
 
 	waitHandler := newTestAPIHandler(t, &sequenceExecutor{
 		steps: []executorStep{
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request needs external access approval.")},
 			{role: assistant.AttemptRoleProjectSelector, result: projectSelectorPhaseResult("dashboard-inspection", "Dashboard Inspection", "Inspect and summarize dashboard work.")},
 			{role: assistant.AttemptRolePlanner, result: wtl.CodexPhaseResult{
 				Summary: "Need approval before continuing.",
@@ -276,7 +280,7 @@ func doJSONRequest(t *testing.T, handler http.Handler, method, path string, payl
 func waitForRunStatus(t *testing.T, handler http.Handler, runID string, want assistant.RunStatus) store.RunRecord {
 	t.Helper()
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(4 * time.Second)
 	for time.Now().Before(deadline) {
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+runID, nil)
 		response := httptest.NewRecorder()
@@ -351,6 +355,18 @@ func plannerPhaseResult(goal string, deliverables []string) wtl.CodexPhaseResult
 	})
 	return wtl.CodexPhaseResult{
 		Summary: "Planner normalized the task.",
+		Output:  string(output),
+	}
+}
+
+func gatePhaseResult(route, reason string) wtl.CodexPhaseResult {
+	output, _ := json.Marshal(map[string]any{
+		"route":   route,
+		"reason":  reason,
+		"summary": "Gate routing complete.",
+	})
+	return wtl.CodexPhaseResult{
+		Summary: "Gate routing complete.",
 		Output:  string(output),
 	}
 }

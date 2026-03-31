@@ -10,7 +10,7 @@ The current system already has a persisted run/attempt/evidence/artifact model, 
 
 - [x] Milestone 1: Extend core data contracts and persistence for follow-up runs and gate/answer metadata.
 - [x] Milestone 2: Add gate and answer prompt/runtime integration through the existing Codex app-server phase executor stack.
-- [ ] Milestone 3: Update the run engine/state machine to execute gate first, branch to answer or workflow, preserve post-gate workflow order, and keep waiting/resume behavior for in-progress runs.
+- [x] Milestone 3: Update the run engine/state machine to execute gate first, branch to answer or workflow, preserve post-gate workflow order, and keep waiting/resume behavior for in-progress runs.
 - [ ] Milestone 4: Add parent-run-based follow-up creation semantics in app/API layers so follow-ups always create a new run (never resume a completed run).
 - [ ] Milestone 5: Update UI run creation/follow-up flows and run detail rendering for gate-routed answer runs and parent-linked context.
 - [ ] Milestone 6: Add and pass tests for gate routing, answer-run lifecycle, parent_run_id follow-up creation, and waiting/resume regression coverage.
@@ -32,6 +32,16 @@ The current system already has a persisted run/attempt/evidence/artifact model, 
   - Extended app-server result parsing so answer-phase structured outputs produce persisted report artifacts and wait requests through the same runtime path as other phases.
   - Added runtime tool-hint routing for gate/answer to read-oriented stored-context tool sets.
   - Added role-to-phase mapping for gate/answer (`gating`, `answering`) and test coverage for prompts/runtime/schema mappings.
+- Milestone 3 completed:
+  - Run engine now starts every run at `gate` instead of `selecting_project`.
+  - Added gate phase execution in engine (`executeGate`) using runtime attempts and strict gate-output decoding.
+  - Added answer phase execution in engine (`executeAnswer`) using runtime attempts, read-oriented prompting, wait propagation, and terminal completion.
+  - Added parent-run context hydration in engine for gate/answer (`parent_run_id` -> parent run record summary/artifacts/evidence).
+  - Added gate-route persistence during execution (`gate_route`, `gate_reason`, `gate_decided_at`) and branching:
+    - `answer` -> `answering` -> complete/wait
+    - `workflow` -> preserved order `selecting_project -> planning -> contracting -> generating -> evaluating`
+  - Kept waiting/resume semantics by resuming from the last attempt role; default resume role updated to `gate` when no attempts exist.
+  - Updated engine + API sequence tests to include gate-first execution, added direct answer-route engine coverage, and adjusted polling deadlines for added phase latency.
 
 ## Key decisions
 
@@ -43,6 +53,8 @@ The current system already has a persisted run/attempt/evidence/artifact model, 
 - Gate output contract is fixed to strict JSON `{route, reason, summary}` with `route ∈ {"answer","workflow"}`.
 - Answer output contract is fixed to strict JSON `{summary, output, needs_user_input, wait_kind, wait_title, wait_prompt, wait_risk_summary}` to preserve wait/resume compatibility.
 - Parent context prompt payload now includes a bounded summary block: parent run id/request/summary plus most-recent artifacts (max 5) and evidence highlights (max 8).
+- Engine-level branching decision is source-of-truth from gate attempt output; no local heuristic shortcut exists in engine path.
+- Answer runs are terminal after a successful answer phase (unless answer requests wait), and do not enter planning/contracting/generating/evaluating.
 
 ## Remaining issues / open questions
 

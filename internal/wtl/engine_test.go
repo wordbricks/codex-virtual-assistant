@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,9 @@ func TestRunEngineRetriesGeneratorUntilEvaluationPasses(t *testing.T) {
 	now := time.Date(2026, time.March, 27, 14, 0, 0, 0, time.UTC)
 	runtime := &scriptedRuntime{
 		steps: map[assistant.AttemptRole][]runtimeStep{
+			assistant.AttemptRoleGate: {
+				{response: PhaseResponse{Summary: "Gate routed to workflow.", Output: gateJSON("workflow", "This request needs full execution work.")}},
+			},
 			assistant.AttemptRoleProjectSelector: {
 				{response: PhaseResponse{Summary: "Selected the competitor research project.", Output: selectorJSON("competitor-pricing", "Competitor Pricing", "Track repeat competitor pricing research.")}},
 			},
@@ -58,8 +62,8 @@ func TestRunEngineRetriesGeneratorUntilEvaluationPasses(t *testing.T) {
 	if record.Run.Status != assistant.RunStatusCompleted {
 		t.Fatalf("Run.Status = %q, want %q", record.Run.Status, assistant.RunStatusCompleted)
 	}
-	if len(record.Attempts) != 7 {
-		t.Fatalf("len(Attempts) = %d, want 7", len(record.Attempts))
+	if len(record.Attempts) != 8 {
+		t.Fatalf("len(Attempts) = %d, want 8", len(record.Attempts))
 	}
 	if len(record.Evaluations) != 2 {
 		t.Fatalf("len(Evaluations) = %d, want 2", len(record.Evaluations))
@@ -73,6 +77,9 @@ func TestRunEngineRetriesGeneratorUntilEvaluationPasses(t *testing.T) {
 	if len(record.Artifacts) != 2 {
 		t.Fatalf("len(Artifacts) = %d, want 2", len(record.Artifacts))
 	}
+	if record.Attempts[0].Role != assistant.AttemptRoleGate {
+		t.Fatalf("Attempts[0].Role = %q, want %q", record.Attempts[0].Role, assistant.AttemptRoleGate)
+	}
 	if len(observer.events) == 0 {
 		t.Fatal("observer events are empty")
 	}
@@ -85,6 +92,9 @@ func TestRunEngineWaitsAndResumes(t *testing.T) {
 	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.UTC)
 	runtime := &scriptedRuntime{
 		steps: map[assistant.AttemptRole][]runtimeStep{
+			assistant.AttemptRoleGate: {
+				{response: PhaseResponse{Summary: "Gate routed to workflow.", Output: gateJSON("workflow", "Planner and execution are required.")}},
+			},
 			assistant.AttemptRoleProjectSelector: {
 				{response: PhaseResponse{Summary: "Selected the competitor research project.", Output: selectorJSON("competitor-pricing", "Competitor Pricing", "Track repeat competitor pricing research.")}},
 			},
@@ -147,6 +157,9 @@ func TestRunEngineCancelStopsWaitingRun(t *testing.T) {
 	now := time.Date(2026, time.March, 27, 16, 0, 0, 0, time.UTC)
 	runtime := &scriptedRuntime{
 		steps: map[assistant.AttemptRole][]runtimeStep{
+			assistant.AttemptRoleGate: {
+				{response: PhaseResponse{Summary: "Gate routed to workflow.", Output: gateJSON("workflow", "This requires external dashboard work.")}},
+			},
 			assistant.AttemptRoleProjectSelector: {
 				{response: PhaseResponse{Summary: "Selected the dashboard project.", Output: selectorJSON("dashboard-inspection", "Dashboard Inspection", "Inspect and summarize dashboard-related work.")}},
 			},
@@ -174,6 +187,49 @@ func TestRunEngineCancelStopsWaitingRun(t *testing.T) {
 	}
 	if err := engine.Resume(context.Background(), run.ID, map[string]string{"approved": "yes"}); !errors.Is(err, ErrInvalidRunState) {
 		t.Fatalf("Resume() error = %v, want ErrInvalidRunState", err)
+	}
+}
+
+func TestRunEngineGateRoutesToAnswerAndCompletes(t *testing.T) {
+	t.Parallel()
+
+	repo, dataDir := openEngineTestRepository(t)
+	now := time.Date(2026, time.March, 27, 16, 30, 0, 0, time.UTC)
+	runtime := &scriptedRuntime{
+		steps: map[assistant.AttemptRole][]runtimeStep{
+			assistant.AttemptRoleGate: {
+				{response: PhaseResponse{Summary: "Gate routed to answer.", Output: gateJSON("answer", "The request is a read-only follow-up.")}},
+			},
+			assistant.AttemptRoleAnswer: {
+				{response: PhaseResponse{Summary: "Prepared direct answer.", Output: "Top 3 cheapest competitors: A, C, E."}},
+			},
+		},
+	}
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fixedClock(now))
+
+	run := assistant.NewRun("What were the top 3 cheapest competitors from the previous run?", now, 1)
+	if err := engine.Start(context.Background(), run); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	record, err := repo.GetRunRecord(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("GetRunRecord() error = %v", err)
+	}
+	if record.Run.Status != assistant.RunStatusCompleted {
+		t.Fatalf("Run.Status = %q, want %q", record.Run.Status, assistant.RunStatusCompleted)
+	}
+	if record.Run.GateRoute != assistant.RunRouteAnswer {
+		t.Fatalf("GateRoute = %q, want %q", record.Run.GateRoute, assistant.RunRouteAnswer)
+	}
+	if len(record.Attempts) != 2 {
+		t.Fatalf("len(Attempts) = %d, want 2", len(record.Attempts))
+	}
+	if record.Attempts[0].Role != assistant.AttemptRoleGate || record.Attempts[1].Role != assistant.AttemptRoleAnswer {
+		t.Fatalf("attempt roles = %#v, want gate -> answer", []assistant.AttemptRole{record.Attempts[0].Role, record.Attempts[1].Role})
+	}
+	if len(record.Artifacts) == 0 || !strings.Contains(record.Artifacts[len(record.Artifacts)-1].Content, "Top 3 cheapest competitors") {
+		t.Fatalf("Artifacts = %#v, want persisted answer artifact", record.Artifacts)
 	}
 }
 
@@ -275,6 +331,10 @@ func contractJSON(decision string, deliverables []string, acceptanceCriteria []s
 
 func selectorJSON(slug, name, description string) string {
 	return fmt.Sprintf(`{"project_slug":%q,"project_name":%q,"project_description":%q,"summary":"Selected project %s."}`, slug, name, description, slug)
+}
+
+func gateJSON(route, reason string) string {
+	return fmt.Sprintf(`{"route":%q,"reason":%q,"summary":"Gate routed to %s."}`, route, reason, route)
 }
 
 func evaluatorJSON(passed bool, score int, summary string, missing []string, nextAction string) string {
