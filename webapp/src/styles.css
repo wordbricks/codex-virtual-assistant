@@ -266,6 +266,8 @@ input, textarea { font: inherit; }
 }
 
 .status-pill[data-status="queued"],
+.status-pill[data-status="gating"],
+.status-pill[data-status="answering"],
 .status-pill[data-status="selecting_project"],
 .status-pill[data-status="planning"],
 .status-pill[data-status="generating"],
@@ -455,6 +457,36 @@ input, textarea { font: inherit; }
   font-size: 14px;
   line-height: 1.6;
   color: var(--ink-soft);
+}
+
+.report-summary-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+.report-summary-meta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,0.64);
+}
+
+.report-inline-link {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  color: #007aff;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
 }
 
 .report-meta {

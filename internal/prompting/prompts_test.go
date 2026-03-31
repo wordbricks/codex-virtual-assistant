@@ -45,6 +45,61 @@ func TestBuildProjectSelectorPromptRequiresProjectInspection(t *testing.T) {
 	}
 }
 
+func TestBuildGatePromptDeclaresRouteContract(t *testing.T) {
+	t.Parallel()
+
+	bundle := BuildGatePrompt(GateInput{
+		Run: assistant.Run{
+			UserRequestRaw: "Can you just summarize what we already found in the previous run?",
+		},
+		ParentContext: &ParentRunContext{
+			RunID:          "run_parent_123",
+			UserRequestRaw: "Research five competitor pricing pages and summarize findings.",
+			Summary:        "Collected pricing pages and created a draft comparison table.",
+		},
+	})
+
+	if !strings.Contains(bundle.System, "\"answer\"") || !strings.Contains(bundle.System, "\"workflow\"") {
+		t.Fatalf("System prompt = %q, want route enum guidance", bundle.System)
+	}
+	if !strings.Contains(bundle.System, "route") || !strings.Contains(bundle.System, "reason") || !strings.Contains(bundle.System, "summary") {
+		t.Fatalf("System prompt = %q, want gate schema keys", bundle.System)
+	}
+	if !strings.Contains(bundle.User, "Parent run id: run_parent_123") {
+		t.Fatalf("User prompt = %q, want parent run context", bundle.User)
+	}
+}
+
+func TestBuildAnswerPromptDeclaresReadOrientedContract(t *testing.T) {
+	t.Parallel()
+
+	bundle := BuildAnswerPrompt(AnswerInput{
+		Run: assistant.Run{
+			UserRequestRaw: "What were the top 3 cheapest competitors from last run?",
+		},
+		ParentContext: &ParentRunContext{
+			RunID:   "run_parent_321",
+			Summary: "Saved pricing table and evidence from five competitor pages.",
+			Artifacts: []assistant.Artifact{
+				{ID: "artifact_1", Kind: assistant.ArtifactKindTable, Title: "Pricing table", MIMEType: "text/markdown"},
+			},
+			Evidence: []assistant.Evidence{
+				{ID: "evidence_1", Kind: assistant.EvidenceKindObservation, Summary: "Vendor A: $49/mo starter"},
+			},
+		},
+	})
+
+	if !strings.Contains(strings.ToLower(bundle.System), "read-oriented") {
+		t.Fatalf("System prompt = %q, want read-oriented guidance", bundle.System)
+	}
+	if !strings.Contains(bundle.System, "needs_user_input") || !strings.Contains(bundle.System, "wait_kind") {
+		t.Fatalf("System prompt = %q, want answer wait schema keys", bundle.System)
+	}
+	if !strings.Contains(bundle.User, "Parent artifacts") || !strings.Contains(bundle.User, "Parent evidence highlights") {
+		t.Fatalf("User prompt = %q, want parent context details", bundle.User)
+	}
+}
+
 func TestBuildGeneratorPromptPrefersAgentBrowserAutoConnect(t *testing.T) {
 	t.Parallel()
 
@@ -91,6 +146,49 @@ func TestBuildContractPromptDeclaresStrictJSONContract(t *testing.T) {
 	}
 	if !strings.Contains(bundle.User, "Original user request: Take the cafes from https://www.diningcode.com/list.dc?query=foo and save them into Naver Map.") {
 		t.Fatalf("User prompt = %q, want original user request context", bundle.User)
+	}
+}
+
+func TestDecodeGateOutputBuildsRouteDecision(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{
+		"route": "answer",
+		"reason": "The request can be answered from existing run evidence.",
+		"summary": "Route to answer for a read-only follow-up."
+	}`)
+
+	route, reason, summary, err := DecodeGateOutput(raw)
+	if err != nil {
+		t.Fatalf("DecodeGateOutput() error = %v", err)
+	}
+	if route != assistant.RunRouteAnswer {
+		t.Fatalf("route = %q, want %q", route, assistant.RunRouteAnswer)
+	}
+	if reason == "" || summary == "" {
+		t.Fatalf("reason/summary = %q / %q, want non-empty values", reason, summary)
+	}
+}
+
+func TestDecodeAnswerOutputBuildsAnswerResult(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{
+		"summary": "Prepared a direct answer from parent artifacts.",
+		"output": "The cheapest three were Vendor A, Vendor C, and Vendor E.",
+		"needs_user_input": false,
+		"wait_kind": "",
+		"wait_title": "",
+		"wait_prompt": "",
+		"wait_risk_summary": ""
+	}`)
+
+	output, err := DecodeAnswerOutput(raw)
+	if err != nil {
+		t.Fatalf("DecodeAnswerOutput() error = %v", err)
+	}
+	if output.Output == "" || output.NeedsUserInput {
+		t.Fatalf("output = %#v, want non-empty output and no wait", output)
 	}
 }
 

@@ -10,6 +10,8 @@ type RunStatus string
 
 const (
 	RunStatusQueued           RunStatus = "queued"
+	RunStatusGating           RunStatus = "gating"
+	RunStatusAnswering        RunStatus = "answering"
 	RunStatusSelectingProject RunStatus = "selecting_project"
 	RunStatusPlanning         RunStatus = "planning"
 	RunStatusContracting      RunStatus = "contracting"
@@ -26,6 +28,8 @@ type RunPhase string
 
 const (
 	RunPhaseQueued           RunPhase = "queued"
+	RunPhaseGating           RunPhase = "gating"
+	RunPhaseAnswering        RunPhase = "answering"
 	RunPhaseSelectingProject RunPhase = "selecting_project"
 	RunPhasePlanning         RunPhase = "planning"
 	RunPhaseContracting      RunPhase = "contracting"
@@ -40,11 +44,20 @@ const (
 type AttemptRole string
 
 const (
+	AttemptRoleGate            AttemptRole = "gate"
+	AttemptRoleAnswer          AttemptRole = "answer"
 	AttemptRoleProjectSelector AttemptRole = "project_selector"
 	AttemptRolePlanner         AttemptRole = "planner"
 	AttemptRoleContractor      AttemptRole = "contractor"
 	AttemptRoleGenerator       AttemptRole = "generator"
 	AttemptRoleEvaluator       AttemptRole = "evaluator"
+)
+
+type RunRoute string
+
+const (
+	RunRouteWorkflow RunRoute = "workflow"
+	RunRouteAnswer   RunRoute = "answer"
 )
 
 type ContractStatus string
@@ -116,8 +129,12 @@ const (
 
 type Run struct {
 	ID                    string         `json:"id"`
+	ParentRunID           string         `json:"parent_run_id,omitempty"`
 	Status                RunStatus      `json:"status"`
 	Phase                 RunPhase       `json:"phase"`
+	GateRoute             RunRoute       `json:"gate_route,omitempty"`
+	GateReason            string         `json:"gate_reason,omitempty"`
+	GateDecidedAt         *time.Time     `json:"gate_decided_at,omitempty"`
 	Project               ProjectContext `json:"project"`
 	UserRequestRaw        string         `json:"user_request_raw"`
 	TaskSpec              TaskSpec       `json:"task_spec"`
@@ -255,6 +272,8 @@ func (r Run) Validate() error {
 	switch {
 	case r.ID == "":
 		return errors.New("assistant: run id is required")
+	case r.ParentRunID != "" && r.ParentRunID == r.ID:
+		return errors.New("assistant: parent run id cannot match run id")
 	case r.UserRequestRaw == "":
 		return errors.New("assistant: user request is required")
 	case r.MaxGenerationAttempts <= 0:
@@ -263,6 +282,14 @@ func (r Run) Validate() error {
 		return errors.New("assistant: created timestamp is required")
 	case r.UpdatedAt.IsZero():
 		return errors.New("assistant: updated timestamp is required")
+	}
+	switch r.GateRoute {
+	case "", RunRouteWorkflow, RunRouteAnswer:
+	default:
+		return errors.New("assistant: gate route is invalid")
+	}
+	if r.GateRoute == "" && (r.GateReason != "" || r.GateDecidedAt != nil) {
+		return errors.New("assistant: gate metadata requires gate route")
 	}
 	if err := r.TaskSpec.Validate(); err != nil {
 		return fmt.Errorf("assistant: task spec invalid: %w", err)
@@ -342,6 +369,8 @@ func (e Evaluation) Validate() error {
 func AllRunStatuses() []RunStatus {
 	return []RunStatus{
 		RunStatusQueued,
+		RunStatusGating,
+		RunStatusAnswering,
 		RunStatusSelectingProject,
 		RunStatusPlanning,
 		RunStatusContracting,
@@ -358,6 +387,8 @@ func AllRunStatuses() []RunStatus {
 func AllRunPhases() []RunPhase {
 	return []RunPhase{
 		RunPhaseQueued,
+		RunPhaseGating,
+		RunPhaseAnswering,
 		RunPhaseSelectingProject,
 		RunPhasePlanning,
 		RunPhaseContracting,

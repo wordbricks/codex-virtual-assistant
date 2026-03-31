@@ -77,6 +77,9 @@ func (e *RunEngine) Start(ctx context.Context, run assistant.Run) error {
 	run.Phase = assistant.RunPhaseQueued
 	run.WaitingFor = nil
 	run.LatestEvaluation = nil
+	run.GateRoute = ""
+	run.GateReason = ""
+	run.GateDecidedAt = nil
 	run.AttemptCount = 0
 	run.CreatedAt = run.CreatedAt.UTC()
 	run.UpdatedAt = run.CreatedAt
@@ -87,7 +90,7 @@ func (e *RunEngine) Start(ctx context.Context, run assistant.Run) error {
 		return err
 	}
 
-	return e.continueRun(ctx, run.ID, assistant.AttemptRoleProjectSelector, nil)
+	return e.continueRun(ctx, run.ID, assistant.AttemptRoleGate, nil)
 }
 
 func (e *RunEngine) Resume(ctx context.Context, runID string, input map[string]string) error {
@@ -102,7 +105,7 @@ func (e *RunEngine) Resume(ctx context.Context, runID string, input map[string]s
 		return fmt.Errorf("%w: run %s is cancelled", ErrInvalidRunState, runID)
 	}
 
-	role := assistant.AttemptRolePlanner
+	role := assistant.AttemptRoleGate
 	if len(record.Attempts) > 0 {
 		role = record.Attempts[len(record.Attempts)-1].Role
 	}
@@ -149,6 +152,35 @@ func (e *RunEngine) continueRun(ctx context.Context, runID string, role assistan
 		}
 
 		switch role {
+		case assistant.AttemptRoleGate:
+			if err := e.executeGate(ctx, &record, resumeInput); err != nil {
+				return err
+			}
+			record, err = e.repo.GetRunRecord(ctx, runID)
+			if err != nil {
+				return err
+			}
+			if record.Run.Status == assistant.RunStatusWaiting || isTerminalStatus(record.Run.Status) {
+				return nil
+			}
+			if record.Run.GateRoute == assistant.RunRouteAnswer {
+				role = assistant.AttemptRoleAnswer
+			} else {
+				role = assistant.AttemptRoleProjectSelector
+			}
+			resumeInput = nil
+		case assistant.AttemptRoleAnswer:
+			if err := e.executeAnswer(ctx, &record, resumeInput); err != nil {
+				return err
+			}
+			record, err = e.repo.GetRunRecord(ctx, runID)
+			if err != nil {
+				return err
+			}
+			if record.Run.Status == assistant.RunStatusWaiting || isTerminalStatus(record.Run.Status) {
+				return nil
+			}
+			return fmt.Errorf("%w: answer phase completed without terminal transition", ErrInvalidRunState)
 		case assistant.AttemptRoleProjectSelector:
 			if err := e.executeProjectSelector(ctx, &record, resumeInput); err != nil {
 				return err
@@ -232,6 +264,131 @@ func (e *RunEngine) continueRun(ctx context.Context, runID string, role assistan
 	}
 }
 
+func (e *RunEngine) executeGate(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) error {
+	now := e.now().UTC()
+	record.Run.Status = assistant.RunStatusGating
+	record.Run.Phase = assistant.RunPhaseGating
+	record.Run.WaitingFor = nil
+	record.Run.UpdatedAt = now
+	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+		return err
+	}
+	if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseGating, "Gating the run to decide between answer mode and workflow execution."); err != nil {
+		return err
+	}
+
+	parentContext, err := e.parentContextForRun(ctx, record.Run)
+	if err != nil {
+		return e.failRun(ctx, record.Run, fmt.Sprintf("Gate could not load parent run context: %v", err), err)
+	}
+	prompt := prompting.BuildGatePrompt(prompting.GateInput{
+		Run:           record.Run,
+		ParentContext: parentContext,
+	})
+
+	attempt, response, err := e.executeAttempt(ctx, record.Run, record.Attempts, assistant.AttemptRoleGate, prompt, "", resumeInput, record.Run.Project.WorkspaceDir)
+	if err != nil {
+		return e.failRun(ctx, record.Run, fmt.Sprintf("Gate execution failed: %v", err), err)
+	}
+	if response.WaitRequest != nil {
+		return e.enterWaiting(ctx, record.Run, attempt, response.WaitRequest)
+	}
+
+	route, reason, summary, err := prompting.DecodeGateOutput([]byte(response.Output))
+	if err != nil {
+		return e.failRun(ctx, record.Run, fmt.Sprintf("Gate output could not be decoded: %v", err), err)
+	}
+
+	decidedAt := e.now().UTC()
+	record.Run.GateRoute = route
+	record.Run.GateReason = reason
+	record.Run.GateDecidedAt = &decidedAt
+	record.Run.AttemptCount = len(record.Attempts) + 1
+	record.Run.UpdatedAt = decidedAt
+	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+		return err
+	}
+
+	switch route {
+	case assistant.RunRouteAnswer:
+		return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseAnswering, firstNonEmpty(summary, "Gate selected answer mode for this run."))
+	case assistant.RunRouteWorkflow:
+		return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseSelectingProject, firstNonEmpty(summary, "Gate selected workflow mode. Starting project selection."))
+	default:
+		return e.failRun(ctx, record.Run, fmt.Sprintf("Gate selected an unsupported route %q.", route), ErrInvalidRunState)
+	}
+}
+
+func (e *RunEngine) executeAnswer(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) error {
+	now := e.now().UTC()
+	record.Run.Status = assistant.RunStatusAnswering
+	record.Run.Phase = assistant.RunPhaseAnswering
+	record.Run.WaitingFor = nil
+	record.Run.UpdatedAt = now
+	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+		return err
+	}
+	if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseAnswering, "Preparing a read-oriented answer using available run context and evidence."); err != nil {
+		return err
+	}
+
+	parentContext, err := e.parentContextForRun(ctx, record.Run)
+	if err != nil {
+		return e.failRun(ctx, record.Run, fmt.Sprintf("Answer phase could not load parent run context: %v", err), err)
+	}
+	prompt := prompting.BuildAnswerPrompt(prompting.AnswerInput{
+		Run:           record.Run,
+		ParentContext: parentContext,
+	})
+
+	attempt, response, err := e.executeAttempt(ctx, record.Run, record.Attempts, assistant.AttemptRoleAnswer, prompt, "", resumeInput, record.Run.Project.WorkspaceDir)
+	if err != nil {
+		return e.failRun(ctx, record.Run, fmt.Sprintf("Answer phase execution failed: %v", err), err)
+	}
+	if response.WaitRequest != nil {
+		return e.enterWaiting(ctx, record.Run, attempt, response.WaitRequest)
+	}
+
+	summary := strings.TrimSpace(response.Summary)
+	output := strings.TrimSpace(response.Output)
+	decoded, decodeErr := prompting.DecodeAnswerOutput([]byte(response.Output))
+	if decodeErr == nil {
+		if decoded.NeedsUserInput {
+			return e.enterWaiting(ctx, record.Run, attempt, &assistant.WaitRequest{
+				Kind:        assistant.WaitKind(decoded.WaitKind),
+				Title:       decoded.WaitTitle,
+				Prompt:      decoded.WaitPrompt,
+				RiskSummary: decoded.WaitRiskSummary,
+			})
+		}
+		summary = firstNonEmpty(decoded.Summary, summary)
+		output = firstNonEmpty(decoded.Output, output)
+	}
+
+	if output == "" {
+		return e.failRun(ctx, record.Run, "Answer phase completed without an answer output.", ErrInvalidRunState)
+	}
+	if len(response.Artifacts) == 0 {
+		now := e.now().UTC()
+		if err := e.repo.AddArtifact(ctx, assistant.Artifact{
+			ID:        assistant.NewID("artifact", now),
+			RunID:     record.Run.ID,
+			AttemptID: attempt.ID,
+			Kind:      assistant.ArtifactKindReport,
+			Title:     "Assistant answer",
+			MIMEType:  "text/markdown",
+			Content:   output,
+			CreatedAt: now,
+		}); err != nil {
+			return err
+		}
+	}
+
+	record.Run.AttemptCount = len(record.Attempts) + 1
+	record.Run.UpdatedAt = e.now().UTC()
+	return e.completeRun(ctx, record.Run, firstNonEmpty(summary, "Answer completed."))
+}
+
 func (e *RunEngine) executeProjectSelector(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) error {
 	if e.projects == nil {
 		return e.failRun(ctx, record.Run, "Project selection is not configured.", ErrInvalidRunState)
@@ -275,6 +432,43 @@ func (e *RunEngine) executeProjectSelector(ctx context.Context, record *store.Ru
 		return err
 	}
 	return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhasePlanning, firstNonEmpty(summary, fmt.Sprintf("Project %s selected. Starting planning.", projectSelection.Slug)))
+}
+
+func (e *RunEngine) parentContextForRun(ctx context.Context, run assistant.Run) (*prompting.ParentRunContext, error) {
+	parentRunID := strings.TrimSpace(run.ParentRunID)
+	if parentRunID == "" {
+		return nil, nil
+	}
+	record, err := e.repo.GetRunRecord(ctx, parentRunID)
+	if err != nil {
+		return nil, err
+	}
+	return &prompting.ParentRunContext{
+		RunID:          record.Run.ID,
+		UserRequestRaw: record.Run.UserRequestRaw,
+		Summary:        parentRunSummary(record),
+		Artifacts:      append([]assistant.Artifact{}, record.Artifacts...),
+		Evidence:       append([]assistant.Evidence{}, record.Evidence...),
+	}, nil
+}
+
+func parentRunSummary(record store.RunRecord) string {
+	if record.Run.LatestEvaluation != nil && strings.TrimSpace(record.Run.LatestEvaluation.Summary) != "" {
+		return record.Run.LatestEvaluation.Summary
+	}
+	if len(record.Attempts) > 0 {
+		latest := record.Attempts[len(record.Attempts)-1]
+		if strings.TrimSpace(latest.OutputSummary) != "" {
+			return latest.OutputSummary
+		}
+	}
+	if len(record.Events) > 0 {
+		latest := record.Events[len(record.Events)-1]
+		if strings.TrimSpace(latest.Summary) != "" {
+			return latest.Summary
+		}
+	}
+	return ""
 }
 
 func (e *RunEngine) executePlanner(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) error {

@@ -75,8 +75,12 @@ func (r *SQLiteRepository) SaveRun(ctx context.Context, run assistant.Run) error
 	script := fmt.Sprintf(`
 INSERT INTO runs (
 	id,
+	parent_run_id,
 	status,
 	phase,
+	gate_route,
+	gate_reason,
+	gate_decided_at,
 	project_json,
 	user_request_raw,
 	task_spec_json,
@@ -92,6 +96,10 @@ INSERT INTO runs (
 	%s,
 	%s,
 	%s,
+	%s,
+	%s,
+	%s,
+	%s,
 	%d,
 	%d,
 	%s,
@@ -101,6 +109,10 @@ INSERT INTO runs (
 ON CONFLICT(id) DO UPDATE SET
 	status = excluded.status,
 	phase = excluded.phase,
+	parent_run_id = excluded.parent_run_id,
+	gate_route = excluded.gate_route,
+	gate_reason = excluded.gate_reason,
+	gate_decided_at = excluded.gate_decided_at,
 	project_json = excluded.project_json,
 	user_request_raw = excluded.user_request_raw,
 	task_spec_json = excluded.task_spec_json,
@@ -108,7 +120,7 @@ ON CONFLICT(id) DO UPDATE SET
 	max_generation_attempts = excluded.max_generation_attempts,
 	updated_at = excluded.updated_at,
 	completed_at = excluded.completed_at;
-`, sqlText(run.ID), sqlText(string(run.Status)), sqlText(string(run.Phase)), sqlText(projectJSON), sqlText(run.UserRequestRaw), sqlText(taskSpecJSON), run.AttemptCount, run.MaxGenerationAttempts, sqlTime(run.CreatedAt), sqlTime(run.UpdatedAt), sqlNullableTime(run.CompletedAt))
+`, sqlText(run.ID), sqlNullableText(run.ParentRunID), sqlText(string(run.Status)), sqlText(string(run.Phase)), sqlText(string(run.GateRoute)), sqlText(run.GateReason), sqlNullableTime(run.GateDecidedAt), sqlText(projectJSON), sqlText(run.UserRequestRaw), sqlText(taskSpecJSON), run.AttemptCount, run.MaxGenerationAttempts, sqlTime(run.CreatedAt), sqlTime(run.UpdatedAt), sqlNullableTime(run.CompletedAt))
 
 	return r.exec(ctx, script)
 }
@@ -221,8 +233,12 @@ func (r *SQLiteRepository) GetRun(ctx context.Context, runID string) (assistant.
 	rows, err := queryRows[runRow](ctx, r, fmt.Sprintf(`
 SELECT
 	id,
+	COALESCE(parent_run_id, '') AS parent_run_id,
 	status,
 	phase,
+	COALESCE(gate_route, '') AS gate_route,
+	COALESCE(gate_reason, '') AS gate_reason,
+	COALESCE(gate_decided_at, '') AS gate_decided_at,
 	COALESCE(project_json, '{}') AS project_json,
 	user_request_raw,
 	task_spec_json,
@@ -492,14 +508,45 @@ func (r *SQLiteRepository) migrate(ctx context.Context) error {
 }
 
 func (r *SQLiteRepository) ensureRunColumns(ctx context.Context) error {
-	exists, err := r.tableColumnExists(ctx, "runs", "project_json")
-	if err != nil {
-		return err
+	type runColumn struct {
+		name string
+		ddl  string
 	}
-	if exists {
-		return nil
+	columns := []runColumn{
+		{
+			name: "project_json",
+			ddl:  `ALTER TABLE runs ADD COLUMN project_json TEXT NOT NULL DEFAULT '{}';`,
+		},
+		{
+			name: "parent_run_id",
+			ddl:  `ALTER TABLE runs ADD COLUMN parent_run_id TEXT;`,
+		},
+		{
+			name: "gate_route",
+			ddl:  `ALTER TABLE runs ADD COLUMN gate_route TEXT NOT NULL DEFAULT '';`,
+		},
+		{
+			name: "gate_reason",
+			ddl:  `ALTER TABLE runs ADD COLUMN gate_reason TEXT NOT NULL DEFAULT '';`,
+		},
+		{
+			name: "gate_decided_at",
+			ddl:  `ALTER TABLE runs ADD COLUMN gate_decided_at TEXT;`,
+		},
 	}
-	return r.exec(ctx, `ALTER TABLE runs ADD COLUMN project_json TEXT NOT NULL DEFAULT '{}';`)
+	for _, column := range columns {
+		exists, err := r.tableColumnExists(ctx, "runs", column.name)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if err := r.exec(ctx, column.ddl); err != nil {
+			return err
+		}
+	}
+	return r.exec(ctx, `CREATE INDEX IF NOT EXISTS idx_runs_parent_run_id ON runs(parent_run_id);`)
 }
 
 func (r *SQLiteRepository) exec(ctx context.Context, script string) error {
@@ -567,6 +614,13 @@ func (r *SQLiteRepository) tableColumnExists(ctx context.Context, tableName, col
 
 func sqlText(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+func sqlNullableText(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "NULL"
+	}
+	return sqlText(value)
 }
 
 func sqlBool(value bool) string {

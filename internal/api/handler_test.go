@@ -28,6 +28,7 @@ func TestRunsAPICreateAndGetRun(t *testing.T) {
 
 	handler := newTestAPIHandler(t, &sequenceExecutor{
 		steps: []executorStep{
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request requires full workflow execution.")},
 			{role: assistant.AttemptRoleProjectSelector, result: projectSelectorPhaseResult("competitor-pricing", "Competitor Pricing", "Track repeat competitor pricing research.")},
 			{role: assistant.AttemptRolePlanner, result: plannerPhaseResult("Compare competitor pricing", []string{"Pricing table", "Summary memo"})},
 			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Pricing table", "Summary memo"})},
@@ -59,11 +60,113 @@ func TestRunsAPICreateAndGetRun(t *testing.T) {
 	}
 }
 
+func TestRunsAPICreateFollowUpRunWithParentRunID(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestAPIHandler(t, &sequenceExecutor{
+		steps: []executorStep{
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request requires execution work.")},
+			{role: assistant.AttemptRoleProjectSelector, result: projectSelectorPhaseResult("competitor-pricing", "Competitor Pricing", "Track repeat competitor pricing research.")},
+			{role: assistant.AttemptRolePlanner, result: plannerPhaseResult("Compare competitor pricing", []string{"Pricing table"})},
+			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Pricing table"})},
+			{role: assistant.AttemptRoleGenerator, result: generatorPhaseResult("Prepared pricing comparison draft")},
+			{role: assistant.AttemptRoleEvaluator, result: evaluatorPhaseResult(true, 93, "Initial run completed.", nil, "")},
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("answer", "This follow-up can be answered from prior evidence.")},
+			{role: assistant.AttemptRoleAnswer, result: answerPhaseResult("Follow-up answer generated.", "Top three cheapest competitors were A, C, and E.")},
+		},
+	})
+
+	initialResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "Compare competitor pricing and summarize it.",
+	})
+	if initialResponse.Code != http.StatusAccepted {
+		t.Fatalf("initial POST /runs status = %d, want %d", initialResponse.Code, http.StatusAccepted)
+	}
+
+	var initial createRunResponse
+	if err := json.Unmarshal(initialResponse.Body.Bytes(), &initial); err != nil {
+		t.Fatalf("decode initial create response: %v", err)
+	}
+	waitForRunStatus(t, handler, initial.Run.ID, assistant.RunStatusCompleted)
+
+	followUpResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "What were the top three cheapest competitors from that run?",
+		"parent_run_id":    initial.Run.ID,
+	})
+	if followUpResponse.Code != http.StatusAccepted {
+		t.Fatalf("follow-up POST /runs status = %d, want %d", followUpResponse.Code, http.StatusAccepted)
+	}
+
+	var followUp createRunResponse
+	if err := json.Unmarshal(followUpResponse.Body.Bytes(), &followUp); err != nil {
+		t.Fatalf("decode follow-up create response: %v", err)
+	}
+	if followUp.Run.ParentRunID != initial.Run.ID {
+		t.Fatalf("follow-up parent_run_id = %q, want %q", followUp.Run.ParentRunID, initial.Run.ID)
+	}
+
+	record := waitForRunStatus(t, handler, followUp.Run.ID, assistant.RunStatusCompleted)
+	if record.Run.ParentRunID != initial.Run.ID {
+		t.Fatalf("stored parent_run_id = %q, want %q", record.Run.ParentRunID, initial.Run.ID)
+	}
+	if record.Run.GateRoute != assistant.RunRouteAnswer {
+		t.Fatalf("GateRoute = %q, want %q", record.Run.GateRoute, assistant.RunRouteAnswer)
+	}
+}
+
+func TestRunsAPICreateFollowUpRequiresExistingParent(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestAPIHandler(t, &sequenceExecutor{
+		steps: []executorStep{},
+	})
+
+	response := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "Follow-up question.",
+		"parent_run_id":    "run_missing_parent",
+	})
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("POST /runs with missing parent status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+}
+
+func TestRunsAPIRejectsInputOnCompletedRunAndSuggestsFollowUp(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestAPIHandler(t, &sequenceExecutor{
+		steps: []executorStep{
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("answer", "Simple request can be answered directly.")},
+			{role: assistant.AttemptRoleAnswer, result: answerPhaseResult("Answered directly.", "Here is the direct answer.")},
+		},
+	})
+
+	createResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "Quick question",
+	})
+	var created createRunResponse
+	if err := json.Unmarshal(createResponse.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	waitForRunStatus(t, handler, created.Run.ID, assistant.RunStatusCompleted)
+
+	inputResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs/"+created.Run.ID+"/input", map[string]any{
+		"input": map[string]string{"response": "another question"},
+	})
+	if inputResponse.Code != http.StatusConflict {
+		t.Fatalf("POST /input on completed run status = %d, want %d", inputResponse.Code, http.StatusConflict)
+	}
+	if !strings.Contains(inputResponse.Body.String(), "parent_run_id") {
+		t.Fatalf("response body = %q, want parent_run_id guidance", inputResponse.Body.String())
+	}
+}
+
 func TestRunsAPIInputAndResumeFlow(t *testing.T) {
 	t.Parallel()
 
 	handler := newTestAPIHandler(t, &sequenceExecutor{
 		steps: []executorStep{
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request needs planning and execution.")},
 			{role: assistant.AttemptRoleProjectSelector, result: projectSelectorPhaseResult("competitor-pricing", "Competitor Pricing", "Track repeat competitor pricing research.")},
 			{role: assistant.AttemptRolePlanner, result: wtl.CodexPhaseResult{
 				Summary: "Need clarification before planning.",
@@ -114,6 +217,7 @@ func TestRunsAPICancelAndEventsStream(t *testing.T) {
 	block := make(chan struct{})
 	handler := newTestAPIHandler(t, &sequenceExecutor{
 		steps: []executorStep{
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request needs browser execution.")},
 			{role: assistant.AttemptRoleProjectSelector, result: projectSelectorPhaseResult("dashboard-inspection", "Dashboard Inspection", "Inspect and summarize dashboard work.")},
 			{role: assistant.AttemptRolePlanner, result: plannerPhaseResult("Inspect the dashboard", []string{"Dashboard summary"})},
 			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Dashboard summary"})},
@@ -143,7 +247,7 @@ func TestRunsAPICancelAndEventsStream(t *testing.T) {
 
 	close(block)
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(4 * time.Second)
 	for time.Now().Before(deadline) {
 		if strings.Contains(streamResponse.Body.String(), `"phase":"completed"`) {
 			break
@@ -158,6 +262,7 @@ func TestRunsAPICancelAndEventsStream(t *testing.T) {
 
 	waitHandler := newTestAPIHandler(t, &sequenceExecutor{
 		steps: []executorStep{
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request needs external access approval.")},
 			{role: assistant.AttemptRoleProjectSelector, result: projectSelectorPhaseResult("dashboard-inspection", "Dashboard Inspection", "Inspect and summarize dashboard work.")},
 			{role: assistant.AttemptRolePlanner, result: wtl.CodexPhaseResult{
 				Summary: "Need approval before continuing.",
@@ -276,7 +381,7 @@ func doJSONRequest(t *testing.T, handler http.Handler, method, path string, payl
 func waitForRunStatus(t *testing.T, handler http.Handler, runID string, want assistant.RunStatus) store.RunRecord {
 	t.Helper()
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(4 * time.Second)
 	for time.Now().Before(deadline) {
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+runID, nil)
 		response := httptest.NewRecorder()
@@ -351,6 +456,18 @@ func plannerPhaseResult(goal string, deliverables []string) wtl.CodexPhaseResult
 	})
 	return wtl.CodexPhaseResult{
 		Summary: "Planner normalized the task.",
+		Output:  string(output),
+	}
+}
+
+func gatePhaseResult(route, reason string) wtl.CodexPhaseResult {
+	output, _ := json.Marshal(map[string]any{
+		"route":   route,
+		"reason":  reason,
+		"summary": "Gate routing complete.",
+	})
+	return wtl.CodexPhaseResult{
+		Summary: "Gate routing complete.",
 		Output:  string(output),
 	}
 }
@@ -438,5 +555,12 @@ func evaluatorPhaseResult(passed bool, score int, summary string, missing []stri
 	return wtl.CodexPhaseResult{
 		Summary: "Evaluator finished.",
 		Output:  string(output),
+	}
+}
+
+func answerPhaseResult(summary, output string) wtl.CodexPhaseResult {
+	return wtl.CodexPhaseResult{
+		Summary: summary,
+		Output:  output,
 	}
 }

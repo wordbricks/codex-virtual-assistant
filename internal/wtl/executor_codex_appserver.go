@@ -307,7 +307,7 @@ func (s *appServerTurnSession) buildPhaseResult(request CodexPhaseRequest) Codex
 	}
 
 	switch request.Role {
-	case assistant.AttemptRoleGenerator:
+	case assistant.AttemptRoleGenerator, assistant.AttemptRoleAnswer:
 		var payload struct {
 			Summary         string `json:"summary"`
 			Output          string `json:"output"`
@@ -333,9 +333,13 @@ func (s *appServerTurnSession) buildPhaseResult(request CodexPhaseRequest) Codex
 			response.Output = raw
 		}
 		if response.WaitRequest == nil && strings.TrimSpace(response.Output) != "" {
+			title := "Assistant draft result"
+			if request.Role == assistant.AttemptRoleAnswer {
+				title = "Assistant answer"
+			}
 			response.Artifacts = append(response.Artifacts, assistant.Artifact{
 				Kind:     assistant.ArtifactKindReport,
-				Title:    "Assistant draft result",
+				Title:    title,
 				MIMEType: "text/markdown",
 				Content:  response.Output,
 			})
@@ -907,6 +911,10 @@ func isMeaningfulReasoningText(value string) bool {
 
 func phaseForAttemptRole(role assistant.AttemptRole) assistant.RunPhase {
 	switch role {
+	case assistant.AttemptRoleGate:
+		return assistant.RunPhaseGating
+	case assistant.AttemptRoleAnswer:
+		return assistant.RunPhaseAnswering
 	case assistant.AttemptRoleProjectSelector:
 		return assistant.RunPhaseSelectingProject
 	case assistant.AttemptRolePlanner:
@@ -1233,6 +1241,44 @@ func phasePromptForCodex(request CodexPhaseRequest) string {
 
 func phaseOutputSchema(role assistant.AttemptRole) map[string]any {
 	switch role {
+	case assistant.AttemptRoleGate:
+		return map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"route":   map[string]any{"type": "string", "enum": []string{"answer", "workflow"}},
+				"reason":  map[string]any{"type": "string"},
+				"summary": map[string]any{"type": "string"},
+			},
+			"required": []string{
+				"route",
+				"reason",
+				"summary",
+			},
+			"additionalProperties": false,
+		}
+	case assistant.AttemptRoleAnswer:
+		return map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"summary":           map[string]any{"type": "string"},
+				"output":            map[string]any{"type": "string"},
+				"needs_user_input":  map[string]any{"type": "boolean"},
+				"wait_kind":         map[string]any{"type": "string", "enum": []string{"", "approval", "clarification", "authentication"}},
+				"wait_title":        map[string]any{"type": "string"},
+				"wait_prompt":       map[string]any{"type": "string"},
+				"wait_risk_summary": map[string]any{"type": "string"},
+			},
+			"required": []string{
+				"summary",
+				"output",
+				"needs_user_input",
+				"wait_kind",
+				"wait_title",
+				"wait_prompt",
+				"wait_risk_summary",
+			},
+			"additionalProperties": false,
+		}
 	case assistant.AttemptRoleProjectSelector:
 		return map[string]any{
 			"type": "object",

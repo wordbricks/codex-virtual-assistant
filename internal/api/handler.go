@@ -41,6 +41,7 @@ type RunAPI struct {
 type createRunRequest struct {
 	UserRequestRaw        string `json:"user_request_raw"`
 	MaxGenerationAttempts int    `json:"max_generation_attempts"`
+	ParentRunID           string `json:"parent_run_id"`
 }
 
 type runActionRequest struct {
@@ -103,9 +104,13 @@ func (a *RunAPI) handleRuns(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		run, err := a.runs.CreateRun(r.Context(), request.UserRequestRaw, request.MaxGenerationAttempts)
+		run, err := a.runs.CreateRun(r.Context(), request.UserRequestRaw, request.MaxGenerationAttempts, request.ParentRunID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			status := http.StatusBadRequest
+			if errors.Is(err, store.ErrNotFound) {
+				status = http.StatusNotFound
+			}
+			http.Error(w, err.Error(), status)
 			return
 		}
 
@@ -320,6 +325,8 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	if errors.Is(err, store.ErrNotFound) {
 		status = http.StatusNotFound
+	} else if errors.Is(err, assistantapp.ErrRunNotWaiting) {
+		status = http.StatusConflict
 	}
 	http.Error(w, err.Error(), status)
 }

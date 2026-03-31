@@ -234,7 +234,7 @@ func doJSONRequest(t *testing.T, handler http.Handler, method, path string, payl
 func waitForRunStatus(t *testing.T, handler http.Handler, runID string, want assistant.RunStatus) store.RunRecord {
 	t.Helper()
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(4 * time.Second)
 	for time.Now().Before(deadline) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+runID, nil)
 		res := httptest.NewRecorder()

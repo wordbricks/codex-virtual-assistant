@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,9 @@ func TestRunEngineRetriesGeneratorUntilEvaluationPasses(t *testing.T) {
 	now := time.Date(2026, time.March, 27, 14, 0, 0, 0, time.UTC)
 	runtime := &scriptedRuntime{
 		steps: map[assistant.AttemptRole][]runtimeStep{
+			assistant.AttemptRoleGate: {
+				{response: PhaseResponse{Summary: "Gate routed to workflow.", Output: gateJSON("workflow", "This request needs full execution work.")}},
+			},
 			assistant.AttemptRoleProjectSelector: {
 				{response: PhaseResponse{Summary: "Selected the competitor research project.", Output: selectorJSON("competitor-pricing", "Competitor Pricing", "Track repeat competitor pricing research.")}},
 			},
@@ -58,8 +62,8 @@ func TestRunEngineRetriesGeneratorUntilEvaluationPasses(t *testing.T) {
 	if record.Run.Status != assistant.RunStatusCompleted {
 		t.Fatalf("Run.Status = %q, want %q", record.Run.Status, assistant.RunStatusCompleted)
 	}
-	if len(record.Attempts) != 7 {
-		t.Fatalf("len(Attempts) = %d, want 7", len(record.Attempts))
+	if len(record.Attempts) != 8 {
+		t.Fatalf("len(Attempts) = %d, want 8", len(record.Attempts))
 	}
 	if len(record.Evaluations) != 2 {
 		t.Fatalf("len(Evaluations) = %d, want 2", len(record.Evaluations))
@@ -73,6 +77,9 @@ func TestRunEngineRetriesGeneratorUntilEvaluationPasses(t *testing.T) {
 	if len(record.Artifacts) != 2 {
 		t.Fatalf("len(Artifacts) = %d, want 2", len(record.Artifacts))
 	}
+	if record.Attempts[0].Role != assistant.AttemptRoleGate {
+		t.Fatalf("Attempts[0].Role = %q, want %q", record.Attempts[0].Role, assistant.AttemptRoleGate)
+	}
 	if len(observer.events) == 0 {
 		t.Fatal("observer events are empty")
 	}
@@ -85,6 +92,9 @@ func TestRunEngineWaitsAndResumes(t *testing.T) {
 	now := time.Date(2026, time.March, 27, 15, 0, 0, 0, time.UTC)
 	runtime := &scriptedRuntime{
 		steps: map[assistant.AttemptRole][]runtimeStep{
+			assistant.AttemptRoleGate: {
+				{response: PhaseResponse{Summary: "Gate routed to workflow.", Output: gateJSON("workflow", "Planner and execution are required.")}},
+			},
 			assistant.AttemptRoleProjectSelector: {
 				{response: PhaseResponse{Summary: "Selected the competitor research project.", Output: selectorJSON("competitor-pricing", "Competitor Pricing", "Track repeat competitor pricing research.")}},
 			},
@@ -147,6 +157,9 @@ func TestRunEngineCancelStopsWaitingRun(t *testing.T) {
 	now := time.Date(2026, time.March, 27, 16, 0, 0, 0, time.UTC)
 	runtime := &scriptedRuntime{
 		steps: map[assistant.AttemptRole][]runtimeStep{
+			assistant.AttemptRoleGate: {
+				{response: PhaseResponse{Summary: "Gate routed to workflow.", Output: gateJSON("workflow", "This requires external dashboard work.")}},
+			},
 			assistant.AttemptRoleProjectSelector: {
 				{response: PhaseResponse{Summary: "Selected the dashboard project.", Output: selectorJSON("dashboard-inspection", "Dashboard Inspection", "Inspect and summarize dashboard-related work.")}},
 			},
@@ -174,6 +187,100 @@ func TestRunEngineCancelStopsWaitingRun(t *testing.T) {
 	}
 	if err := engine.Resume(context.Background(), run.ID, map[string]string{"approved": "yes"}); !errors.Is(err, ErrInvalidRunState) {
 		t.Fatalf("Resume() error = %v, want ErrInvalidRunState", err)
+	}
+}
+
+func TestRunEngineGateRoutesToAnswerAndCompletes(t *testing.T) {
+	t.Parallel()
+
+	repo, dataDir := openEngineTestRepository(t)
+	now := time.Date(2026, time.March, 27, 16, 30, 0, 0, time.UTC)
+	runtime := &scriptedRuntime{
+		steps: map[assistant.AttemptRole][]runtimeStep{
+			assistant.AttemptRoleGate: {
+				{response: PhaseResponse{Summary: "Gate routed to answer.", Output: gateJSON("answer", "The request is a read-only follow-up.")}},
+			},
+			assistant.AttemptRoleAnswer: {
+				{response: PhaseResponse{Summary: "Prepared direct answer.", Output: "Top 3 cheapest competitors: A, C, E."}},
+			},
+		},
+	}
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fixedClock(now))
+
+	run := assistant.NewRun("What were the top 3 cheapest competitors from the previous run?", now, 1)
+	if err := engine.Start(context.Background(), run); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	record, err := repo.GetRunRecord(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("GetRunRecord() error = %v", err)
+	}
+	if record.Run.Status != assistant.RunStatusCompleted {
+		t.Fatalf("Run.Status = %q, want %q", record.Run.Status, assistant.RunStatusCompleted)
+	}
+	if record.Run.GateRoute != assistant.RunRouteAnswer {
+		t.Fatalf("GateRoute = %q, want %q", record.Run.GateRoute, assistant.RunRouteAnswer)
+	}
+	if len(record.Attempts) != 2 {
+		t.Fatalf("len(Attempts) = %d, want 2", len(record.Attempts))
+	}
+	if record.Attempts[0].Role != assistant.AttemptRoleGate || record.Attempts[1].Role != assistant.AttemptRoleAnswer {
+		t.Fatalf("attempt roles = %#v, want gate -> answer", []assistant.AttemptRole{record.Attempts[0].Role, record.Attempts[1].Role})
+	}
+	if len(record.Artifacts) == 0 || !strings.Contains(record.Artifacts[len(record.Artifacts)-1].Content, "Top 3 cheapest competitors") {
+		t.Fatalf("Artifacts = %#v, want persisted answer artifact", record.Artifacts)
+	}
+}
+
+func TestRunEnginePreservesWorkflowOrderAfterGate(t *testing.T) {
+	t.Parallel()
+
+	repo, dataDir := openEngineTestRepository(t)
+	now := time.Date(2026, time.March, 27, 17, 0, 0, 0, time.UTC)
+	runtime := &orderedRuntime{
+		steps: []orderedRuntimeStep{
+			{role: assistant.AttemptRoleGate, response: PhaseResponse{Summary: "Gate routed to workflow.", Output: gateJSON("workflow", "This request needs execution.")}},
+			{role: assistant.AttemptRoleProjectSelector, response: PhaseResponse{Summary: "Project selected.", Output: selectorJSON("workflow-check", "Workflow Check", "Validate workflow order.")}},
+			{role: assistant.AttemptRolePlanner, response: PhaseResponse{Summary: "Planner complete.", Output: plannerJSON("Validate workflow order", []string{"Validation report"})}},
+			{role: assistant.AttemptRoleContractor, response: PhaseResponse{Summary: "Contract agreed.", Output: contractJSON("agreed", []string{"Validation report"}, []string{"Workflow executes in order"}, "")}},
+			{role: assistant.AttemptRoleGenerator, response: PhaseResponse{Summary: "Generator produced output."}},
+			{role: assistant.AttemptRoleEvaluator, response: PhaseResponse{Summary: "Evaluator passed.", Output: evaluatorJSON(true, 95, "Workflow order is correct.", nil, "")}},
+		},
+	}
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fixedClock(now))
+
+	run := assistant.NewRun("Validate workflow ordering after gate.", now, 1)
+	if err := engine.Start(context.Background(), run); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	if runtime.index != len(runtime.steps) {
+		t.Fatalf("runtime calls = %d, want %d", runtime.index, len(runtime.steps))
+	}
+
+	record, err := repo.GetRunRecord(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("GetRunRecord() error = %v", err)
+	}
+	if record.Run.Status != assistant.RunStatusCompleted {
+		t.Fatalf("Run.Status = %q, want %q", record.Run.Status, assistant.RunStatusCompleted)
+	}
+	wantRoles := []assistant.AttemptRole{
+		assistant.AttemptRoleGate,
+		assistant.AttemptRoleProjectSelector,
+		assistant.AttemptRolePlanner,
+		assistant.AttemptRoleContractor,
+		assistant.AttemptRoleGenerator,
+		assistant.AttemptRoleEvaluator,
+	}
+	if len(record.Attempts) != len(wantRoles) {
+		t.Fatalf("len(Attempts) = %d, want %d", len(record.Attempts), len(wantRoles))
+	}
+	for idx, want := range wantRoles {
+		if got := record.Attempts[idx].Role; got != want {
+			t.Fatalf("Attempts[%d].Role = %q, want %q", idx, got, want)
+		}
 	}
 }
 
@@ -215,6 +322,33 @@ func (r *scriptedRuntime) Execute(_ context.Context, role assistant.AttemptRole,
 }
 
 func (r *scriptedRuntime) Close() error {
+	return nil
+}
+
+type orderedRuntime struct {
+	steps []orderedRuntimeStep
+	index int
+}
+
+type orderedRuntimeStep struct {
+	role     assistant.AttemptRole
+	response PhaseResponse
+	err      error
+}
+
+func (r *orderedRuntime) Execute(_ context.Context, role assistant.AttemptRole, _ PhaseRequest) (PhaseResponse, error) {
+	if r.index >= len(r.steps) {
+		return PhaseResponse{}, fmt.Errorf("unexpected runtime call for role %s", role)
+	}
+	step := r.steps[r.index]
+	r.index++
+	if step.role != role {
+		return PhaseResponse{}, fmt.Errorf("runtime role at step %d = %s, want %s", r.index-1, role, step.role)
+	}
+	return step.response, step.err
+}
+
+func (r *orderedRuntime) Close() error {
 	return nil
 }
 
@@ -275,6 +409,10 @@ func contractJSON(decision string, deliverables []string, acceptanceCriteria []s
 
 func selectorJSON(slug, name, description string) string {
 	return fmt.Sprintf(`{"project_slug":%q,"project_name":%q,"project_description":%q,"summary":"Selected project %s."}`, slug, name, description, slug)
+}
+
+func gateJSON(route, reason string) string {
+	return fmt.Sprintf(`{"route":%q,"reason":%q,"summary":"Gate routed to %s."}`, route, reason, route)
 }
 
 func evaluatorJSON(passed bool, score int, summary string, missing []string, nextAction string) string {

@@ -47,3 +47,21 @@ func TestEvaluationValidateRejectsInvalidScore(t *testing.T) {
 		t.Fatal("Validate() error = nil, want invalid score error")
 	}
 }
+
+func TestRunValidateRejectsInvalidGateMetadata(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 31, 9, 30, 0, 0, time.UTC)
+
+	run := NewRun("Answer a quick follow-up question using previous evidence.", now, 2)
+	run.GateRoute = RunRoute("invalid")
+	if err := run.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want invalid gate route error")
+	}
+
+	run = NewRun("Answer a quick follow-up question using previous evidence.", now, 2)
+	run.GateReason = "Should be answer-only."
+	if err := run.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want gate metadata requires route error")
+	}
+}

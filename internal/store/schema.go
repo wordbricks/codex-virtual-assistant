@@ -5,8 +5,12 @@ PRAGMA journal_mode = WAL;
 
 CREATE TABLE IF NOT EXISTS runs (
 	id TEXT PRIMARY KEY,
+	parent_run_id TEXT,
 	status TEXT NOT NULL,
 	phase TEXT NOT NULL,
+	gate_route TEXT NOT NULL DEFAULT '',
+	gate_reason TEXT NOT NULL DEFAULT '',
+	gate_decided_at TEXT,
 	project_json TEXT NOT NULL DEFAULT '{}',
 	user_request_raw TEXT NOT NULL,
 	task_spec_json TEXT NOT NULL,
