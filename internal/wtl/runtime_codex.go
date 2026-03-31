@@ -204,6 +204,12 @@ func phaseTools(run assistant.Run, role assistant.AttemptRole) []string {
 	if role == assistant.AttemptRoleProjectSelector {
 		return []string{"shell", "filesystem", "project-selection"}
 	}
+	if role == assistant.AttemptRoleGate {
+		return []string{"stored-parent-run", "stored-artifacts", "stored-evidence", "stored-evaluations"}
+	}
+	if role == assistant.AttemptRoleAnswer {
+		return []string{"stored-parent-run", "stored-artifacts", "stored-evidence", "stored-evaluations"}
+	}
 	if role == assistant.AttemptRoleContractor {
 		return []string{"stored-plan"}
 	}

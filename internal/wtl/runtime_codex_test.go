@@ -117,6 +117,39 @@ func TestCodexRuntimeCarriesResumeInputIntoPrompt(t *testing.T) {
 	}
 }
 
+func TestCodexRuntimeUsesReadOnlyContextToolsForGateAndAnswer(t *testing.T) {
+	t.Parallel()
+
+	executor := &fakeCodexExecutor{
+		result: CodexPhaseResult{Output: "{}", Summary: "ok"},
+	}
+	runtime := NewCodexRuntime(executor, "", time.Now)
+
+	_, err := runtime.Execute(context.Background(), assistant.AttemptRoleGate, PhaseRequest{
+		Run:     assistant.Run{ID: "run_gate"},
+		Attempt: assistant.Attempt{ID: "attempt_gate"},
+		Prompt:  prompting.Bundle{System: "gate system", User: "gate user"},
+	})
+	if err != nil {
+		t.Fatalf("Execute(gate) error = %v", err)
+	}
+	if len(executor.request.Tools) == 0 || executor.request.Tools[0] != "stored-parent-run" {
+		t.Fatalf("gate tools = %#v, want stored parent context tools", executor.request.Tools)
+	}
+
+	_, err = runtime.Execute(context.Background(), assistant.AttemptRoleAnswer, PhaseRequest{
+		Run:     assistant.Run{ID: "run_answer"},
+		Attempt: assistant.Attempt{ID: "attempt_answer"},
+		Prompt:  prompting.Bundle{System: "answer system", User: "answer user"},
+	})
+	if err != nil {
+		t.Fatalf("Execute(answer) error = %v", err)
+	}
+	if len(executor.request.Tools) == 0 || executor.request.Tools[0] != "stored-parent-run" {
+		t.Fatalf("answer tools = %#v, want stored parent context tools", executor.request.Tools)
+	}
+}
+
 type fakeCodexExecutor struct {
 	request CodexPhaseRequest
 	result  CodexPhaseResult

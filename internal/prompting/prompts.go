@@ -24,6 +24,19 @@ type ContractInput struct {
 	Run assistant.Run
 }
 
+type ParentRunContext struct {
+	RunID          string
+	UserRequestRaw string
+	Summary        string
+	Artifacts      []assistant.Artifact
+	Evidence       []assistant.Evidence
+}
+
+type GateInput struct {
+	Run           assistant.Run
+	ParentContext *ParentRunContext
+}
+
 type ProjectSelectorInput struct {
 	UserRequestRaw string
 }
@@ -40,10 +53,31 @@ type PlannerOutput struct {
 	MaxGenerationAttempts int      `json:"max_generation_attempts"`
 }
 
+type GateOutput struct {
+	Route   string `json:"route"`
+	Reason  string `json:"reason"`
+	Summary string `json:"summary"`
+}
+
 type GeneratorInput struct {
 	Run           assistant.Run
 	Attempt       assistant.Attempt
 	PriorCritique string
+}
+
+type AnswerInput struct {
+	Run           assistant.Run
+	ParentContext *ParentRunContext
+}
+
+type AnswerOutput struct {
+	Summary         string `json:"summary"`
+	Output          string `json:"output"`
+	NeedsUserInput  bool   `json:"needs_user_input"`
+	WaitKind        string `json:"wait_kind"`
+	WaitTitle       string `json:"wait_title"`
+	WaitPrompt      string `json:"wait_prompt"`
+	WaitRiskSummary string `json:"wait_risk_summary"`
 }
 
 type EvaluatorInput struct {
@@ -177,6 +211,55 @@ Use decision="fail" only when the task cannot be contracted safely from the avai
 	}
 }
 
+func BuildGatePrompt(input GateInput) Bundle {
+	builder := &strings.Builder{}
+	fmt.Fprintf(builder, "Original user request: %s\n", strings.TrimSpace(input.Run.UserRequestRaw))
+	appendParentContext(builder, input.ParentContext)
+	return Bundle{
+		System: strings.TrimSpace(`
+You are the gate phase for a WTL GAN-policy based assistant.
+Decide whether this run should go to:
+- route="answer" for a read-oriented response that can be completed from existing context and evidence, or
+- route="workflow" for full execution work (project selection + planning + contracting + generating + evaluating).
+Return one strict JSON object and nothing else.
+Do not wrap the JSON in markdown fences.
+The JSON object must contain exactly these keys:
+- route
+- reason
+- summary
+Use only "answer" or "workflow" for route.
+Choose "answer" only when no new side-effecting execution is required.`),
+		User: strings.TrimSpace(builder.String()),
+	}
+}
+
+func BuildAnswerPrompt(input AnswerInput) Bundle {
+	builder := &strings.Builder{}
+	fmt.Fprintf(builder, "Original user request: %s\n", strings.TrimSpace(input.Run.UserRequestRaw))
+	appendParentContext(builder, input.ParentContext)
+	if strings.TrimSpace(input.Run.TaskSpec.Goal) != "" {
+		fmt.Fprintf(builder, "Current run goal: %s\n", strings.TrimSpace(input.Run.TaskSpec.Goal))
+	}
+	return Bundle{
+		System: strings.TrimSpace(`
+You are the answer phase for a WTL GAN-policy based assistant.
+This phase is read-oriented: prioritize existing run context, stored artifacts, and stored evidence over fresh execution.
+Return one strict JSON object and nothing else.
+Do not wrap the JSON in markdown fences.
+The JSON object must contain exactly these keys:
+- summary
+- output
+- needs_user_input
+- wait_kind
+- wait_title
+- wait_prompt
+- wait_risk_summary
+When you can answer now, set needs_user_input=false and leave wait_* fields empty strings.
+When required information is missing, set needs_user_input=true and fill wait_* for a clarification or authentication request.`),
+		User: strings.TrimSpace(builder.String()),
+	}
+}
+
 func DecodeProjectSelectorOutput(raw []byte) (assistant.ProjectContext, string, error) {
 	var output ProjectSelectorOutput
 	if err := json.Unmarshal(raw, &output); err != nil {
@@ -191,6 +274,27 @@ func DecodeProjectSelectorOutput(raw []byte) (assistant.ProjectContext, string, 
 		return assistant.ProjectContext{}, "", fmt.Errorf("decode project selector output: missing required project fields")
 	}
 	return project, strings.TrimSpace(output.Summary), nil
+}
+
+func DecodeGateOutput(raw []byte) (assistant.RunRoute, string, string, error) {
+	var output GateOutput
+	if err := json.Unmarshal(raw, &output); err != nil {
+		return "", "", "", fmt.Errorf("decode gate output: %w", err)
+	}
+
+	route := assistant.RunRoute(strings.TrimSpace(output.Route))
+	switch route {
+	case assistant.RunRouteAnswer, assistant.RunRouteWorkflow:
+	default:
+		return "", "", "", fmt.Errorf("decode gate output: unsupported route %q", output.Route)
+	}
+
+	reason := strings.TrimSpace(output.Reason)
+	if reason == "" {
+		return "", "", "", fmt.Errorf("decode gate output: reason is required")
+	}
+	summary := strings.TrimSpace(firstNonEmpty(output.Summary, reason))
+	return route, reason, summary, nil
 }
 
 func DecodePlannerOutput(raw []byte, input PlannerInput) (assistant.TaskSpec, error) {
@@ -298,6 +402,30 @@ func DecodeEvaluatorOutput(raw []byte, runID, attemptID string, now time.Time) (
 	return evaluation, nil
 }
 
+func DecodeAnswerOutput(raw []byte) (AnswerOutput, error) {
+	var output AnswerOutput
+	if err := json.Unmarshal(raw, &output); err != nil {
+		return AnswerOutput{}, fmt.Errorf("decode answer output: %w", err)
+	}
+	output.Summary = strings.TrimSpace(output.Summary)
+	output.Output = strings.TrimSpace(output.Output)
+	output.WaitKind = strings.TrimSpace(output.WaitKind)
+	output.WaitTitle = strings.TrimSpace(output.WaitTitle)
+	output.WaitPrompt = strings.TrimSpace(output.WaitPrompt)
+	output.WaitRiskSummary = strings.TrimSpace(output.WaitRiskSummary)
+
+	if output.NeedsUserInput {
+		if output.WaitKind == "" || output.WaitPrompt == "" {
+			return AnswerOutput{}, fmt.Errorf("decode answer output: wait_kind and wait_prompt are required when needs_user_input is true")
+		}
+		return output, nil
+	}
+	if output.Output == "" {
+		return AnswerOutput{}, fmt.Errorf("decode answer output: output is required when needs_user_input is false")
+	}
+	return output, nil
+}
+
 func projectPlannerContext(project assistant.ProjectContext) string {
 	if strings.TrimSpace(project.Slug) == "" {
 		return "Project context:\n- No project selected yet."
@@ -336,4 +464,56 @@ func appendContractContext(builder *strings.Builder, spec assistant.TaskSpec) {
 	}
 	fmt.Fprintf(builder, "Done definition: %s\n", strings.Join(spec.DoneDefinition, "; "))
 	fmt.Fprintf(builder, "Evidence required: %s\n", strings.Join(spec.EvidenceRequired, "; "))
+}
+
+func appendParentContext(builder *strings.Builder, parent *ParentRunContext) {
+	if parent == nil || strings.TrimSpace(parent.RunID) == "" {
+		fmt.Fprintf(builder, "Parent run context: none.\n")
+		return
+	}
+
+	fmt.Fprintf(builder, "Parent run id: %s\n", strings.TrimSpace(parent.RunID))
+	if request := strings.TrimSpace(parent.UserRequestRaw); request != "" {
+		fmt.Fprintf(builder, "Parent user request: %s\n", request)
+	}
+	if summary := strings.TrimSpace(parent.Summary); summary != "" {
+		fmt.Fprintf(builder, "Parent summary: %s\n", summary)
+	}
+
+	if len(parent.Artifacts) == 0 {
+		fmt.Fprintf(builder, "Parent artifacts: none.\n")
+	} else {
+		fmt.Fprintf(builder, "Parent artifacts (most recent first, capped to 5):\n")
+		artifacts := parent.Artifacts
+		for idx := len(artifacts) - 1; idx >= 0 && idx >= len(artifacts)-5; idx-- {
+			artifact := artifacts[idx]
+			fmt.Fprintf(
+				builder,
+				"- [%s] %s (%s)%s\n",
+				artifact.Kind,
+				firstNonEmpty(artifact.Title, artifact.ID),
+				artifact.MIMEType,
+				formatOptionalSuffix(firstNonEmpty(artifact.SourceURL, artifact.Path)),
+			)
+		}
+	}
+
+	if len(parent.Evidence) == 0 {
+		fmt.Fprintf(builder, "Parent evidence: none.\n")
+		return
+	}
+	fmt.Fprintf(builder, "Parent evidence highlights (most recent first, capped to 8):\n")
+	evidence := parent.Evidence
+	for idx := len(evidence) - 1; idx >= 0 && idx >= len(evidence)-8; idx-- {
+		item := evidence[idx]
+		fmt.Fprintf(builder, "- [%s] %s\n", item.Kind, firstNonEmpty(item.Summary, item.Detail))
+	}
+}
+
+func formatOptionalSuffix(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	return " | " + value
 }

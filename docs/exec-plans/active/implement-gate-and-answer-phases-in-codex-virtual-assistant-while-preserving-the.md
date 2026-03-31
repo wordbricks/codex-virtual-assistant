@@ -9,7 +9,7 @@ The current system already has a persisted run/attempt/evidence/artifact model, 
 ## Milestones
 
 - [x] Milestone 1: Extend core data contracts and persistence for follow-up runs and gate/answer metadata.
-- [ ] Milestone 2: Add gate and answer prompt/runtime integration through the existing Codex app-server phase executor stack.
+- [x] Milestone 2: Add gate and answer prompt/runtime integration through the existing Codex app-server phase executor stack.
 - [ ] Milestone 3: Update the run engine/state machine to execute gate first, branch to answer or workflow, preserve post-gate workflow order, and keep waiting/resume behavior for in-progress runs.
 - [ ] Milestone 4: Add parent-run-based follow-up creation semantics in app/API layers so follow-ups always create a new run (never resume a completed run).
 - [ ] Milestone 5: Update UI run creation/follow-up flows and run detail rendering for gate-routed answer runs and parent-linked context.
@@ -24,6 +24,14 @@ The current system already has a persisted run/attempt/evidence/artifact model, 
   - Extended SQLite `runs` schema + repository read/write plumbing to persist and hydrate the new fields.
   - Added backward-compatible run-table migration logic that adds missing columns on existing databases.
   - Added store/assistant tests covering validation, round-trip persistence, and legacy schema migration.
+- Milestone 2 completed:
+  - Added gate prompt contract and decoder (`route`, `reason`, `summary`) in `internal/prompting`.
+  - Added answer prompt contract and decoder (`summary`, `output`, wait fields) in `internal/prompting`.
+  - Added explicit parent-run context prompt payload shape (`run_id`, request, summary, artifact/evidence highlights with caps) for gate/answer prompting.
+  - Extended Codex app-server phase schema wiring for new roles (`gate`, `answer`) in `phaseOutputSchema`.
+  - Extended app-server result parsing so answer-phase structured outputs produce persisted report artifacts and wait requests through the same runtime path as other phases.
+  - Added runtime tool-hint routing for gate/answer to read-oriented stored-context tool sets.
+  - Added role-to-phase mapping for gate/answer (`gating`, `answering`) and test coverage for prompts/runtime/schema mappings.
 
 ## Key decisions
 
@@ -32,11 +40,12 @@ The current system already has a persisted run/attempt/evidence/artifact model, 
 - Answer runs are read-oriented and may consume parent run context (artifacts/evidence/summary) without entering the full generation/evaluation workflow unless gate routes there.
 - Gate routing will be stored directly on `runs` (`gate_route`, `gate_reason`, `gate_decided_at`) for auditability and API/UI visibility without reconstructing from events.
 - `parent_run_id` remains nullable and migration-safe, with schema evolution handled in-repo via additive `ALTER TABLE` checks.
+- Gate output contract is fixed to strict JSON `{route, reason, summary}` with `route ∈ {"answer","workflow"}`.
+- Answer output contract is fixed to strict JSON `{summary, output, needs_user_input, wait_kind, wait_title, wait_prompt, wait_risk_summary}` to preserve wait/resume compatibility.
+- Parent context prompt payload now includes a bounded summary block: parent run id/request/summary plus most-recent artifacts (max 5) and evidence highlights (max 8).
 
 ## Remaining issues / open questions
 
-- Define the precise gate output contract that determines `answer` vs `workflow` routing and captures rationale for auditability.
-- Define the exact parent-run context payload shape/limits passed into gate and answer prompts.
 - Confirm UI wording and API request shape for creating follow-up runs from a completed run versus resuming waiting runs.
 
 ## Links to related documents
