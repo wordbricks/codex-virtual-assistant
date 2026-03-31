@@ -1,4 +1,4 @@
-# Codex Virtual Assistant
+# Codex Virtual Assistant (CVA) [/ˈsiːvə/]
 
 Codex Virtual Assistant is a WTL GAN-policy based web personal virtual assistant for browser-centric office work. The product source of truth is [PRD.md](/Users/dev/git/CodexVirtualAssistant/PRD.md); code under `specs/` remains reference material only.
 
