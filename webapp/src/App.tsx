@@ -373,7 +373,11 @@ export function App() {
       const text = getMessageText(message);
       if (!text) return;
 
-      setMessages([buildUserMessage(text, new Date())]);
+      const createdAt = new Date();
+      setMessages([
+        buildUserMessage(text, createdAt),
+        buildPendingAssistantMessage(createdAt),
+      ]);
       setIsRunning(true);
       setCurrentRecord(null);
       setLiveTelemetry(emptyLiveTelemetry());
@@ -877,7 +881,27 @@ function recordToMessages(record: RunRecord, liveTelemetry: LiveTelemetry): Thre
 }
 
 function buildUserMessage(text: string, createdAt: Date, id = "draft-user"): ThreadMessage {
-  return { id, role: "user", createdAt, content: [{ type: "text", text }], attachments: [], metadata: { custom: {} } };
+  return {
+    id,
+    role: "user",
+    createdAt,
+    content: [{ type: "text", text }],
+    attachments: [],
+    status: { type: "complete", reason: "stop" },
+    metadata: { custom: {} },
+  };
+}
+
+function buildPendingAssistantMessage(createdAt: Date, id = "draft-assistant"): ThreadMessage {
+  return buildAssistantPhaseMessage(
+    {
+      id,
+      createdAt: createdAt.toISOString(),
+      content: [{ type: "text", text: statusMessage.queued }],
+      agentRole: "gate",
+    },
+    { type: "running" },
+  );
 }
 
 function latestAssistantText(record: RunRecord): string {
