@@ -8,7 +8,7 @@ The current system already has a persisted run/attempt/evidence/artifact model, 
 
 ## Milestones
 
-- [ ] Milestone 1: Extend core data contracts and persistence for follow-up runs and gate/answer metadata.
+- [x] Milestone 1: Extend core data contracts and persistence for follow-up runs and gate/answer metadata.
 - [ ] Milestone 2: Add gate and answer prompt/runtime integration through the existing Codex app-server phase executor stack.
 - [ ] Milestone 3: Update the run engine/state machine to execute gate first, branch to answer or workflow, preserve post-gate workflow order, and keep waiting/resume behavior for in-progress runs.
 - [ ] Milestone 4: Add parent-run-based follow-up creation semantics in app/API layers so follow-ups always create a new run (never resume a completed run).
@@ -17,20 +17,27 @@ The current system already has a persisted run/attempt/evidence/artifact model, 
 
 ## Current progress
 
-- Not started
+- Milestone 1 completed:
+  - Added run-level follow-up linking metadata: `parent_run_id`.
+  - Added gate routing metadata on runs: `gate_route`, `gate_reason`, `gate_decided_at`.
+  - Added lifecycle contract enums for gate/answer states (`gating`, `answering`) and attempt roles (`gate`, `answer`) in shared assistant types.
+  - Extended SQLite `runs` schema + repository read/write plumbing to persist and hydrate the new fields.
+  - Added backward-compatible run-table migration logic that adds missing columns on existing databases.
+  - Added store/assistant tests covering validation, round-trip persistence, and legacy schema migration.
 
 ## Key decisions
 
 - Gate and answer phases must run via the same Codex app-server-backed phase executor/runtime used by existing workflow phases.
 - Follow-up questions for completed runs will always create a new run linked by `parent_run_id`.
 - Answer runs are read-oriented and may consume parent run context (artifacts/evidence/summary) without entering the full generation/evaluation workflow unless gate routes there.
+- Gate routing will be stored directly on `runs` (`gate_route`, `gate_reason`, `gate_decided_at`) for auditability and API/UI visibility without reconstructing from events.
+- `parent_run_id` remains nullable and migration-safe, with schema evolution handled in-repo via additive `ALTER TABLE` checks.
 
 ## Remaining issues / open questions
 
 - Define the precise gate output contract that determines `answer` vs `workflow` routing and captures rationale for auditability.
 - Define the exact parent-run context payload shape/limits passed into gate and answer prompts.
 - Confirm UI wording and API request shape for creating follow-up runs from a completed run versus resuming waiting runs.
-- Confirm migration/backfill behavior for existing runs when introducing new nullable fields (for example `parent_run_id` and route metadata).
 
 ## Links to related documents
 

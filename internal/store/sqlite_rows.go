@@ -11,8 +11,12 @@ import (
 
 type runRow struct {
 	ID                    string `json:"id"`
+	ParentRunID           string `json:"parent_run_id"`
 	Status                string `json:"status"`
 	Phase                 string `json:"phase"`
+	GateRoute             string `json:"gate_route"`
+	GateReason            string `json:"gate_reason"`
+	GateDecidedAt         string `json:"gate_decided_at"`
 	ProjectJSON           string `json:"project_json"`
 	UserRequestRaw        string `json:"user_request_raw"`
 	TaskSpecJSON          string `json:"task_spec_json"`
@@ -135,8 +139,11 @@ func (r runRow) toAssistantRun() (assistant.Run, error) {
 
 	run := assistant.Run{
 		ID:                    r.ID,
+		ParentRunID:           strings.TrimSpace(r.ParentRunID),
 		Status:                assistant.RunStatus(r.Status),
 		Phase:                 assistant.RunPhase(r.Phase),
+		GateRoute:             assistant.RunRoute(strings.TrimSpace(r.GateRoute)),
+		GateReason:            strings.TrimSpace(r.GateReason),
 		Project:               project,
 		UserRequestRaw:        r.UserRequestRaw,
 		TaskSpec:              taskSpec,
@@ -151,6 +158,13 @@ func (r runRow) toAssistantRun() (assistant.Run, error) {
 			return assistant.Run{}, err
 		}
 		run.CompletedAt = &completedAt
+	}
+	if strings.TrimSpace(r.GateDecidedAt) != "" {
+		gateDecidedAt, err := parseTime(r.GateDecidedAt)
+		if err != nil {
+			return assistant.Run{}, err
+		}
+		run.GateDecidedAt = &gateDecidedAt
 	}
 	return run, nil
 }

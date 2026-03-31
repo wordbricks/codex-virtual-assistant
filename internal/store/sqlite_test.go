@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,10 +21,15 @@ func TestSQLiteRepositoryRoundTripsRunRecord(t *testing.T) {
 	now := time.Date(2026, time.March, 27, 12, 0, 0, 0, time.UTC)
 	finishedAt := now.Add(2 * time.Minute)
 	completedAt := now.Add(10 * time.Minute)
+	gateDecidedAt := now.Add(15 * time.Second)
 
 	run := assistant.NewRun("Research five competitor pricing pages and summarize the findings.", now, 3)
+	run.ParentRunID = "run_parent_seed"
 	run.Status = assistant.RunStatusWaiting
 	run.Phase = assistant.RunPhaseWaiting
+	run.GateRoute = assistant.RunRouteWorkflow
+	run.GateReason = "Requires multi-step execution and fresh evidence gathering."
+	run.GateDecidedAt = &gateDecidedAt
 	run.UpdatedAt = now.Add(time.Minute)
 	run.CompletedAt = &completedAt
 	run.TaskSpec = assistant.NewDefaultTaskSpec(run.UserRequestRaw, 3)
@@ -154,6 +161,18 @@ func TestSQLiteRepositoryRoundTripsRunRecord(t *testing.T) {
 	if record.Run.ID != run.ID {
 		t.Fatalf("Run.ID = %q, want %q", record.Run.ID, run.ID)
 	}
+	if record.Run.ParentRunID != run.ParentRunID {
+		t.Fatalf("ParentRunID = %q, want %q", record.Run.ParentRunID, run.ParentRunID)
+	}
+	if record.Run.GateRoute != run.GateRoute {
+		t.Fatalf("GateRoute = %q, want %q", record.Run.GateRoute, run.GateRoute)
+	}
+	if record.Run.GateReason != run.GateReason {
+		t.Fatalf("GateReason = %q, want %q", record.Run.GateReason, run.GateReason)
+	}
+	if record.Run.GateDecidedAt == nil || !record.Run.GateDecidedAt.Equal(gateDecidedAt) {
+		t.Fatalf("GateDecidedAt = %#v, want %s", record.Run.GateDecidedAt, gateDecidedAt.Format(time.RFC3339Nano))
+	}
 	if record.Run.TaskSpec.Goal == "" {
 		t.Fatal("TaskSpec.Goal is empty after hydration")
 	}
@@ -178,6 +197,53 @@ func TestSQLiteRepositoryGetRunReturnsNotFound(t *testing.T) {
 	_, err := repo.GetRun(context.Background(), "missing")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetRun() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestSQLiteRepositoryMigratesLegacyRunsTableForGateAndFollowupFields(t *testing.T) {
+	t.Parallel()
+
+	sqlitePath, err := exec.LookPath("sqlite3")
+	if err != nil {
+		t.Fatalf("find sqlite3: %v", err)
+	}
+
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "legacy.db")
+	legacySchema := `
+CREATE TABLE runs (
+	id TEXT PRIMARY KEY,
+	status TEXT NOT NULL,
+	phase TEXT NOT NULL,
+	user_request_raw TEXT NOT NULL,
+	task_spec_json TEXT NOT NULL,
+	attempt_count INTEGER NOT NULL DEFAULT 0,
+	max_generation_attempts INTEGER NOT NULL,
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	completed_at TEXT
+);
+`
+	cmd := exec.Command(sqlitePath, "-batch", dbPath)
+	cmd.Stdin = strings.NewReader(legacySchema)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("create legacy schema: %v: %s", err, string(output))
+	}
+
+	repo, err := OpenSQLitePath(dbPath)
+	if err != nil {
+		t.Fatalf("OpenSQLitePath() migration error = %v", err)
+	}
+
+	ctx := context.Background()
+	for _, column := range []string{"project_json", "parent_run_id", "gate_route", "gate_reason", "gate_decided_at"} {
+		exists, err := repo.tableColumnExists(ctx, "runs", column)
+		if err != nil {
+			t.Fatalf("tableColumnExists(%s) error = %v", column, err)
+		}
+		if !exists {
+			t.Fatalf("column %s missing after migration", column)
+		}
 	}
 }
 
