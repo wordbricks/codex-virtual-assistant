@@ -45,6 +45,8 @@ import { useEffect, useMemo, useState, type ComponentType } from "react";
 
 type ThreadPhaseStatus =
   | "queued"
+  | "gating"
+  | "answering"
   | "selecting_project"
   | "planning"
   | "contracting"
@@ -59,6 +61,8 @@ type ThreadPhaseStatus =
 
 type ThreadPhaseEvent =
   | "queued"
+  | "gating"
+  | "answering"
   | "selecting_project"
   | "planning"
   | "contracting"
@@ -67,19 +71,30 @@ type ThreadPhaseEvent =
   | "waiting"
   | "completed"
   | "failed"
+  | "exhausted"
   | "cancelled";
 
-const GAN_PHASES = [
-  { key: "goal", label: "Goal" },
-  { key: "project", label: "Project" },
-  { key: "planner", label: "Planner" },
-  { key: "contract", label: "Contract" },
-  { key: "generator", label: "Generator" },
-  { key: "evaluator", label: "Evaluator" },
-  { key: "complete", label: "Complete" },
+const WORKFLOW_PHASES = [
+  { key: "queued", label: "Queued" },
+  { key: "gating", label: "Gate" },
+  { key: "selecting_project", label: "Project" },
+  { key: "planning", label: "Planner" },
+  { key: "contracting", label: "Contract" },
+  { key: "generating", label: "Generator" },
+  { key: "evaluating", label: "Evaluator" },
+  { key: "completed", label: "Complete" },
 ] as const;
 
-type AssistantAgentRole = "planner" | "contractor" | "generator" | "evaluator";
+const ANSWER_PHASES = [
+  { key: "queued", label: "Queued" },
+  { key: "gating", label: "Gate" },
+  { key: "answering", label: "Answer" },
+  { key: "completed", label: "Complete" },
+] as const;
+
+type PhaseTrack = "workflow" | "answer";
+
+type AssistantAgentRole = "gate" | "answer" | "project_selector" | "planner" | "contractor" | "generator" | "evaluator";
 
 export function Thread({
   phaseStatus = null,
@@ -168,8 +183,10 @@ function GANPolicyDiagram({
   generatorAttempts: number;
   maxGenerationAttempts: number;
 }) {
-  const displayPhase = resolveDisplayPhase(phaseStatus, phaseEvents);
-  const activeIndex = phaseStatusToIndex(displayPhase);
+  const track = resolvePhaseTrack(phaseStatus, phaseEvents);
+  const phases = track === "answer" ? ANSWER_PHASES : WORKFLOW_PHASES;
+  const displayPhase = resolveDisplayPhase(phaseStatus, phaseEvents, track);
+  const activeIndex = phaseStatusToIndex(displayPhase, phases);
   const isFailure = phaseStatus === "failed" || phaseStatus === "cancelled" || phaseStatus === "exhausted";
 
   return (
@@ -181,7 +198,7 @@ function GANPolicyDiagram({
               "rounded-full px-2.5 py-1 text-[11px] font-medium",
               isFailure
                 ? "bg-destructive/10 text-destructive"
-                : activeIndex === GAN_PHASES.length - 1
+                : activeIndex === phases.length - 1
                   ? "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300"
                   : "bg-[color:var(--accent-color)]/12 text-[color:var(--accent-color)]",
             )}
@@ -196,9 +213,9 @@ function GANPolicyDiagram({
 
       <div
         className="grid items-start gap-2 sm:gap-3"
-        style={{ gridTemplateColumns: `repeat(${GAN_PHASES.length}, minmax(0, 1fr))` }}
+        style={{ gridTemplateColumns: `repeat(${phases.length}, minmax(0, 1fr))` }}
       >
-        {GAN_PHASES.map((phase, index) => {
+        {phases.map((phase, index) => {
           const state = phaseVisualState(index, activeIndex, isFailure);
 
           return (
@@ -223,11 +240,11 @@ function GANPolicyDiagram({
                     <span className="absolute inset-0 rounded-full border border-[color:var(--accent-color)]/50 animate-ping" />
                   )}
                 </div>
-                {index < GAN_PHASES.length - 1 && (
+                {index < phases.length - 1 && (
                   <div
                     className={cn(
                       "h-px flex-1 transition-colors",
-                      index < activeIndex ? (isFailure && activeIndex === GAN_PHASES.length - 1 ? "bg-destructive/35" : "bg-[color:var(--accent-color)]/35") : "bg-border/70",
+                      index < activeIndex ? (isFailure && activeIndex === phases.length - 1 ? "bg-destructive/35" : "bg-[color:var(--accent-color)]/35") : "bg-border/70",
                     )}
                   />
                 )}
@@ -408,7 +425,7 @@ function AssistantMessage({
   const rawAgentRole = useAuiState((s) => {
     const custom = (s.message.metadata?.custom ?? {}) as Record<string, unknown>;
     const role = custom.agentRole;
-    return role === "planner" || role === "contractor" || role === "evaluator" || role === "generator" ? role : "generator";
+    return role === "gate" || role === "answer" || role === "project_selector" || role === "planner" || role === "contractor" || role === "evaluator" || role === "generator" ? role : "generator";
   });
   const rawAgentName = useAuiState((s) => {
     const custom = (s.message.metadata?.custom ?? {}) as Record<string, unknown>;
@@ -585,6 +602,12 @@ function WaitingPrompt({
 
 function agentIcon(role: AssistantAgentRole): ComponentType<{ className?: string }> {
   switch (role) {
+    case "gate":
+      return ClipboardListIcon;
+    case "answer":
+      return WandSparklesIcon;
+    case "project_selector":
+      return ClipboardListIcon;
     case "planner":
       return ClipboardListIcon;
     case "contractor":
@@ -598,6 +621,12 @@ function agentIcon(role: AssistantAgentRole): ComponentType<{ className?: string
 
 function defaultAgentName(role: AssistantAgentRole) {
   switch (role) {
+    case "gate":
+      return "Gate";
+    case "answer":
+      return "Answer";
+    case "project_selector":
+      return "Project";
     case "planner":
       return "Planner";
     case "contractor":
@@ -707,46 +736,50 @@ function humanize(s: string) {
   return s.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function phaseStatusToIndex(status: ThreadPhaseStatus) {
-  switch (status) {
-    case "selecting_project":
-      return 1;
-    case "planning":
-      return 2;
-    case "contracting":
-      return 3;
-    case "generating":
-      return 4;
-    case "evaluating":
-      return 5;
-    case "completed":
-    case "failed":
-    case "exhausted":
-    case "cancelled":
-      return 6;
-    case "queued":
-    default:
-      return 0;
+function phaseStatusToIndex(
+  status: ThreadPhaseStatus,
+  phases: ReadonlyArray<{ key: string; label: string }>,
+) {
+  if (status === "completed" || status === "failed" || status === "exhausted" || status === "cancelled") {
+    return phases.length - 1;
   }
+  const index = phases.findIndex((phase) => phase.key === status);
+  return index >= 0 ? index : 0;
 }
 
-function resolveDisplayPhase(status: ThreadPhaseStatus, events: ThreadPhaseEvent[]): ThreadPhaseStatus {
+function resolvePhaseTrack(status: ThreadPhaseStatus, events: ThreadPhaseEvent[]): PhaseTrack {
+  if (status === "answering") return "answer";
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index] === "answering") return "answer";
+  }
+  return "workflow";
+}
+
+function resolveDisplayPhase(status: ThreadPhaseStatus, events: ThreadPhaseEvent[], track: PhaseTrack): ThreadPhaseStatus {
   if (status !== "waiting") return status;
+
+  const candidates: ThreadPhaseEvent[] = track === "answer"
+    ? ["answering", "gating", "queued"]
+    : ["evaluating", "generating", "contracting", "planning", "selecting_project", "gating", "queued"];
 
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const phase = events[index];
-    if (phase === "selecting_project" || phase === "planning" || phase === "contracting" || phase === "generating" || phase === "evaluating") {
+    if (candidates.includes(phase)) {
       return phase;
     }
   }
 
-  return "generating";
+  return track === "answer" ? "answering" : "generating";
 }
 
 function phaseStatusPill(status: ThreadPhaseStatus) {
   switch (status) {
     case "queued":
       return "Queued";
+    case "gating":
+      return "Gating";
+    case "answering":
+      return "Answering";
     case "selecting_project":
       return "Selecting Project";
     case "planning":

@@ -19,6 +19,8 @@ type BootstrapResponse = {
 
 type RunStatus =
   | "queued"
+  | "gating"
+  | "answering"
   | "selecting_project"
   | "planning"
   | "contracting"
@@ -33,8 +35,12 @@ type RunStatus =
 type RunRecord = {
   run: {
     id: string;
+    parent_run_id?: string;
     status: RunStatus;
     phase: RunStatus;
+    gate_route?: "answer" | "workflow" | "";
+    gate_reason?: string;
+    gate_decided_at?: string | null;
     project: {
       slug: string;
       name: string;
@@ -59,7 +65,7 @@ type RunRecord = {
   events: Array<{ id?: string; type: string; phase: string; summary: string; created_at: string; data?: Record<string, unknown> }>;
   attempts: Array<{
     id: string;
-    role: "planner" | "contractor" | "generator" | "evaluator";
+    role: "gate" | "answer" | "project_selector" | "planner" | "contractor" | "generator" | "evaluator";
     input_summary: string;
     output_summary: string;
     critique?: string;
@@ -125,7 +131,7 @@ type LiveRunEvent = {
 type LiveReasoningPart = {
   id: string;
   attemptId: string;
-  role: "planner" | "contractor" | "generator" | "evaluator";
+  role: "gate" | "answer" | "project_selector" | "planner" | "contractor" | "generator" | "evaluator";
   text: string;
   updatedAt: string;
 };
@@ -133,7 +139,7 @@ type LiveReasoningPart = {
 type LiveToolPart = {
   id: string;
   attemptId: string;
-  role: "planner" | "contractor" | "generator" | "evaluator";
+  role: "gate" | "answer" | "project_selector" | "planner" | "contractor" | "generator" | "evaluator";
   toolName: string;
   argsText?: string;
   result?: string;
@@ -146,7 +152,7 @@ type LiveTelemetry = {
   tools: Record<string, LiveToolPart>;
 };
 
-type AgentRole = "planner" | "contractor" | "generator" | "evaluator";
+type AgentRole = "gate" | "answer" | "project_selector" | "planner" | "contractor" | "generator" | "evaluator";
 
 type HistoryEntry = {
   id: string;
@@ -161,6 +167,8 @@ const TERMINAL_STATUSES: RunStatus[] = ["completed", "failed", "exhausted", "can
 
 const statusLabel: Record<RunStatus, string> = {
   queued: "Queued",
+  gating: "Gating",
+  answering: "Answering",
   selecting_project: "Selecting Project",
   planning: "Planning",
   contracting: "Contracting",
@@ -175,6 +183,8 @@ const statusLabel: Record<RunStatus, string> = {
 
 const statusMessage: Record<RunStatus, string> = {
   queued: "Task accepted, starting soon…",
+  gating: "Deciding whether this run should answer directly or execute workflow…",
+  answering: "Preparing a read-oriented answer from available context…",
   selecting_project: "Choosing the right project workspace…",
   planning: "Turning your request into a plan…",
   contracting: "Locking the acceptance contract before work starts…",
@@ -368,9 +378,21 @@ export function App() {
       setCurrentRecord(null);
       setLiveTelemetry(emptyLiveTelemetry());
 
+      const parentRunId =
+        currentRecord && isFollowUpSourceStatus(currentRecord.run.status)
+          ? currentRecord.run.id
+          : "";
+
       const created = await fetchJSON<{ run: { id: string; status: RunStatus; updated_at: string } }>(
         bootstrap.runs_path,
-        { method: "POST", body: JSON.stringify({ user_request_raw: text, max_generation_attempts: attempts }) },
+        {
+          method: "POST",
+          body: JSON.stringify({
+            user_request_raw: text,
+            max_generation_attempts: attempts,
+            ...(parentRunId ? { parent_run_id: parentRunId } : {}),
+          }),
+        },
       );
 
       rememberRun({ id: created.run.id, title: truncate(text, 48), status: created.run.status, updatedAt: created.run.updated_at });
@@ -379,7 +401,7 @@ export function App() {
       updateHash(created.run.id);
       await loadRun(created.run.id);
     },
-    [attempts, bootstrap, loadRun, rememberRun],
+    [attempts, bootstrap, currentRecord, loadRun, rememberRun],
   );
 
   const onCancel = useCallback(async () => {
@@ -525,7 +547,7 @@ export function App() {
                 <div className="thread-shell">
                   <Thread
                     phaseStatus={status}
-                    phaseEvents={currentRecord?.events.map((event) => event.phase as "queued" | "selecting_project" | "planning" | "contracting" | "generating" | "evaluating" | "waiting" | "completed" | "failed" | "cancelled") ?? []}
+                    phaseEvents={currentRecord?.events.map((event) => event.phase as RunStatus) ?? []}
                     generatorAttempts={currentRecord?.attempts.filter((attempt) => attempt.role === "generator").length ?? 0}
                     maxGenerationAttempts={currentRecord?.run.max_generation_attempts ?? 0}
                     waitingFor={currentRecord?.run.waiting_for ?? null}
@@ -541,6 +563,10 @@ export function App() {
                   record={currentRecord}
                   isOpen={isReportOpen}
                   onToggle={() => setIsReportOpen((open) => !open)}
+                  onOpenRun={(runID) => {
+                    setSelectedRunId(runID);
+                    updateHash(runID);
+                  }}
                 />
               )}
             </div>
@@ -555,10 +581,12 @@ function SupervisorReport({
   record,
   isOpen,
   onToggle,
+  onOpenRun,
 }: {
   record: RunRecord;
   isOpen: boolean;
   onToggle: () => void;
+  onOpenRun?: (runID: string) => void;
 }) {
   const videoArtifact = record.artifacts.find((artifact) => artifact.mime_type.startsWith("video/") && artifact.url);
   const screenshots = record.artifacts.filter((artifact) => artifact.mime_type.startsWith("image/") && artifact.url);
@@ -630,6 +658,30 @@ function SupervisorReport({
             <div>
               <h3 className="report-title">{record.run.task_spec.goal || record.run.user_request_raw}</h3>
               <p className="report-summary">{latestAssistantText(record)}</p>
+              <div className="report-summary-meta">
+                {record.run.gate_route && (
+                  <span>
+                    Route: {record.run.gate_route === "answer" ? "Answer" : "Workflow"}
+                  </span>
+                )}
+                {record.run.gate_reason && <span>Gate: {record.run.gate_reason}</span>}
+                {record.run.parent_run_id && (
+                  <span>
+                    Follow-up from{" "}
+                    {onOpenRun ? (
+                      <button
+                        type="button"
+                        className="report-inline-link"
+                        onClick={() => onOpenRun(record.run.parent_run_id!)}
+                      >
+                        {record.run.parent_run_id}
+                      </button>
+                    ) : (
+                      record.run.parent_run_id
+                    )}
+                  </span>
+                )}
+              </div>
             </div>
             <div className="report-meta">
               <span className={`report-outcome is-${record.run.status}`}>{outcome}</span>
@@ -1038,7 +1090,14 @@ function liveAttemptRole(liveTelemetry: LiveTelemetry, attemptId: string): Agent
 
 function runStatusToMessageStatus(status: RunStatus): ThreadMessage["status"] {
   switch (status) {
-    case "queued": case "selecting_project": case "planning": case "contracting": case "generating": case "evaluating":
+    case "queued":
+    case "gating":
+    case "answering":
+    case "selecting_project":
+    case "planning":
+    case "contracting":
+    case "generating":
+    case "evaluating":
       return { type: "running" };
     case "waiting":
       return { type: "requires-action", reason: "interrupt" };
@@ -1078,8 +1137,13 @@ function latestPhaseSummary(record: RunRecord): string {
 
 function attemptRoleForPhase(phase: RunStatus): AgentRole {
   switch (phase) {
+    case "queued":
+    case "gating":
+      return "gate";
+    case "answering":
+      return "answer";
     case "selecting_project":
-      return "planner";
+      return "project_selector";
     case "planning":
       return "planner";
     case "contracting":
@@ -1093,6 +1157,12 @@ function attemptRoleForPhase(phase: RunStatus): AgentRole {
 
 function agentName(role: AgentRole) {
   switch (role) {
+    case "gate":
+      return "Gate";
+    case "answer":
+      return "Answer";
+    case "project_selector":
+      return "Project";
     case "planner":
       return "Planner";
     case "contractor":
@@ -1173,6 +1243,10 @@ function isActiveStatus(s: RunStatus) {
   return !["waiting", "completed", "failed", "exhausted", "cancelled"].includes(s);
 }
 
+function isFollowUpSourceStatus(s: RunStatus) {
+  return s === "completed";
+}
+
 function getMessageText(msg: AppendMessage) {
   return msg.content.filter((p) => p.type === "text").map((p) => p.text).join("\n").trim();
 }
@@ -1200,8 +1274,11 @@ function isMeaningfulReasoningText(value: string) {
   }
 }
 
-function roleField(source: Record<string, unknown>, key: string): "planner" | "contractor" | "generator" | "evaluator" {
+function roleField(source: Record<string, unknown>, key: string): AgentRole {
   const value = stringField(source, key);
+  if (value === "gate") return value;
+  if (value === "answer") return value;
+  if (value === "project_selector") return value;
   if (value === "contractor") return value;
   if (value === "planner" || value === "evaluator") return value;
   return "generator";

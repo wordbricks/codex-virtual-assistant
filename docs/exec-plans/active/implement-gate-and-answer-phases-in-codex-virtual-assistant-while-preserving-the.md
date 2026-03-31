@@ -12,7 +12,7 @@ The current system already has a persisted run/attempt/evidence/artifact model, 
 - [x] Milestone 2: Add gate and answer prompt/runtime integration through the existing Codex app-server phase executor stack.
 - [x] Milestone 3: Update the run engine/state machine to execute gate first, branch to answer or workflow, preserve post-gate workflow order, and keep waiting/resume behavior for in-progress runs.
 - [x] Milestone 4: Add parent-run-based follow-up creation semantics in app/API layers so follow-ups always create a new run (never resume a completed run).
-- [ ] Milestone 5: Update UI run creation/follow-up flows and run detail rendering for gate-routed answer runs and parent-linked context.
+- [x] Milestone 5: Update UI run creation/follow-up flows and run detail rendering for gate-routed answer runs and parent-linked context.
 - [ ] Milestone 6: Add and pass tests for gate routing, answer-run lifecycle, parent_run_id follow-up creation, and waiting/resume regression coverage.
 
 ## Current progress
@@ -54,6 +54,19 @@ The current system already has a persisted run/attempt/evidence/artifact model, 
     - creating a follow-up run linked to a completed parent (`parent_run_id` round-trip),
     - rejecting follow-up creation when parent does not exist,
     - rejecting `/input` on completed runs with explicit follow-up guidance.
+- Milestone 5 completed:
+  - Updated webapp run/status model types to include new gate/answer lifecycle states (`gating`, `answering`), run gate metadata (`gate_route`, `gate_reason`, `gate_decided_at`), parent linkage (`parent_run_id`), and new attempt roles (`gate`, `answer`, `project_selector`).
+  - Updated new-message flow in UI to create follow-up runs with `parent_run_id` when the current run is completed, instead of attempting resume semantics.
+  - Updated assistant phase timeline UI to support gate-first routing and answer-route rendering with dynamic phase tracks:
+    - workflow track: `queued -> gating -> selecting_project -> planning -> contracting -> generating -> evaluating -> complete`
+    - answer track: `queued -> gating -> answering -> complete`
+  - Updated assistant role rendering in thread messages to recognize and label `gate`, `answer`, and `project_selector` attempts/live telemetry.
+  - Updated run detail/supervisor report rendering to show parent-linked and gate-routed context:
+    - gate route label (`Answer` vs `Workflow`)
+    - gate rationale
+    - follow-up parent run id with inline navigation action.
+  - Updated status-pill styling for new gate/answer statuses and added report metadata/link styles.
+  - Validation note: attempted `npm --prefix webapp run build`, but local toolchain lacked `vite` in this sandbox; no frontend build artifact validation could be executed in this iteration.
 
 ## Key decisions
 
@@ -69,10 +82,11 @@ The current system already has a persisted run/attempt/evidence/artifact model, 
 - Answer runs are terminal after a successful answer phase (unless answer requests wait), and do not enter planning/contracting/generating/evaluating.
 - Follow-up creation API shape is now `POST /api/v1/runs` with optional `parent_run_id`; follow-ups are new runs, not resumes.
 - Resume/input endpoints remain dedicated to `waiting` runs only and intentionally reject completed runs.
+- UI now emits `parent_run_id` only for follow-up submits from completed runs, preserving waiting-run resume interactions through the existing waiting card controls.
 
 ## Remaining issues / open questions
 
-- Confirm UI wording for when the operator sends a follow-up from a completed run versus resuming a waiting run.
+- No major product-design blockers remain; final milestone is test completion and regression coverage confirmation across gate/answer/follow-up flows.
 
 ## Links to related documents
 
