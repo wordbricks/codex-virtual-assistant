@@ -28,6 +28,7 @@ type BootstrapResponse struct {
 	RunStatuses                  []assistant.RunStatus `json:"run_statuses"`
 	RunPhases                    []assistant.RunPhase  `json:"run_phases"`
 	APIBasePath                  string                `json:"api_base_path"`
+	ChatsPath                    string                `json:"chats_path"`
 	RunsPath                     string                `json:"runs_path"`
 }
 
@@ -50,6 +51,7 @@ type runActionRequest struct {
 
 type createRunResponse struct {
 	Run       assistant.Run `json:"run"`
+	ChatURL   string        `json:"chat_url"`
 	StatusURL string        `json:"status_url"`
 	EventsURL string        `json:"events_url"`
 }
@@ -70,6 +72,8 @@ func NewHandler(cfg config.Config, runs *assistantapp.RunService, events *EventB
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", api.handleHealth)
 	mux.HandleFunc("/api/v1/bootstrap", api.handleBootstrap)
+	mux.HandleFunc("/api/v1/chats", api.handleChats)
+	mux.HandleFunc("/api/v1/chats/", api.handleChatByID)
 	mux.HandleFunc("/api/v1/runs", api.handleRuns)
 	mux.HandleFunc("/api/v1/runs/", api.handleRunByID)
 	mux.Handle("/artifacts/", http.StripPrefix("/artifacts/", http.FileServer(http.Dir(cfg.ArtifactDir))))
@@ -91,8 +95,45 @@ func (a *RunAPI) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		RunStatuses:                  assistant.AllRunStatuses(),
 		RunPhases:                    assistant.AllRunPhases(),
 		APIBasePath:                  "/api/v1",
+		ChatsPath:                    "/api/v1/chats",
 		RunsPath:                     "/api/v1/runs",
 	})
+}
+
+func (a *RunAPI) handleChats(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		chats, err := a.runs.ListChats(r.Context())
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"chats": chats})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *RunAPI) handleChatByID(w http.ResponseWriter, r *http.Request) {
+	chatID, ok := parseChatPath(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		record, err := a.runs.GetChatRecord(r.Context(), chatID)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		for idx := range record.Runs {
+			a.enrichArtifactURLs(&record.Runs[idx])
+		}
+		writeJSON(w, http.StatusOK, record)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (a *RunAPI) handleRuns(w http.ResponseWriter, r *http.Request) {
@@ -116,6 +157,7 @@ func (a *RunAPI) handleRuns(w http.ResponseWriter, r *http.Request) {
 
 		writeJSON(w, http.StatusAccepted, createRunResponse{
 			Run:       run,
+			ChatURL:   fmt.Sprintf("/api/v1/chats/%s", run.ChatID),
 			StatusURL: fmt.Sprintf("/api/v1/runs/%s", run.ID),
 			EventsURL: fmt.Sprintf("/api/v1/runs/%s/events", run.ID),
 		})
@@ -298,6 +340,18 @@ func parseRunPath(path string) (runID, action string, ok bool) {
 		action = parts[1]
 	}
 	return runID, action, true
+}
+
+func parseChatPath(path string) (chatID string, ok bool) {
+	const prefix = "/api/v1/chats/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", false
+	}
+	chatID = strings.Trim(strings.TrimPrefix(path, prefix), "/")
+	if chatID == "" || strings.Contains(chatID, "/") {
+		return "", false
+	}
+	return chatID, true
 }
 
 func decodeJSONBody(body io.ReadCloser, target any) error {

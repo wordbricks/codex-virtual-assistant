@@ -104,6 +104,9 @@ func TestRunsAPICreateFollowUpRunWithParentRunID(t *testing.T) {
 	if followUp.Run.ParentRunID != initial.Run.ID {
 		t.Fatalf("follow-up parent_run_id = %q, want %q", followUp.Run.ParentRunID, initial.Run.ID)
 	}
+	if followUp.Run.ChatID != initial.Run.ChatID {
+		t.Fatalf("follow-up chat_id = %q, want %q", followUp.Run.ChatID, initial.Run.ChatID)
+	}
 
 	record := waitForRunStatus(t, handler, followUp.Run.ID, assistant.RunStatusCompleted)
 	if record.Run.ParentRunID != initial.Run.ID {
@@ -111,6 +114,18 @@ func TestRunsAPICreateFollowUpRunWithParentRunID(t *testing.T) {
 	}
 	if record.Run.GateRoute != assistant.RunRouteAnswer {
 		t.Fatalf("GateRoute = %q, want %q", record.Run.GateRoute, assistant.RunRouteAnswer)
+	}
+
+	chatResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/chats/"+initial.Run.ChatID, nil)
+	if chatResponse.Code != http.StatusOK {
+		t.Fatalf("GET /chats/:id status = %d, want %d", chatResponse.Code, http.StatusOK)
+	}
+	var chatRecord store.ChatRecord
+	if err := json.Unmarshal(chatResponse.Body.Bytes(), &chatRecord); err != nil {
+		t.Fatalf("decode chat response: %v", err)
+	}
+	if len(chatRecord.Runs) != 2 {
+		t.Fatalf("len(chatRecord.Runs) = %d, want 2", len(chatRecord.Runs))
 	}
 }
 
@@ -158,6 +173,43 @@ func TestRunsAPIRejectsInputOnCompletedRunAndSuggestsFollowUp(t *testing.T) {
 	}
 	if !strings.Contains(inputResponse.Body.String(), "parent_run_id") {
 		t.Fatalf("response body = %q, want parent_run_id guidance", inputResponse.Body.String())
+	}
+}
+
+func TestRunsAPIListsChats(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestAPIHandler(t, &sequenceExecutor{
+		steps: []executorStep{
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("answer", "Simple request can be answered directly.")},
+			{role: assistant.AttemptRoleAnswer, result: answerPhaseResult("Answered directly.", "Here is the direct answer.")},
+		},
+	})
+
+	createResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "Quick question",
+	})
+	var created createRunResponse
+	if err := json.Unmarshal(createResponse.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	waitForRunStatus(t, handler, created.Run.ID, assistant.RunStatusCompleted)
+
+	listResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/chats", nil)
+	if listResponse.Code != http.StatusOK {
+		t.Fatalf("GET /chats status = %d, want %d", listResponse.Code, http.StatusOK)
+	}
+	var payload struct {
+		Chats []assistant.Chat `json:"chats"`
+	}
+	if err := json.Unmarshal(listResponse.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode chats response: %v", err)
+	}
+	if len(payload.Chats) != 1 {
+		t.Fatalf("len(payload.Chats) = %d, want 1", len(payload.Chats))
+	}
+	if payload.Chats[0].ID != created.Run.ChatID {
+		t.Fatalf("chat ID = %q, want %q", payload.Chats[0].ID, created.Run.ChatID)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 
 type runRow struct {
 	ID                    string `json:"id"`
+	ChatID                string `json:"chat_id"`
 	ParentRunID           string `json:"parent_run_id"`
 	Status                string `json:"status"`
 	Phase                 string `json:"phase"`
@@ -139,6 +140,7 @@ func (r runRow) toAssistantRun() (assistant.Run, error) {
 
 	run := assistant.Run{
 		ID:                    r.ID,
+		ChatID:                strings.TrimSpace(r.ChatID),
 		ParentRunID:           strings.TrimSpace(r.ParentRunID),
 		Status:                assistant.RunStatus(r.Status),
 		Phase:                 assistant.RunPhase(r.Phase),
@@ -151,6 +153,9 @@ func (r runRow) toAssistantRun() (assistant.Run, error) {
 		MaxGenerationAttempts: r.MaxGenerationAttempts,
 		CreatedAt:             createdAt,
 		UpdatedAt:             updatedAt,
+	}
+	if run.ChatID == "" {
+		run.ChatID = run.ID
 	}
 	if strings.TrimSpace(r.CompletedAt) != "" {
 		completedAt, err := parseTime(r.CompletedAt)

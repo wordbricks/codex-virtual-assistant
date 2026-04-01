@@ -161,6 +161,9 @@ func TestSQLiteRepositoryRoundTripsRunRecord(t *testing.T) {
 	if record.Run.ID != run.ID {
 		t.Fatalf("Run.ID = %q, want %q", record.Run.ID, run.ID)
 	}
+	if record.Run.ChatID != run.ChatID {
+		t.Fatalf("ChatID = %q, want %q", record.Run.ChatID, run.ChatID)
+	}
 	if record.Run.ParentRunID != run.ParentRunID {
 		t.Fatalf("ParentRunID = %q, want %q", record.Run.ParentRunID, run.ParentRunID)
 	}
@@ -236,7 +239,7 @@ CREATE TABLE runs (
 	}
 
 	ctx := context.Background()
-	for _, column := range []string{"project_json", "parent_run_id", "gate_route", "gate_reason", "gate_decided_at"} {
+	for _, column := range []string{"chat_id", "project_json", "parent_run_id", "gate_route", "gate_reason", "gate_decided_at"} {
 		exists, err := repo.tableColumnExists(ctx, "runs", column)
 		if err != nil {
 			t.Fatalf("tableColumnExists(%s) error = %v", column, err)
@@ -244,6 +247,65 @@ CREATE TABLE runs (
 		if !exists {
 			t.Fatalf("column %s missing after migration", column)
 		}
+	}
+}
+
+func TestSQLiteRepositoryListsChatsAndExpandsChatRecord(t *testing.T) {
+	t.Parallel()
+
+	repo := openTestRepository(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.April, 1, 8, 0, 0, 0, time.UTC)
+
+	root := assistant.NewRun("Initial request", now, 2)
+	root.Status = assistant.RunStatusCompleted
+	root.Phase = assistant.RunPhaseCompleted
+	root.CompletedAt = ptrTimeStore(now.Add(2 * time.Minute))
+	root.UpdatedAt = now.Add(2 * time.Minute)
+	if err := repo.SaveRun(ctx, root); err != nil {
+		t.Fatalf("SaveRun(root) error = %v", err)
+	}
+
+	followUp := assistant.NewRun("Follow-up request", now.Add(3*time.Minute), 2)
+	followUp.ChatID = root.ChatID
+	followUp.ParentRunID = root.ID
+	followUp.Status = assistant.RunStatusCompleted
+	followUp.Phase = assistant.RunPhaseCompleted
+	followUp.CompletedAt = ptrTimeStore(now.Add(5 * time.Minute))
+	followUp.UpdatedAt = now.Add(5 * time.Minute)
+	if err := repo.SaveRun(ctx, followUp); err != nil {
+		t.Fatalf("SaveRun(followUp) error = %v", err)
+	}
+
+	chats, err := repo.ListChats(ctx)
+	if err != nil {
+		t.Fatalf("ListChats() error = %v", err)
+	}
+	if len(chats) != 1 {
+		t.Fatalf("len(chats) = %d, want 1", len(chats))
+	}
+	if chats[0].ID != root.ChatID {
+		t.Fatalf("chat ID = %q, want %q", chats[0].ID, root.ChatID)
+	}
+	if chats[0].RootRunID != root.ID {
+		t.Fatalf("RootRunID = %q, want %q", chats[0].RootRunID, root.ID)
+	}
+	if chats[0].LatestRunID != followUp.ID {
+		t.Fatalf("LatestRunID = %q, want %q", chats[0].LatestRunID, followUp.ID)
+	}
+
+	record, err := repo.GetChatRecord(ctx, root.ChatID)
+	if err != nil {
+		t.Fatalf("GetChatRecord() error = %v", err)
+	}
+	if record.Chat.ID != root.ChatID {
+		t.Fatalf("record.Chat.ID = %q, want %q", record.Chat.ID, root.ChatID)
+	}
+	if len(record.Runs) != 2 {
+		t.Fatalf("len(record.Runs) = %d, want 2", len(record.Runs))
+	}
+	if record.Runs[0].Run.ID != root.ID || record.Runs[1].Run.ID != followUp.ID {
+		t.Fatalf("chat runs = %#v, want root then follow-up", record.Runs)
 	}
 }
 
@@ -265,4 +327,8 @@ func openTestRepository(t *testing.T) *SQLiteRepository {
 		t.Fatalf("OpenSQLite() error = %v", err)
 	}
 	return repo
+}
+
+func ptrTimeStore(v time.Time) *time.Time {
+	return &v
 }

@@ -15,6 +15,9 @@ func TestNewRunInitializesWTLDefaults(t *testing.T) {
 	if !strings.HasPrefix(run.ID, "run_") {
 		t.Fatalf("run ID = %q, want prefix run_", run.ID)
 	}
+	if run.ChatID != run.ID {
+		t.Fatalf("ChatID = %q, want %q", run.ChatID, run.ID)
+	}
 	if run.Status != RunStatusQueued {
 		t.Fatalf("Status = %q, want %q", run.Status, RunStatusQueued)
 	}

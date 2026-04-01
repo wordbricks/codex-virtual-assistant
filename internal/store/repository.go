@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,6 +25,11 @@ type RunRecord struct {
 	ToolCalls    []assistant.ToolCall    `json:"tool_calls"`
 	WebSteps     []assistant.WebStep     `json:"web_steps"`
 	WaitRequests []assistant.WaitRequest `json:"wait_requests"`
+}
+
+type ChatRecord struct {
+	Chat assistant.Chat `json:"chat"`
+	Runs []RunRecord    `json:"runs"`
 }
 
 type SQLiteRepository struct {
@@ -75,6 +81,7 @@ func (r *SQLiteRepository) SaveRun(ctx context.Context, run assistant.Run) error
 	script := fmt.Sprintf(`
 INSERT INTO runs (
 	id,
+	chat_id,
 	parent_run_id,
 	status,
 	phase,
@@ -100,6 +107,7 @@ INSERT INTO runs (
 	%s,
 	%s,
 	%s,
+	%s,
 	%d,
 	%d,
 	%s,
@@ -107,6 +115,7 @@ INSERT INTO runs (
 	%s
 )
 ON CONFLICT(id) DO UPDATE SET
+	chat_id = excluded.chat_id,
 	status = excluded.status,
 	phase = excluded.phase,
 	parent_run_id = excluded.parent_run_id,
@@ -120,7 +129,7 @@ ON CONFLICT(id) DO UPDATE SET
 	max_generation_attempts = excluded.max_generation_attempts,
 	updated_at = excluded.updated_at,
 	completed_at = excluded.completed_at;
-`, sqlText(run.ID), sqlNullableText(run.ParentRunID), sqlText(string(run.Status)), sqlText(string(run.Phase)), sqlText(string(run.GateRoute)), sqlText(run.GateReason), sqlNullableTime(run.GateDecidedAt), sqlText(projectJSON), sqlText(run.UserRequestRaw), sqlText(taskSpecJSON), run.AttemptCount, run.MaxGenerationAttempts, sqlTime(run.CreatedAt), sqlTime(run.UpdatedAt), sqlNullableTime(run.CompletedAt))
+`, sqlText(run.ID), sqlText(run.ChatID), sqlNullableText(run.ParentRunID), sqlText(string(run.Status)), sqlText(string(run.Phase)), sqlText(string(run.GateRoute)), sqlText(run.GateReason), sqlNullableTime(run.GateDecidedAt), sqlText(projectJSON), sqlText(run.UserRequestRaw), sqlText(taskSpecJSON), run.AttemptCount, run.MaxGenerationAttempts, sqlTime(run.CreatedAt), sqlTime(run.UpdatedAt), sqlNullableTime(run.CompletedAt))
 
 	return r.exec(ctx, script)
 }
@@ -233,6 +242,7 @@ func (r *SQLiteRepository) GetRun(ctx context.Context, runID string) (assistant.
 	rows, err := queryRows[runRow](ctx, r, fmt.Sprintf(`
 SELECT
 	id,
+	COALESCE(NULLIF(chat_id, ''), id) AS chat_id,
 	COALESCE(parent_run_id, '') AS parent_run_id,
 	status,
 	phase,
@@ -258,6 +268,79 @@ LIMIT 1;
 		return assistant.Run{}, ErrNotFound
 	}
 	return rows[0].toAssistantRun()
+}
+
+func (r *SQLiteRepository) ListRuns(ctx context.Context) ([]assistant.Run, error) {
+	rows, err := queryRows[runRow](ctx, r, `
+SELECT
+	id,
+	COALESCE(NULLIF(chat_id, ''), id) AS chat_id,
+	COALESCE(parent_run_id, '') AS parent_run_id,
+	status,
+	phase,
+	COALESCE(gate_route, '') AS gate_route,
+	COALESCE(gate_reason, '') AS gate_reason,
+	COALESCE(gate_decided_at, '') AS gate_decided_at,
+	COALESCE(project_json, '{}') AS project_json,
+	user_request_raw,
+	task_spec_json,
+	attempt_count,
+	max_generation_attempts,
+	created_at,
+	updated_at,
+	COALESCE(completed_at, '') AS completed_at
+FROM runs
+ORDER BY created_at ASC, updated_at ASC;
+`)
+	if err != nil {
+		return nil, err
+	}
+	runs := make([]assistant.Run, 0, len(rows))
+	for _, row := range rows {
+		run, err := row.toAssistantRun()
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	return runs, nil
+}
+
+func (r *SQLiteRepository) ListRunsByChat(ctx context.Context, chatID string) ([]assistant.Run, error) {
+	rows, err := queryRows[runRow](ctx, r, fmt.Sprintf(`
+SELECT
+	id,
+	COALESCE(NULLIF(chat_id, ''), id) AS chat_id,
+	COALESCE(parent_run_id, '') AS parent_run_id,
+	status,
+	phase,
+	COALESCE(gate_route, '') AS gate_route,
+	COALESCE(gate_reason, '') AS gate_reason,
+	COALESCE(gate_decided_at, '') AS gate_decided_at,
+	COALESCE(project_json, '{}') AS project_json,
+	user_request_raw,
+	task_spec_json,
+	attempt_count,
+	max_generation_attempts,
+	created_at,
+	updated_at,
+	COALESCE(completed_at, '') AS completed_at
+FROM runs
+WHERE COALESCE(NULLIF(chat_id, ''), id) = %s
+ORDER BY created_at ASC, updated_at ASC;
+`, sqlText(chatID)))
+	if err != nil {
+		return nil, err
+	}
+	runs := make([]assistant.Run, 0, len(rows))
+	for _, row := range rows {
+		run, err := row.toAssistantRun()
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	return runs, nil
 }
 
 func (r *SQLiteRepository) ListRunEvents(ctx context.Context, runID string) ([]assistant.RunEvent, error) {
@@ -500,11 +583,106 @@ func (r *SQLiteRepository) GetRunRecord(ctx context.Context, runID string) (RunR
 	}, nil
 }
 
+func (r *SQLiteRepository) ListChats(ctx context.Context) ([]assistant.Chat, error) {
+	runs, err := r.ListRuns(ctx)
+	if err != nil {
+		return nil, err
+	}
+	chats := make([]assistant.Chat, 0)
+	byID := make(map[string]int)
+	for _, run := range runs {
+		chatID := strings.TrimSpace(run.ChatID)
+		if chatID == "" {
+			chatID = run.ID
+		}
+		if idx, ok := byID[chatID]; ok {
+			chat := chats[idx]
+			if run.CreatedAt.Before(chat.CreatedAt) {
+				chat.CreatedAt = run.CreatedAt
+				chat.RootRunID = run.ID
+				chat.Title = chatTitle(run)
+			}
+			if run.CreatedAt.After(chat.UpdatedAt) || run.UpdatedAt.After(chat.UpdatedAt) {
+				chat.LatestRunID = run.ID
+				chat.Status = run.Status
+				if run.UpdatedAt.After(chat.UpdatedAt) {
+					chat.UpdatedAt = run.UpdatedAt
+				}
+			}
+			chats[idx] = chat
+			continue
+		}
+		byID[chatID] = len(chats)
+		chats = append(chats, assistant.Chat{
+			ID:          chatID,
+			RootRunID:   run.ID,
+			LatestRunID: run.ID,
+			Title:       chatTitle(run),
+			Status:      run.Status,
+			CreatedAt:   run.CreatedAt,
+			UpdatedAt:   run.UpdatedAt,
+		})
+	}
+
+	sort.Slice(chats, func(i, j int) bool {
+		if chats[i].UpdatedAt.Equal(chats[j].UpdatedAt) {
+			return chats[i].CreatedAt.After(chats[j].CreatedAt)
+		}
+		return chats[i].UpdatedAt.After(chats[j].UpdatedAt)
+	})
+	return chats, nil
+}
+
+func (r *SQLiteRepository) GetChatRecord(ctx context.Context, chatID string) (ChatRecord, error) {
+	chatID = strings.TrimSpace(chatID)
+	if chatID == "" {
+		return ChatRecord{}, ErrNotFound
+	}
+
+	run, err := r.GetRun(ctx, chatID)
+	if err == nil {
+		chatID = firstNonEmpty(strings.TrimSpace(run.ChatID), run.ID)
+	} else if !errors.Is(err, ErrNotFound) {
+		return ChatRecord{}, err
+	}
+
+	runs, err := r.ListRunsByChat(ctx, chatID)
+	if err != nil {
+		return ChatRecord{}, err
+	}
+	if len(runs) == 0 {
+		return ChatRecord{}, ErrNotFound
+	}
+
+	records := make([]RunRecord, 0, len(runs))
+	for _, run := range runs {
+		record, err := r.GetRunRecord(ctx, run.ID)
+		if err != nil {
+			return ChatRecord{}, err
+		}
+		records = append(records, record)
+	}
+
+	chats, err := r.ListChats(ctx)
+	if err != nil {
+		return ChatRecord{}, err
+	}
+	for _, chat := range chats {
+		if chat.ID == chatID {
+			return ChatRecord{Chat: chat, Runs: records}, nil
+		}
+	}
+	return ChatRecord{}, ErrNotFound
+}
+
 func (r *SQLiteRepository) migrate(ctx context.Context) error {
 	if err := r.exec(ctx, schemaSQL); err != nil {
 		return err
 	}
-	return r.ensureRunColumns(ctx)
+	if err := r.ensureRunColumns(ctx); err != nil {
+		return err
+	}
+	return r.backfillRunChatIDs(ctx)
 }
 
 func (r *SQLiteRepository) ensureRunColumns(ctx context.Context) error {
@@ -513,6 +691,10 @@ func (r *SQLiteRepository) ensureRunColumns(ctx context.Context) error {
 		ddl  string
 	}
 	columns := []runColumn{
+		{
+			name: "chat_id",
+			ddl:  `ALTER TABLE runs ADD COLUMN chat_id TEXT NOT NULL DEFAULT '';`,
+		},
 		{
 			name: "project_json",
 			ddl:  `ALTER TABLE runs ADD COLUMN project_json TEXT NOT NULL DEFAULT '{}';`,
@@ -546,7 +728,85 @@ func (r *SQLiteRepository) ensureRunColumns(ctx context.Context) error {
 			return err
 		}
 	}
-	return r.exec(ctx, `CREATE INDEX IF NOT EXISTS idx_runs_parent_run_id ON runs(parent_run_id);`)
+	return r.exec(ctx, `
+CREATE INDEX IF NOT EXISTS idx_runs_parent_run_id ON runs(parent_run_id);
+CREATE INDEX IF NOT EXISTS idx_runs_chat_id_created_at ON runs(chat_id, created_at);
+`)
+}
+
+func (r *SQLiteRepository) backfillRunChatIDs(ctx context.Context) error {
+	type runChatRow struct {
+		ID          string `json:"id"`
+		ChatID      string `json:"chat_id"`
+		ParentRunID string `json:"parent_run_id"`
+	}
+
+	rows, err := queryRows[runChatRow](ctx, r, `
+SELECT
+	id,
+	COALESCE(chat_id, '') AS chat_id,
+	COALESCE(parent_run_id, '') AS parent_run_id
+FROM runs
+ORDER BY created_at ASC, updated_at ASC;
+`)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	index := make(map[string]runChatRow, len(rows))
+	for _, row := range rows {
+		index[row.ID] = row
+	}
+
+	resolved := make(map[string]string, len(rows))
+	var resolve func(string) string
+	resolve = func(runID string) string {
+		if runID == "" {
+			return ""
+		}
+		if chatID := strings.TrimSpace(resolved[runID]); chatID != "" {
+			return chatID
+		}
+		row, ok := index[runID]
+		if !ok {
+			return ""
+		}
+		if chatID := strings.TrimSpace(row.ChatID); chatID != "" {
+			resolved[runID] = chatID
+			return chatID
+		}
+		if strings.TrimSpace(row.ParentRunID) == "" {
+			resolved[runID] = row.ID
+			return row.ID
+		}
+		chatID := resolve(row.ParentRunID)
+		if chatID == "" {
+			chatID = row.ID
+		}
+		resolved[runID] = chatID
+		return chatID
+	}
+
+	for _, row := range rows {
+		if strings.TrimSpace(row.ChatID) != "" {
+			continue
+		}
+		chatID := resolve(row.ID)
+		if chatID == "" {
+			continue
+		}
+		if err := r.exec(ctx, fmt.Sprintf(`
+UPDATE runs
+SET chat_id = %s
+WHERE id = %s;
+`, sqlText(chatID), sqlText(row.ID))); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *SQLiteRepository) exec(ctx context.Context, script string) error {
@@ -610,6 +870,19 @@ func (r *SQLiteRepository) tableColumnExists(ctx context.Context, tableName, col
 		}
 	}
 	return false, nil
+}
+
+func chatTitle(run assistant.Run) string {
+	return firstNonEmpty(strings.TrimSpace(run.TaskSpec.Goal), strings.TrimSpace(run.UserRequestRaw))
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func sqlText(value string) string {

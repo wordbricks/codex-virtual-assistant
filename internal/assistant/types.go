@@ -129,6 +129,7 @@ const (
 
 type Run struct {
 	ID                    string         `json:"id"`
+	ChatID                string         `json:"chat_id"`
 	ParentRunID           string         `json:"parent_run_id,omitempty"`
 	Status                RunStatus      `json:"status"`
 	Phase                 RunPhase       `json:"phase"`
@@ -145,6 +146,16 @@ type Run struct {
 	CreatedAt             time.Time      `json:"created_at"`
 	UpdatedAt             time.Time      `json:"updated_at"`
 	CompletedAt           *time.Time     `json:"completed_at,omitempty"`
+}
+
+type Chat struct {
+	ID          string    `json:"id"`
+	RootRunID   string    `json:"root_run_id"`
+	LatestRunID string    `json:"latest_run_id"`
+	Title       string    `json:"title"`
+	Status      RunStatus `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type TaskSpec struct {
@@ -256,8 +267,10 @@ func NewRun(userRequest string, now time.Time, maxGenerationAttempts int) Run {
 	if maxGenerationAttempts <= 0 {
 		maxGenerationAttempts = 3
 	}
+	id := NewID("run", now)
 	return Run{
-		ID:                    NewID("run", now),
+		ID:                    id,
+		ChatID:                id,
 		Status:                RunStatusQueued,
 		Phase:                 RunPhaseQueued,
 		UserRequestRaw:        userRequest,
@@ -272,6 +285,8 @@ func (r Run) Validate() error {
 	switch {
 	case r.ID == "":
 		return errors.New("assistant: run id is required")
+	case r.ChatID == "":
+		return errors.New("assistant: chat id is required")
 	case r.ParentRunID != "" && r.ParentRunID == r.ID:
 		return errors.New("assistant: parent run id cannot match run id")
 	case r.UserRequestRaw == "":

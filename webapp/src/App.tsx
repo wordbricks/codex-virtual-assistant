@@ -14,6 +14,7 @@ type BootstrapResponse = {
   product_tagline: string;
   default_model: string;
   default_max_generation_attempts: number;
+  chats_path: string;
   runs_path: string;
 };
 
@@ -35,6 +36,7 @@ type RunStatus =
 type RunRecord = {
   run: {
     id: string;
+    chat_id: string;
     parent_run_id?: string;
     status: RunStatus;
     phase: RunStatus;
@@ -118,6 +120,21 @@ type RunRecord = {
   }>;
 };
 
+type ChatSummary = {
+  id: string;
+  root_run_id: string;
+  latest_run_id: string;
+  title: string;
+  status: RunStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+type ChatRecord = {
+  chat: ChatSummary;
+  runs: RunRecord[];
+};
+
 type LiveRunEvent = {
   id: string;
   run_id: string;
@@ -160,9 +177,6 @@ type HistoryEntry = {
   status: RunStatus;
   updatedAt: string;
 };
-
-const RUN_HISTORY_KEY = "cva.run-history";
-const MAX_HISTORY_ITEMS = 20;
 const TERMINAL_STATUSES: RunStatus[] = ["completed", "failed", "exhausted", "cancelled"];
 
 const statusLabel: Record<RunStatus, string> = {
@@ -209,11 +223,11 @@ function emptyLiveTelemetry(): LiveTelemetry {
 
 export function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null);
-  const [selectedRunId, setSelectedRunId] = useState<string>(readRunIDFromHash());
-  const [currentRecord, setCurrentRecord] = useState<RunRecord | null>(null);
+  const [selectedChatId, setSelectedChatId] = useState<string>(readChatIDFromHash());
+  const [currentChat, setCurrentChat] = useState<ChatRecord | null>(null);
   const [messages, setMessages] = useState<ThreadMessage[]>([]);
   const [liveTelemetry, setLiveTelemetry] = useState<LiveTelemetry>(emptyLiveTelemetry);
-  const [runHistory, setRunHistory] = useState<HistoryEntry[]>(loadRunHistory);
+  const [chatHistory, setChatHistory] = useState<HistoryEntry[]>([]);
   const [attempts, setAttempts] = useState(3);
   const [isRunning, setIsRunning] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -236,59 +250,81 @@ export function App() {
     }
   }, []);
 
-  const rememberRun = useCallback((entry: HistoryEntry) => {
-    setRunHistory((prev) => {
-      const next = [entry, ...prev.filter((r) => r.id !== entry.id)].slice(0, MAX_HISTORY_ITEMS);
-      localStorage.setItem(RUN_HISTORY_KEY, JSON.stringify(next));
+  const mergeChatHistoryEntry = useCallback((entry: HistoryEntry) => {
+    setChatHistory((prev) => {
+      const next = [entry, ...prev.filter((chat) => chat.id !== entry.id)];
+      next.sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
       return next;
     });
   }, []);
 
-  const hydrateRecord = useCallback(
-    (record: RunRecord | null) => {
-      setCurrentRecord(record);
+  const replaceChatHistory = useCallback((chats: ChatSummary[]) => {
+    setChatHistory(
+      chats.map((chat) => ({
+        id: chat.id,
+        title: truncate(chat.title, 48),
+        status: chat.status,
+        updatedAt: chat.updated_at,
+      })),
+    );
+  }, []);
+
+  const hydrateChat = useCallback(
+    (record: ChatRecord | null) => {
+      setCurrentChat(record);
       if (!record) {
         setMessages([]);
         setIsRunning(false);
         return;
       }
-      setIsRunning(isActiveStatus(record.run.status));
-      rememberRun({
-        id: record.run.id,
-        title: truncate(record.run.task_spec.goal || record.run.user_request_raw, 48),
-        status: record.run.status,
-        updatedAt: record.run.updated_at,
+      const latestRun = latestRunFromChat(record);
+      setIsRunning(Boolean(latestRun && isActiveStatus(latestRun.run.status)));
+      mergeChatHistoryEntry({
+        id: record.chat.id,
+        title: truncate(record.chat.title, 48),
+        status: record.chat.status,
+        updatedAt: record.chat.updated_at,
       });
     },
-    [rememberRun],
+    [mergeChatHistoryEntry],
   );
 
   useEffect(() => {
-    if (!currentRecord) return;
-    setMessages(recordToMessages(currentRecord, liveTelemetry));
-  }, [currentRecord, liveTelemetry]);
+    if (!currentChat) return;
+    setMessages(chatToMessages(currentChat, liveTelemetry));
+  }, [currentChat, liveTelemetry]);
 
-  const refreshRun = useCallback(
-    async (runID: string) => {
+  const refreshChatList = useCallback(
+    async () => {
       if (!bootstrap) return;
-      const record = await fetchJSON<RunRecord>(`${bootstrap.runs_path}/${encodeURIComponent(runID)}`);
-      hydrateRecord(record);
+      const payload = await fetchJSON<{ chats: ChatSummary[] }>(bootstrap.chats_path);
+      replaceChatHistory(payload.chats);
+      return payload.chats;
+    },
+    [bootstrap, replaceChatHistory],
+  );
+
+  const refreshChat = useCallback(
+    async (chatID: string) => {
+      if (!bootstrap) return;
+      const record = await fetchJSON<ChatRecord>(`${bootstrap.chats_path}/${encodeURIComponent(chatID)}`);
+      hydrateChat(record);
       return record;
     },
-    [bootstrap, hydrateRecord],
+    [bootstrap, hydrateChat],
   );
 
   const syncPolling = useCallback(
-    (runID: string, status: RunStatus) => {
+    (chatID: string, status: RunStatus) => {
       stopPolling();
       if (!isActiveStatus(status)) return;
-      pollTimerRef.current = window.setTimeout(() => void refreshRun(runID).catch(() => undefined), 4000);
+      pollTimerRef.current = window.setTimeout(() => void refreshChat(chatID).catch(() => undefined), 4000);
     },
-    [refreshRun, stopPolling],
+    [refreshChat, stopPolling],
   );
 
   const connectEventStream = useCallback(
-    (runID: string, status: RunStatus) => {
+    (chatID: string, runID: string, status: RunStatus) => {
       closeEventStream();
       if (!isActiveStatus(status)) return;
       const source = new EventSource(`${bootstrap?.runs_path}/${encodeURIComponent(runID)}/events`);
@@ -299,73 +335,77 @@ export function App() {
           return;
         }
 
-        void refreshRun(runID).then((record) => {
-          if (record) {
-            syncPolling(runID, record.run.status);
-            if (!isActiveStatus(record.run.status)) closeEventStream();
+        void refreshChat(chatID).then((record) => {
+          const latestRun = record ? latestRunFromChat(record) : null;
+          if (record && latestRun) {
+            syncPolling(chatID, latestRun.run.status);
+            if (!isActiveStatus(latestRun.run.status)) closeEventStream();
           }
         });
       });
-      source.onerror = () => syncPolling(runID, status);
+      source.onerror = () => syncPolling(chatID, status);
       eventSourceRef.current = source;
     },
-    [bootstrap?.runs_path, closeEventStream, refreshRun, syncPolling],
+    [bootstrap?.runs_path, closeEventStream, refreshChat, syncPolling],
   );
 
-  const syncRealtimeForRecord = useCallback(
-    (record: RunRecord) => {
+  const syncRealtimeForChat = useCallback(
+    (record: ChatRecord) => {
       closeEventStream();
       stopPolling();
-      if (isActiveStatus(record.run.status)) {
-        connectEventStream(record.run.id, record.run.status);
-        syncPolling(record.run.id, record.run.status);
+      const latestRun = latestRunFromChat(record);
+      if (latestRun && isActiveStatus(latestRun.run.status)) {
+        connectEventStream(record.chat.id, latestRun.run.id, latestRun.run.status);
+        syncPolling(record.chat.id, latestRun.run.status);
       }
     },
     [closeEventStream, connectEventStream, stopPolling, syncPolling],
   );
 
-  const loadRun = useCallback(
-    async (runID: string) => {
+  const loadChat = useCallback(
+    async (chatID: string) => {
       setIsLoading(true);
       try {
-        const record = await refreshRun(runID);
-        if (record) syncRealtimeForRecord(record);
+        const record = await refreshChat(chatID);
+        if (record) syncRealtimeForChat(record);
       } finally {
         setIsLoading(false);
       }
     },
-    [refreshRun, syncRealtimeForRecord],
+    [refreshChat, syncRealtimeForChat],
   );
 
   useEffect(() => {
     void fetchJSON<BootstrapResponse>("/api/v1/bootstrap").then((p) => {
       setBootstrap(p);
       setAttempts(p.default_max_generation_attempts);
-      setIsLoading(false);
+      void fetchJSON<{ chats: ChatSummary[] }>(p.chats_path)
+        .then((payload) => replaceChatHistory(payload.chats))
+        .finally(() => setIsLoading(false));
     });
-  }, []);
+  }, [replaceChatHistory]);
 
   useEffect(() => {
-    const onHashChange = () => setSelectedRunId(readRunIDFromHash());
+    const onHashChange = () => setSelectedChatId(readChatIDFromHash());
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
   useEffect(() => {
     if (!bootstrap) return;
-    if (!selectedRunId) {
+    if (!selectedChatId) {
       closeEventStream();
       stopPolling();
-      hydrateRecord(null);
+      hydrateChat(null);
       setLiveTelemetry(emptyLiveTelemetry());
       setThreadKey(`draft-${Date.now()}`);
       return;
     }
     setLiveTelemetry(emptyLiveTelemetry());
-    setThreadKey(selectedRunId);
-    void loadRun(selectedRunId);
+    setThreadKey(selectedChatId);
+    void loadChat(selectedChatId);
     return () => { closeEventStream(); stopPolling(); };
-  }, [bootstrap, closeEventStream, hydrateRecord, loadRun, selectedRunId, stopPolling]);
+  }, [bootstrap, closeEventStream, hydrateChat, loadChat, selectedChatId, stopPolling]);
 
   const onNew = useCallback(
     async (message: AppendMessage) => {
@@ -374,20 +414,21 @@ export function App() {
       if (!text) return;
 
       const createdAt = new Date();
-      setMessages([
-        buildUserMessage(text, createdAt),
-        buildPendingAssistantMessage(createdAt),
-      ]);
+      const latestRun = currentChat ? latestRunFromChat(currentChat) : null;
+      const optimisticHistory = currentChat ? chatToMessages(currentChat, emptyLiveTelemetry()) : [];
+      setMessages([...optimisticHistory, buildUserMessage(text, createdAt), buildPendingAssistantMessage(createdAt)]);
       setIsRunning(true);
-      setCurrentRecord(null);
+      if (!currentChat) {
+        setCurrentChat(null);
+      }
       setLiveTelemetry(emptyLiveTelemetry());
 
       const parentRunId =
-        currentRecord && isFollowUpSourceStatus(currentRecord.run.status)
-          ? currentRecord.run.id
+        latestRun && isFollowUpSourceStatus(latestRun.run.status)
+          ? latestRun.run.id
           : "";
 
-      const created = await fetchJSON<{ run: { id: string; status: RunStatus; updated_at: string } }>(
+      const created = await fetchJSON<{ run: { id: string; chat_id: string; status: RunStatus; updated_at: string } }>(
         bootstrap.runs_path,
         {
           method: "POST",
@@ -399,53 +440,63 @@ export function App() {
         },
       );
 
-      rememberRun({ id: created.run.id, title: truncate(text, 48), status: created.run.status, updatedAt: created.run.updated_at });
-      setSelectedRunId(created.run.id);
-      setThreadKey(created.run.id);
-      updateHash(created.run.id);
-      await loadRun(created.run.id);
+      await refreshChatList();
+      setSelectedChatId(created.run.chat_id);
+      setThreadKey(created.run.chat_id);
+      updateHash(created.run.chat_id);
+      await loadChat(created.run.chat_id);
     },
-    [attempts, bootstrap, currentRecord, loadRun, rememberRun],
+    [attempts, bootstrap, currentChat, loadChat, refreshChatList],
   );
 
   const onCancel = useCallback(async () => {
-    if (!bootstrap || !selectedRunId) return;
-    const record = await fetchJSON<RunRecord>(`${bootstrap.runs_path}/${encodeURIComponent(selectedRunId)}/cancel`, { method: "POST" });
-    hydrateRecord(record);
-    syncRealtimeForRecord(record);
-  }, [bootstrap, hydrateRecord, selectedRunId, syncRealtimeForRecord]);
+    if (!bootstrap || !selectedChatId || !currentChat) return;
+    const latestRun = latestRunFromChat(currentChat);
+    if (!latestRun) return;
+    await fetchJSON<RunRecord>(`${bootstrap.runs_path}/${encodeURIComponent(latestRun.run.id)}/cancel`, { method: "POST" });
+    const record = await refreshChat(selectedChatId);
+    if (record) {
+      syncRealtimeForChat(record);
+      await refreshChatList();
+    }
+  }, [bootstrap, currentChat, refreshChat, refreshChatList, selectedChatId, syncRealtimeForChat]);
 
   const resumeWaitingRun = useCallback(
     async ({ approved, response }: { approved: boolean; response?: string }) => {
-      if (!currentRecord) return;
+      const latestRun = currentChat ? latestRunFromChat(currentChat) : null;
+      if (!latestRun) return;
       const input: Record<string, string> = {};
       if (response?.trim()) input.response = response.trim();
       if (approved) input.approval = "approved";
       await fetchJSON<{ ok: boolean }>(
-        `/api/v1/runs/${encodeURIComponent(currentRecord.run.id)}/resume`,
+        `/api/v1/runs/${encodeURIComponent(latestRun.run.id)}/resume`,
         {
           method: "POST",
           body: Object.keys(input).length ? JSON.stringify({ input }) : undefined,
         },
       );
-      const record = await fetchJSON<RunRecord>(
-        `/api/v1/runs/${encodeURIComponent(currentRecord.run.id)}`,
-      );
-      hydrateRecord(record);
-      syncRealtimeForRecord(record);
+      const record = await refreshChat(latestRun.run.chat_id);
+      if (record) {
+        syncRealtimeForChat(record);
+        await refreshChatList();
+      }
     },
-    [currentRecord, hydrateRecord, syncRealtimeForRecord],
+    [currentChat, refreshChat, refreshChatList, syncRealtimeForChat],
   );
 
   const cancelWaitingRun = useCallback(async () => {
-    if (!currentRecord) return;
-    const record = await fetchJSON<RunRecord>(
-      `/api/v1/runs/${encodeURIComponent(currentRecord.run.id)}/cancel`,
+    const latestRun = currentChat ? latestRunFromChat(currentChat) : null;
+    if (!latestRun) return;
+    await fetchJSON<RunRecord>(
+      `/api/v1/runs/${encodeURIComponent(latestRun.run.id)}/cancel`,
       { method: "POST" },
     );
-    hydrateRecord(record);
-    syncRealtimeForRecord(record);
-  }, [currentRecord, hydrateRecord, syncRealtimeForRecord]);
+    const record = await refreshChat(latestRun.run.chat_id);
+    if (record) {
+      syncRealtimeForChat(record);
+      await refreshChatList();
+    }
+  }, [currentChat, refreshChat, refreshChatList, syncRealtimeForChat]);
 
   const runtimeAdapter = useMemo<ExternalStoreAdapter<ThreadMessage>>(
     () => ({ isLoading, isRunning, messages, onNew, onCancel }),
@@ -453,28 +504,29 @@ export function App() {
   );
 
   const runtime = useExternalStoreRuntime(runtimeAdapter);
-  const status = currentRecord?.run.status ?? null;
-  const showReport = Boolean(currentRecord && status && TERMINAL_STATUSES.includes(status));
+  const latestRun = currentChat ? latestRunFromChat(currentChat) : null;
+  const status = latestRun?.run.status ?? null;
+  const showReport = Boolean(latestRun && status && TERMINAL_STATUSES.includes(status));
 
   useEffect(() => {
-    if (!currentRecord) {
+    if (!latestRun) {
       setIsReportOpen(false);
       previousRunIDRef.current = "";
       previousIsRunningRef.current = isRunning;
       return;
     }
 
-    const runChanged = previousRunIDRef.current !== currentRecord.run.id;
+    const runChanged = previousRunIDRef.current !== latestRun.run.id;
 
     if (runChanged) {
       setIsReportOpen(false);
-    } else if (previousIsRunningRef.current && !isRunning && TERMINAL_STATUSES.includes(currentRecord.run.status)) {
+    } else if (previousIsRunningRef.current && !isRunning && TERMINAL_STATUSES.includes(latestRun.run.status)) {
       setIsReportOpen(true);
     }
 
-    previousRunIDRef.current = currentRecord.run.id;
+    previousRunIDRef.current = latestRun.run.id;
     previousIsRunningRef.current = isRunning;
-  }, [currentRecord, isRunning]);
+  }, [isRunning, latestRun]);
 
   return (
     <TooltipProvider>
@@ -492,21 +544,21 @@ export function App() {
             <button
               type="button"
               className="sidebar-new-btn"
-              onClick={() => { setSelectedRunId(""); updateHash(""); }}
+              onClick={() => { setSelectedChatId(""); updateHash(""); }}
             >
               + New chat
             </button>
 
             <nav className="sidebar-history">
-              {runHistory.length === 0 ? (
+              {chatHistory.length === 0 ? (
                 <p className="sidebar-empty">No recent chats.</p>
               ) : (
-                runHistory.map((entry) => (
+                chatHistory.map((entry) => (
                   <button
                     key={entry.id}
                     type="button"
-                    className={`sidebar-item${entry.id === selectedRunId ? " is-active" : ""}`}
-                    onClick={() => { setSelectedRunId(entry.id); updateHash(entry.id); }}
+                    className={`sidebar-item${entry.id === selectedChatId ? " is-active" : ""}`}
+                    onClick={() => { setSelectedChatId(entry.id); updateHash(entry.id); }}
                   >
                     <span className="sidebar-item-title">{entry.title}</span>
                     <span className="sidebar-item-meta">{statusLabel[entry.status]} · {relativeTime(entry.updatedAt)}</span>
@@ -537,7 +589,7 @@ export function App() {
           <main className="chat-main">
             <header className="chat-header">
               <h2 className="chat-title">
-                {currentRecord?.run.task_spec.goal || "How can Codex help today?"}
+                {currentChat?.chat.title || "How can Codex help today?"}
               </h2>
               {status && (
                 <span className="status-pill" data-status={status}>
@@ -551,26 +603,22 @@ export function App() {
                 <div className="thread-shell">
                   <Thread
                     phaseStatus={status}
-                    phaseEvents={currentRecord?.events.map((event) => event.phase as RunStatus) ?? []}
-                    generatorAttempts={currentRecord?.attempts.filter((attempt) => attempt.role === "generator").length ?? 0}
-                    maxGenerationAttempts={currentRecord?.run.max_generation_attempts ?? 0}
-                    waitingFor={currentRecord?.run.waiting_for ?? null}
-                    waitingKey={currentRecord ? `${currentRecord.run.id}:${currentRecord.run.updated_at}` : null}
+                    phaseEvents={latestRun?.events.map((event) => event.phase as RunStatus) ?? []}
+                    generatorAttempts={latestRun?.attempts.filter((attempt) => attempt.role === "generator").length ?? 0}
+                    maxGenerationAttempts={latestRun?.run.max_generation_attempts ?? 0}
+                    waitingFor={latestRun?.run.waiting_for ?? null}
+                    waitingKey={latestRun ? `${latestRun.run.id}:${latestRun.run.updated_at}` : null}
                     onWaitingSubmit={resumeWaitingRun}
                     onWaitingCancel={cancelWaitingRun}
                   />
                 </div>
               </div>
 
-              {showReport && currentRecord && (
+              {showReport && latestRun && (
                 <SupervisorReport
-                  record={currentRecord}
+                  record={latestRun}
                   isOpen={isReportOpen}
                   onToggle={() => setIsReportOpen((open) => !open)}
-                  onOpenRun={(runID) => {
-                    setSelectedRunId(runID);
-                    updateHash(runID);
-                  }}
                 />
               )}
             </div>
@@ -585,12 +633,10 @@ function SupervisorReport({
   record,
   isOpen,
   onToggle,
-  onOpenRun,
 }: {
   record: RunRecord;
   isOpen: boolean;
   onToggle: () => void;
-  onOpenRun?: (runID: string) => void;
 }) {
   const videoArtifact = record.artifacts.find((artifact) => artifact.mime_type.startsWith("video/") && artifact.url);
   const screenshots = record.artifacts.filter((artifact) => artifact.mime_type.startsWith("image/") && artifact.url);
@@ -671,18 +717,7 @@ function SupervisorReport({
                 {record.run.gate_reason && <span>Gate: {record.run.gate_reason}</span>}
                 {record.run.parent_run_id && (
                   <span>
-                    Follow-up from{" "}
-                    {onOpenRun ? (
-                      <button
-                        type="button"
-                        className="report-inline-link"
-                        onClick={() => onOpenRun(record.run.parent_run_id!)}
-                      >
-                        {record.run.parent_run_id}
-                      </button>
-                    ) : (
-                      record.run.parent_run_id
-                    )}
+                    Follow-up from {record.run.parent_run_id}
                   </span>
                 )}
               </div>
@@ -872,6 +907,19 @@ function SupervisorReport({
 }
 
 // ── data helpers ──────────────────────────────────────────────────────────────
+
+function latestRunFromChat(record: ChatRecord): RunRecord | null {
+  return record.runs.at(-1) ?? null;
+}
+
+function chatToMessages(record: ChatRecord, liveTelemetry: LiveTelemetry): ThreadMessage[] {
+  return record.runs.flatMap((runRecord, index) =>
+    recordToMessages(
+      runRecord,
+      index === record.runs.length - 1 ? liveTelemetry : emptyLiveTelemetry(),
+    ),
+  );
+}
 
 function recordToMessages(record: RunRecord, liveTelemetry: LiveTelemetry): ThreadMessage[] {
   const user = buildUserMessage(record.run.user_request_raw, new Date(record.run.created_at), `${record.run.id}-user`);
@@ -1321,22 +1369,16 @@ function relativeTime(value: string) {
   return `${Math.round(h / 24)}d ago`;
 }
 
-function readRunIDFromHash() {
+function readChatIDFromHash() {
   const h = location.hash.replace(/^#/, "").trim();
   if (!h) return "";
-  return decodeURIComponent(h.startsWith("run=") ? h.slice(4) : h);
+  if (h.startsWith("chat=")) return decodeURIComponent(h.slice(5));
+  if (h.startsWith("run=")) return decodeURIComponent(h.slice(4));
+  return decodeURIComponent(h);
 }
 
 function updateHash(id: string) {
-  location.hash = id ? `run=${encodeURIComponent(id)}` : "";
-}
-
-function loadRunHistory(): HistoryEntry[] {
-  try {
-    const raw = localStorage.getItem(RUN_HISTORY_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch { return []; }
+  location.hash = id ? `chat=${encodeURIComponent(id)}` : "";
 }
 
 async function fetchJSON<T>(url: string, options: RequestInit = {}): Promise<T> {

@@ -5,6 +5,7 @@ PRAGMA journal_mode = WAL;
 
 CREATE TABLE IF NOT EXISTS runs (
 	id TEXT PRIMARY KEY,
+	chat_id TEXT NOT NULL,
 	parent_run_id TEXT,
 	status TEXT NOT NULL,
 	phase TEXT NOT NULL,

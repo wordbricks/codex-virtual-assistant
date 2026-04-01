@@ -47,8 +47,11 @@ func (s *RunService) CreateRun(ctx context.Context, userRequest string, maxGener
 		return assistant.Run{}, errors.New("assistant: user request is required")
 	}
 	parentRunID = strings.TrimSpace(parentRunID)
+	var parentRun assistant.Run
 	if parentRunID != "" {
-		if _, err := s.repo.GetRun(ctx, parentRunID); err != nil {
+		var err error
+		parentRun, err = s.repo.GetRun(ctx, parentRunID)
+		if err != nil {
 			return assistant.Run{}, err
 		}
 	}
@@ -59,6 +62,9 @@ func (s *RunService) CreateRun(ctx context.Context, userRequest string, maxGener
 		run = assistant.NewRun(userRequest, now, maxGenerationAttempts)
 	}
 	run.ParentRunID = parentRunID
+	if parentRunID != "" {
+		run.ChatID = firstNonEmpty(parentRun.ChatID, parentRun.ID)
+	}
 
 	go func(run assistant.Run) {
 		_ = s.engine.Start(s.bgCtx, run)
@@ -72,6 +78,14 @@ func (s *RunService) CreateRun(ctx context.Context, userRequest string, maxGener
 
 func (s *RunService) GetRunRecord(ctx context.Context, runID string) (store.RunRecord, error) {
 	return s.repo.GetRunRecord(ctx, runID)
+}
+
+func (s *RunService) GetChatRecord(ctx context.Context, chatID string) (store.ChatRecord, error) {
+	return s.repo.GetChatRecord(ctx, chatID)
+}
+
+func (s *RunService) ListChats(ctx context.Context) ([]assistant.Chat, error) {
+	return s.repo.ListChats(ctx)
 }
 
 func (s *RunService) ListRunEvents(ctx context.Context, runID string) ([]assistant.RunEvent, error) {
@@ -119,4 +133,13 @@ func (s *RunService) waitForRunVisible(ctx context.Context, runID string) error 
 		case <-ticker.C:
 		}
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

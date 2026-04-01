@@ -39,8 +39,14 @@ func TestRunServiceCreateRunSupportsParentRunID(t *testing.T) {
 	if run.ParentRunID != parent.ID {
 		t.Fatalf("run.ParentRunID = %q, want %q", run.ParentRunID, parent.ID)
 	}
+	if run.ChatID != parent.ChatID {
+		t.Fatalf("run.ChatID = %q, want %q", run.ChatID, parent.ChatID)
+	}
 	if len(engine.startedRuns) != 1 || engine.startedRuns[0].ParentRunID != parent.ID {
 		t.Fatalf("started runs = %#v, want parent-linked run", engine.startedRuns)
+	}
+	if engine.startedRuns[0].ChatID != parent.ChatID {
+		t.Fatalf("started run ChatID = %q, want %q", engine.startedRuns[0].ChatID, parent.ChatID)
 	}
 }
 
