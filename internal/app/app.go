@@ -32,7 +32,6 @@ func New(cfg config.Config) (*App, error) {
 		ApprovalPolicy: cfg.CodexApprovalPolicy,
 		SandboxMode:    cfg.CodexSandboxMode,
 		NetworkAccess:  cfg.CodexNetworkAccess,
-		ChromeTabGroup: cfg.ChromeTabGroupName,
 	}, time.Now)
 	return NewWithExecutor(cfg, executor)
 }

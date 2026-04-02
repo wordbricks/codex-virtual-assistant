@@ -31,7 +31,6 @@ type AppServerPhaseExecutorConfig struct {
 	ApprovalPolicy string
 	SandboxMode    string
 	NetworkAccess  bool
-	ChromeTabGroup string
 }
 
 type AppServerPhaseExecutor struct {
@@ -589,11 +588,6 @@ func (s *appServerTurnSession) collectCommandExecution(item map[string]any) {
 	s.emitToolCompleted(item, tool.Name, command, output, tool.StartedAt, finishedAt)
 
 	if isBrowserCommand(command) {
-		if shouldAttemptChromeTabGrouping(s.config.ChromeTabGroup, command) {
-			groupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = moveActiveChromeTabToGroup(groupCtx, s.config.ChromeTabGroup)
-			cancel()
-		}
 		step := AgentBrowserStep{
 			Title:   firstNonEmpty(browserTitle(command), "Browser step"),
 			URL:     extractFirstURL(command + "\n" + output),

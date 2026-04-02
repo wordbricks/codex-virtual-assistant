@@ -18,7 +18,6 @@ const (
 	defaultCodexBin             = "codex"
 	defaultCodexApprovalPolicy  = "never"
 	defaultCodexSandboxMode     = "workspace-write"
-	defaultChromeTabGroupName   = "CVA"
 )
 
 type Config struct {
@@ -34,7 +33,6 @@ type Config struct {
 	CodexApprovalPolicy   string
 	CodexSandboxMode      string
 	CodexNetworkAccess    bool
-	ChromeTabGroupName    string
 }
 
 func Load() (Config, error) {
@@ -56,7 +54,6 @@ func LoadFromEnv(getenv func(string) string, getwd func() (string, error)) (Conf
 		CodexApprovalPolicy:   defaultCodexApprovalPolicy,
 		CodexSandboxMode:      defaultCodexSandboxMode,
 		CodexNetworkAccess:    true,
-		ChromeTabGroupName:    defaultChromeTabGroupName,
 	}
 
 	if value := getenv("ASSISTANT_HTTP_ADDR"); value != "" {
@@ -100,10 +97,6 @@ func LoadFromEnv(getenv func(string) string, getwd func() (string, error)) (Conf
 		}
 		cfg.CodexNetworkAccess = parsed
 	}
-	if value := getenv("ASSISTANT_CHROME_TAB_GROUP"); value != "" {
-		cfg.ChromeTabGroupName = value
-	}
-
 	return cfg.Normalize(baseDir)
 }
 
@@ -139,9 +132,6 @@ func (c Config) Normalize(baseDir string) (Config, error) {
 	}
 	if c.CodexSandboxMode == "" {
 		c.CodexSandboxMode = defaultCodexSandboxMode
-	}
-	if c.ChromeTabGroupName == "" {
-		c.ChromeTabGroupName = defaultChromeTabGroupName
 	}
 
 	var err error

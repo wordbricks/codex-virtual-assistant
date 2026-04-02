@@ -48,9 +48,6 @@ func TestLoadFromEnvUsesDefaults(t *testing.T) {
 	if !cfg.CodexNetworkAccess {
 		t.Fatal("CodexNetworkAccess = false, want true")
 	}
-	if cfg.ChromeTabGroupName != "CVA" {
-		t.Fatalf("ChromeTabGroupName = %q, want %q", cfg.ChromeTabGroupName, "CVA")
-	}
 }
 
 func TestLoadFromEnvHonorsOverrides(t *testing.T) {
@@ -68,7 +65,6 @@ func TestLoadFromEnvHonorsOverrides(t *testing.T) {
 		"ASSISTANT_CODEX_APPROVAL_POLICY":   "on-request",
 		"ASSISTANT_CODEX_SANDBOX":           "danger-full-access",
 		"ASSISTANT_CODEX_NETWORK_ACCESS":    "false",
-		"ASSISTANT_CHROME_TAB_GROUP":        "Ops",
 	}
 
 	cfg, err := LoadFromEnv(func(key string) string { return env[key] }, func() (string, error) {
@@ -110,8 +106,5 @@ func TestLoadFromEnvHonorsOverrides(t *testing.T) {
 	}
 	if cfg.CodexNetworkAccess {
 		t.Fatal("CodexNetworkAccess = true, want false")
-	}
-	if cfg.ChromeTabGroupName != "Ops" {
-		t.Fatalf("ChromeTabGroupName = %q, want %q", cfg.ChromeTabGroupName, "Ops")
 	}
 }
