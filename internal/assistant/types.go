@@ -268,9 +268,10 @@ func NewRun(userRequest string, now time.Time, maxGenerationAttempts int) Run {
 		maxGenerationAttempts = 3
 	}
 	id := NewID("run", now)
+	chatID := NewChatID(now)
 	return Run{
 		ID:                    id,
-		ChatID:                id,
+		ChatID:                chatID,
 		Status:                RunStatusQueued,
 		Phase:                 RunPhaseQueued,
 		UserRequestRaw:        userRequest,

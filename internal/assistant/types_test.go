@@ -15,8 +15,17 @@ func TestNewRunInitializesWTLDefaults(t *testing.T) {
 	if !strings.HasPrefix(run.ID, "run_") {
 		t.Fatalf("run ID = %q, want prefix run_", run.ID)
 	}
-	if run.ChatID != run.ID {
-		t.Fatalf("ChatID = %q, want %q", run.ChatID, run.ID)
+	if !strings.HasPrefix(run.ChatID, "chat_") {
+		t.Fatalf("ChatID = %q, want prefix chat_", run.ChatID)
+	}
+	if run.ChatID == run.ID {
+		t.Fatalf("ChatID = %q, want a distinct short chat id", run.ChatID)
+	}
+	if len(run.ChatID) >= len(run.ID) {
+		t.Fatalf("ChatID length = %d, want shorter than run ID length %d", len(run.ChatID), len(run.ID))
+	}
+	if len(run.ChatID) > 28 {
+		t.Fatalf("ChatID length = %d, want <= 28 so cva-<chatId> fits CLI username limits", len(run.ChatID))
 	}
 	if run.Status != RunStatusQueued {
 		t.Fatalf("Status = %q, want %q", run.Status, RunStatusQueued)
