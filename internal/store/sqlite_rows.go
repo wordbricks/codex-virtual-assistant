@@ -117,6 +117,20 @@ type waitRequestRow struct {
 	CreatedAt   string `json:"created_at"`
 }
 
+type scheduledRunRow struct {
+	ID                    string `json:"id"`
+	ChatID                string `json:"chat_id"`
+	ParentRunID           string `json:"parent_run_id"`
+	UserRequestRaw        string `json:"user_request_raw"`
+	MaxGenerationAttempts int    `json:"max_generation_attempts"`
+	ScheduledFor          string `json:"scheduled_for"`
+	Status                string `json:"status"`
+	RunID                 string `json:"run_id"`
+	ErrorMessage          string `json:"error_message"`
+	CreatedAt             string `json:"created_at"`
+	TriggeredAt           string `json:"triggered_at"`
+}
+
 func (r runRow) toAssistantRun() (assistant.Run, error) {
 	createdAt, err := parseTime(r.CreatedAt)
 	if err != nil {
@@ -334,6 +348,37 @@ func (r waitRequestRow) toAssistantWaitRequest() (assistant.WaitRequest, error) 
 		RiskSummary: r.RiskSummary,
 		CreatedAt:   createdAt,
 	}, nil
+}
+
+func (r scheduledRunRow) toAssistantScheduledRun() (assistant.ScheduledRun, error) {
+	scheduledFor, err := parseTime(r.ScheduledFor)
+	if err != nil {
+		return assistant.ScheduledRun{}, err
+	}
+	createdAt, err := parseTime(r.CreatedAt)
+	if err != nil {
+		return assistant.ScheduledRun{}, err
+	}
+	scheduledRun := assistant.ScheduledRun{
+		ID:                    r.ID,
+		ChatID:                r.ChatID,
+		ParentRunID:           r.ParentRunID,
+		UserRequestRaw:        r.UserRequestRaw,
+		MaxGenerationAttempts: r.MaxGenerationAttempts,
+		ScheduledFor:          scheduledFor,
+		Status:                assistant.ScheduledRunStatus(r.Status),
+		RunID:                 strings.TrimSpace(r.RunID),
+		ErrorMessage:          strings.TrimSpace(r.ErrorMessage),
+		CreatedAt:             createdAt,
+	}
+	if strings.TrimSpace(r.TriggeredAt) != "" {
+		triggeredAt, err := parseTime(r.TriggeredAt)
+		if err != nil {
+			return assistant.ScheduledRun{}, err
+		}
+		scheduledRun.TriggeredAt = &triggeredAt
+	}
+	return scheduledRun, nil
 }
 
 func marshalJSON(value any) (string, error) {

@@ -66,6 +66,8 @@ func main() {
 		err = cmdCancel(ctx, client, cmdArgs, jsonMode)
 	case "resume":
 		err = cmdResume(ctx, client, cmdArgs)
+	case "schedule":
+		err = cmdSchedule(ctx, client, cmdArgs, jsonMode)
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -225,6 +227,70 @@ func cmdResume(ctx context.Context, c *Client, args []string) error {
 	return nil
 }
 
+func cmdSchedule(ctx context.Context, c *Client, args []string, jsonMode bool) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: cva schedule <list|show|cancel> ...")
+	}
+	switch args[0] {
+	case "list":
+		var chatID string
+		var status assistant.ScheduledRunStatus
+		for i := 1; i < len(args); i++ {
+			switch {
+			case args[i] == "--chat" && i+1 < len(args):
+				chatID = args[i+1]
+				i++
+			case strings.HasPrefix(args[i], "--chat="):
+				chatID = strings.TrimPrefix(args[i], "--chat=")
+			case args[i] == "--status" && i+1 < len(args):
+				status = assistant.ScheduledRunStatus(args[i+1])
+				i++
+			case strings.HasPrefix(args[i], "--status="):
+				status = assistant.ScheduledRunStatus(strings.TrimPrefix(args[i], "--status="))
+			default:
+				return fmt.Errorf("unknown schedule list arg: %s", args[i])
+			}
+		}
+		scheduledRuns, err := c.ListScheduledRuns(ctx, chatID, status)
+		if err != nil {
+			return err
+		}
+		if jsonMode {
+			return printJSON(scheduledRuns)
+		}
+		fmt.Print(formatScheduledRunList(scheduledRuns))
+		return nil
+	case "show":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: cva schedule show <id>")
+		}
+		scheduledRun, err := c.GetScheduledRun(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		if jsonMode {
+			return printJSON(scheduledRun)
+		}
+		fmt.Print(formatScheduledRun(*scheduledRun))
+		return nil
+	case "cancel":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: cva schedule cancel <id>")
+		}
+		scheduledRun, err := c.CancelScheduledRun(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		if jsonMode {
+			return printJSON(scheduledRun)
+		}
+		fmt.Print(formatScheduledRun(*scheduledRun))
+		return nil
+	default:
+		return fmt.Errorf("unknown schedule subcommand: %s", args[0])
+	}
+}
+
 func isTerminalPhase(p assistant.RunPhase) bool {
 	switch p {
 	case assistant.RunPhaseCompleted, assistant.RunPhaseFailed, assistant.RunPhaseCancelled:
@@ -253,6 +319,9 @@ Commands:
   watch <run_id>                         Stream live events for a run
   cancel <run_id>                        Cancel a running task
   resume <run_id> [key=value ...]        Resume a waiting run with input
+  schedule list [--chat ID] [--status S] List scheduled runs
+  schedule show <scheduled_run_id>       Show a scheduled run
+  schedule cancel <scheduled_run_id>     Cancel a pending scheduled run
 
 Global Options:
   --addr URL    API server address (default: http://127.0.0.1:8080, env: CVA_ADDR)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
 	"github.com/siisee11/CodexVirtualAssistant/internal/store"
@@ -25,9 +26,9 @@ func NewClient(baseURL string) *Client {
 }
 
 type createRunRequest struct {
-	UserRequestRaw       string `json:"user_request_raw"`
+	UserRequestRaw        string `json:"user_request_raw"`
 	MaxGenerationAttempts int    `json:"max_generation_attempts,omitempty"`
-	ParentRunID          string `json:"parent_run_id,omitempty"`
+	ParentRunID           string `json:"parent_run_id,omitempty"`
 }
 
 type createRunResponse struct {
@@ -41,11 +42,15 @@ type chatsResponse struct {
 	Chats []assistant.Chat `json:"chats"`
 }
 
+type scheduledRunsResponse struct {
+	ScheduledRuns []assistant.ScheduledRun `json:"scheduled_runs"`
+}
+
 func (c *Client) CreateRun(ctx context.Context, request string, maxAttempts int, parentRunID string) (*createRunResponse, error) {
 	body := createRunRequest{
-		UserRequestRaw:       request,
+		UserRequestRaw:        request,
 		MaxGenerationAttempts: maxAttempts,
-		ParentRunID:          parentRunID,
+		ParentRunID:           parentRunID,
 	}
 	var resp createRunResponse
 	if err := c.post(ctx, "/api/v1/runs", body, &resp); err != nil {
@@ -92,6 +97,41 @@ func (c *Client) ResumeRun(ctx context.Context, runID string, input map[string]s
 	}{Input: input}
 	var resp json.RawMessage
 	return c.post(ctx, "/api/v1/runs/"+runID+"/resume", body, &resp)
+}
+
+func (c *Client) ListScheduledRuns(ctx context.Context, chatID string, status assistant.ScheduledRunStatus) ([]assistant.ScheduledRun, error) {
+	path := "/api/v1/scheduled"
+	query := make([]string, 0, 2)
+	if chatID != "" {
+		query = append(query, "chat_id="+chatID)
+	}
+	if status != "" {
+		query = append(query, "status="+string(status))
+	}
+	if len(query) > 0 {
+		path += "?" + strings.Join(query, "&")
+	}
+	var resp scheduledRunsResponse
+	if err := c.get(ctx, path, &resp); err != nil {
+		return nil, err
+	}
+	return resp.ScheduledRuns, nil
+}
+
+func (c *Client) GetScheduledRun(ctx context.Context, scheduledRunID string) (*assistant.ScheduledRun, error) {
+	var resp assistant.ScheduledRun
+	if err := c.get(ctx, "/api/v1/scheduled/"+scheduledRunID, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) CancelScheduledRun(ctx context.Context, scheduledRunID string) (*assistant.ScheduledRun, error) {
+	var resp assistant.ScheduledRun
+	if err := c.post(ctx, "/api/v1/scheduled/"+scheduledRunID+"/cancel", nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 func (c *Client) StreamEvents(ctx context.Context, runID string) (io.ReadCloser, error) {

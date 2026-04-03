@@ -163,13 +163,80 @@ func TestEventBrokerHookUnregisterStopsFutureDispatch(t *testing.T) {
 	}
 }
 
+func TestEventBrokerDispatchesScheduleTriggeredHookWithScheduledRunContext(t *testing.T) {
+	t.Parallel()
+
+	broker := NewEventBroker()
+	broker.SetSnapshotLoader(fakeRunRecordLoader{
+		record: store.RunRecord{
+			Run: assistant.Run{
+				ID:     "run_parent",
+				ChatID: "chat_123",
+				Status: assistant.RunStatusCompleted,
+				Phase:  assistant.RunPhaseCompleted,
+			},
+		},
+		run: assistant.Run{
+			ID: "run_created",
+		},
+		scheduledRun: assistant.ScheduledRun{
+			ID:           "scheduled_1",
+			ChatID:       "chat_123",
+			RunID:        "run_created",
+			Status:       assistant.ScheduledRunStatusTriggered,
+			CreatedAt:    time.Date(2026, time.April, 3, 12, 0, 0, 0, time.UTC),
+			ScheduledFor: time.Date(2026, time.April, 3, 13, 0, 0, 0, time.UTC),
+		},
+	})
+
+	payloads := make(chan HookPayload, 1)
+	unregister := broker.RegisterHook(HookOnScheduleTriggered, func(_ context.Context, payload HookPayload) error {
+		payloads <- payload
+		return nil
+	})
+	defer unregister()
+
+	err := broker.Publish(context.Background(), assistant.RunEvent{
+		RunID: "run_parent",
+		Type:  assistant.EventTypeScheduleTriggered,
+		Data: map[string]any{
+			"scheduled_run_id": "scheduled_1",
+			"created_run_id":   "run_created",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	got := waitForHookPayloads(t, payloads, 1)
+	if got[0].ScheduledRun == nil || got[0].ScheduledRun.ID != "scheduled_1" {
+		t.Fatalf("ScheduledRun = %#v, want scheduled_1", got[0].ScheduledRun)
+	}
+	if got[0].CreatedRun == nil || got[0].CreatedRun.ID != "run_created" {
+		t.Fatalf("CreatedRun = %#v, want run_created", got[0].CreatedRun)
+	}
+}
+
 type fakeRunRecordLoader struct {
-	record store.RunRecord
-	err    error
+	record       store.RunRecord
+	run          assistant.Run
+	scheduledRun assistant.ScheduledRun
+	err          error
 }
 
 func (f fakeRunRecordLoader) GetRunRecord(context.Context, string) (store.RunRecord, error) {
 	return f.record, f.err
+}
+
+func (f fakeRunRecordLoader) GetRun(context.Context, string) (assistant.Run, error) {
+	if f.run.ID != "" {
+		return f.run, f.err
+	}
+	return f.record.Run, f.err
+}
+
+func (f fakeRunRecordLoader) GetScheduledRun(context.Context, string) (assistant.ScheduledRun, error) {
+	return f.scheduledRun, f.err
 }
 
 func waitForHookPayloads(t *testing.T, ch <-chan HookPayload, want int) []HookPayload {

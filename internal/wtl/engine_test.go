@@ -340,6 +340,51 @@ func TestRunEnginePreservesWorkflowOrderAfterGate(t *testing.T) {
 	}
 }
 
+func TestRunEngineCreatesScheduledRunsDuringSchedulingPhase(t *testing.T) {
+	t.Parallel()
+
+	repo, dataDir := openEngineTestRepository(t)
+	now := time.Date(2026, time.April, 3, 12, 0, 0, 0, time.UTC)
+	runtime := &orderedRuntime{
+		steps: []orderedRuntimeStep{
+			{role: assistant.AttemptRoleGate, response: PhaseResponse{Summary: "Gate routed to workflow.", Output: gateJSON("workflow", "This request needs execution.")}},
+			{role: assistant.AttemptRoleProjectSelector, response: PhaseResponse{Summary: "Project selected.", Output: selectorJSON("hospital-outreach", "Hospital Outreach", "Research and contact hospitals.")}},
+			{role: assistant.AttemptRolePlanner, response: PhaseResponse{Summary: "Planner complete.", Output: plannerJSONWithSchedule("Research hospitals", []string{"Hospital shortlist"}, []assistant.ScheduleEntry{
+				{ScheduledFor: "13:00", Prompt: "Call the first shortlisted hospital."},
+				{ScheduledFor: "+90m", Prompt: "Call the second shortlisted hospital."},
+			})}},
+			{role: assistant.AttemptRoleContractor, response: PhaseResponse{Summary: "Contract agreed.", Output: contractJSON("agreed", []string{"Hospital shortlist"}, []string{"Identify hospitals and schedule follow-up calls"}, "")}},
+			{role: assistant.AttemptRoleGenerator, response: PhaseResponse{Summary: "Generator produced output."}},
+			{role: assistant.AttemptRoleEvaluator, response: PhaseResponse{Summary: "Evaluator passed.", Output: evaluatorJSON(true, 95, "Workflow is complete.", nil, "")}},
+			{role: assistant.AttemptRoleScheduler, response: PhaseResponse{Summary: "Scheduler finalized prompts.", Output: schedulerJSON([]assistant.ScheduleEntry{
+				{ScheduledFor: "2026-04-03T13:00:00Z", Prompt: "Call Saint Mary Hospital at +1-555-0100."},
+				{ScheduledFor: "2026-04-03T13:30:00Z", Prompt: "Call General Hospital at +1-555-0101."},
+			})}},
+			{role: assistant.AttemptRoleReporter, response: PhaseResponse{Summary: "Delivered final report.", Output: reportJSON("Delivered final report.", "Scheduled hospital outreach.")}},
+		},
+	}
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
+
+	run := assistant.NewRun("Research hospitals and then call them later.", now, 1)
+	if err := engine.Start(context.Background(), run); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	record, err := repo.GetRunRecord(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("GetRunRecord() error = %v", err)
+	}
+	if len(record.ScheduledRuns) != 2 {
+		t.Fatalf("len(record.ScheduledRuns) = %d, want 2", len(record.ScheduledRuns))
+	}
+	if record.Attempts[len(record.Attempts)-2].Role != assistant.AttemptRoleScheduler {
+		t.Fatalf("attempt roles = %#v, want scheduler before reporter", record.Attempts)
+	}
+	if record.ScheduledRuns[0].Status != assistant.ScheduledRunStatusPending {
+		t.Fatalf("ScheduledRuns[0].Status = %q, want pending", record.ScheduledRuns[0].Status)
+	}
+}
+
 func TestRunEngineReportCanEnterWaiting(t *testing.T) {
 	t.Parallel()
 
@@ -535,6 +580,18 @@ func plannerJSON(goal string, deliverables []string) string {
 	return fmt.Sprintf(`{"goal":%q,"deliverables":["%s"],"constraints":[],"tools_allowed":["agent-browser"],"tools_required":["agent-browser"],"done_definition":["Produce the requested deliverables"],"evidence_required":["Capture source evidence"],"risk_flags":[],"max_generation_attempts":2}`, goal, stringsJoin(deliverables))
 }
 
+func plannerJSONWithSchedule(goal string, deliverables []string, entries []assistant.ScheduleEntry) string {
+	scheduleJSON := "null"
+	if len(entries) > 0 {
+		parts := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			parts = append(parts, fmt.Sprintf(`{"scheduled_for":%q,"prompt":%q}`, entry.ScheduledFor, entry.Prompt))
+		}
+		scheduleJSON = fmt.Sprintf(`{"entries":[%s]}`, strings.Join(parts, ","))
+	}
+	return fmt.Sprintf(`{"goal":%q,"deliverables":["%s"],"constraints":[],"tools_allowed":["agent-browser"],"tools_required":["agent-browser"],"done_definition":["Produce the requested deliverables"],"evidence_required":["Capture source evidence"],"risk_flags":[],"max_generation_attempts":2,"schedule_plan":%s}`, goal, stringsJoin(deliverables), scheduleJSON)
+}
+
 func contractJSON(decision string, deliverables []string, acceptanceCriteria []string, revisionNotes string) string {
 	return fmt.Sprintf(`{"decision":%q,"summary":"Contract review completed.","deliverables":["%s"],"acceptance_criteria":["%s"],"evidence_required":["Capture source evidence"],"constraints":[],"out_of_scope":[],"revision_notes":%q}`, decision, stringsJoin(deliverables), stringsJoin(acceptanceCriteria), revisionNotes)
 }
@@ -558,6 +615,14 @@ func evaluatorJSON(passed bool, score int, summary string, missing []string, nex
 func reportJSON(summary, preview string) string {
 	payload := `{"root":"screen","elements":{"screen":{"type":"Text","props":{"text":"Delivered final report."},"children":[]}}}`
 	return fmt.Sprintf(`{"summary":%q,"delivery_status":"sent","message_preview":%q,"report_payload":%q,"needs_user_input":false,"wait_kind":"","wait_title":"","wait_prompt":"","wait_risk_summary":""}`, summary, preview, payload)
+}
+
+func schedulerJSON(entries []assistant.ScheduleEntry) string {
+	parts := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		parts = append(parts, fmt.Sprintf(`{"scheduled_for":%q,"prompt":%q}`, entry.ScheduledFor, entry.Prompt))
+	}
+	return fmt.Sprintf(`{"entries":[%s]}`, strings.Join(parts, ","))
 }
 
 func stringsJoin(values []string) string {

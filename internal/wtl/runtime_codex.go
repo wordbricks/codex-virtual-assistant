@@ -213,6 +213,9 @@ func phaseTools(run assistant.Run, role assistant.AttemptRole) []string {
 	if role == assistant.AttemptRoleContractor {
 		return []string{"stored-plan"}
 	}
+	if role == assistant.AttemptRoleScheduler {
+		return []string{"stored-plan", "stored-artifacts", "stored-evidence"}
+	}
 	if role == assistant.AttemptRoleReporter {
 		return []string{"agent-message", "stored-artifacts", "stored-evidence", "stored-evaluations"}
 	}

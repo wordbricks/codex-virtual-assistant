@@ -16,15 +16,16 @@ import (
 var ErrNotFound = errors.New("store: not found")
 
 type RunRecord struct {
-	Run          assistant.Run           `json:"run"`
-	Events       []assistant.RunEvent    `json:"events"`
-	Attempts     []assistant.Attempt     `json:"attempts"`
-	Artifacts    []assistant.Artifact    `json:"artifacts"`
-	Evidence     []assistant.Evidence    `json:"evidence"`
-	Evaluations  []assistant.Evaluation  `json:"evaluations"`
-	ToolCalls    []assistant.ToolCall    `json:"tool_calls"`
-	WebSteps     []assistant.WebStep     `json:"web_steps"`
-	WaitRequests []assistant.WaitRequest `json:"wait_requests"`
+	Run           assistant.Run            `json:"run"`
+	Events        []assistant.RunEvent     `json:"events"`
+	Attempts      []assistant.Attempt      `json:"attempts"`
+	Artifacts     []assistant.Artifact     `json:"artifacts"`
+	Evidence      []assistant.Evidence     `json:"evidence"`
+	Evaluations   []assistant.Evaluation   `json:"evaluations"`
+	ToolCalls     []assistant.ToolCall     `json:"tool_calls"`
+	WebSteps      []assistant.WebStep      `json:"web_steps"`
+	WaitRequests  []assistant.WaitRequest  `json:"wait_requests"`
+	ScheduledRuns []assistant.ScheduledRun `json:"scheduled_runs"`
 }
 
 type ChatRecord struct {
@@ -236,6 +237,80 @@ INSERT INTO wait_requests (id, run_id, kind, title, prompt, risk_summary, create
 VALUES (%s, %s, %s, %s, %s, %s, %s);
 `, sqlText(waitRequest.ID), sqlText(waitRequest.RunID), sqlText(string(waitRequest.Kind)), sqlText(waitRequest.Title), sqlText(waitRequest.Prompt), sqlText(waitRequest.RiskSummary), sqlTime(waitRequest.CreatedAt))
 	return r.exec(ctx, script)
+}
+
+func (r *SQLiteRepository) SaveScheduledRun(ctx context.Context, scheduledRun assistant.ScheduledRun) error {
+	if err := scheduledRun.Validate(); err != nil {
+		return err
+	}
+
+	script := fmt.Sprintf(`
+INSERT INTO scheduled_runs (
+	id,
+	chat_id,
+	parent_run_id,
+	user_request_raw,
+	max_generation_attempts,
+	scheduled_for,
+	status,
+	run_id,
+	error_message,
+	created_at,
+	triggered_at
+) VALUES (
+	%s,
+	%s,
+	%s,
+	%s,
+	%d,
+	%s,
+	%s,
+	%s,
+	%s,
+	%s,
+	%s
+)
+ON CONFLICT(id) DO UPDATE SET
+	chat_id = excluded.chat_id,
+	parent_run_id = excluded.parent_run_id,
+	user_request_raw = excluded.user_request_raw,
+	max_generation_attempts = excluded.max_generation_attempts,
+	scheduled_for = excluded.scheduled_for,
+	status = excluded.status,
+	run_id = excluded.run_id,
+	error_message = excluded.error_message,
+	created_at = excluded.created_at,
+	triggered_at = excluded.triggered_at;
+`, sqlText(scheduledRun.ID), sqlText(scheduledRun.ChatID), sqlText(scheduledRun.ParentRunID), sqlText(scheduledRun.UserRequestRaw), scheduledRun.MaxGenerationAttempts, sqlTime(scheduledRun.ScheduledFor), sqlText(string(scheduledRun.Status)), sqlNullableText(scheduledRun.RunID), sqlText(scheduledRun.ErrorMessage), sqlTime(scheduledRun.CreatedAt), sqlNullableTime(scheduledRun.TriggeredAt))
+
+	return r.exec(ctx, script)
+}
+
+func (r *SQLiteRepository) GetScheduledRun(ctx context.Context, scheduledRunID string) (assistant.ScheduledRun, error) {
+	rows, err := queryRows[scheduledRunRow](ctx, r, fmt.Sprintf(`
+SELECT
+	id,
+	chat_id,
+	parent_run_id,
+	user_request_raw,
+	max_generation_attempts,
+	scheduled_for,
+	status,
+	COALESCE(run_id, '') AS run_id,
+	COALESCE(error_message, '') AS error_message,
+	created_at,
+	COALESCE(triggered_at, '') AS triggered_at
+FROM scheduled_runs
+WHERE id = %s
+LIMIT 1;
+`, sqlText(scheduledRunID)))
+	if err != nil {
+		return assistant.ScheduledRun{}, err
+	}
+	if len(rows) == 0 {
+		return assistant.ScheduledRun{}, ErrNotFound
+	}
+	return rows[0].toAssistantScheduledRun()
 }
 
 func (r *SQLiteRepository) GetRun(ctx context.Context, runID string) (assistant.Run, error) {
@@ -522,6 +597,138 @@ ORDER BY created_at ASC;
 	return waitRequests, nil
 }
 
+func (r *SQLiteRepository) ListPendingScheduledRuns(ctx context.Context, before time.Time) ([]assistant.ScheduledRun, error) {
+	return r.listScheduledRunsWithQuery(ctx, fmt.Sprintf(`
+SELECT
+	id,
+	chat_id,
+	parent_run_id,
+	user_request_raw,
+	max_generation_attempts,
+	scheduled_for,
+	status,
+	COALESCE(run_id, '') AS run_id,
+	COALESCE(error_message, '') AS error_message,
+	created_at,
+	COALESCE(triggered_at, '') AS triggered_at
+FROM scheduled_runs
+WHERE status = %s
+	AND scheduled_for <= %s
+ORDER BY scheduled_for ASC, created_at ASC;
+`, sqlText(string(assistant.ScheduledRunStatusPending)), sqlTime(before.UTC())))
+}
+
+func (r *SQLiteRepository) ListScheduledRunsByParent(ctx context.Context, parentRunID string) ([]assistant.ScheduledRun, error) {
+	return r.listScheduledRunsWithQuery(ctx, fmt.Sprintf(`
+SELECT
+	id,
+	chat_id,
+	parent_run_id,
+	user_request_raw,
+	max_generation_attempts,
+	scheduled_for,
+	status,
+	COALESCE(run_id, '') AS run_id,
+	COALESCE(error_message, '') AS error_message,
+	created_at,
+	COALESCE(triggered_at, '') AS triggered_at
+FROM scheduled_runs
+WHERE parent_run_id = %s
+ORDER BY scheduled_for ASC, created_at ASC;
+`, sqlText(parentRunID)))
+}
+
+func (r *SQLiteRepository) ListScheduledRunsByChat(ctx context.Context, chatID string) ([]assistant.ScheduledRun, error) {
+	return r.listScheduledRunsWithQuery(ctx, fmt.Sprintf(`
+SELECT
+	id,
+	chat_id,
+	parent_run_id,
+	user_request_raw,
+	max_generation_attempts,
+	scheduled_for,
+	status,
+	COALESCE(run_id, '') AS run_id,
+	COALESCE(error_message, '') AS error_message,
+	created_at,
+	COALESCE(triggered_at, '') AS triggered_at
+FROM scheduled_runs
+WHERE chat_id = %s
+ORDER BY scheduled_for ASC, created_at ASC;
+`, sqlText(chatID)))
+}
+
+func (r *SQLiteRepository) ListScheduledRuns(ctx context.Context, chatID string, status assistant.ScheduledRunStatus) ([]assistant.ScheduledRun, error) {
+	clauses := []string{"1 = 1"}
+	if trimmed := strings.TrimSpace(chatID); trimmed != "" {
+		clauses = append(clauses, fmt.Sprintf("chat_id = %s", sqlText(trimmed)))
+	}
+	if trimmed := strings.TrimSpace(string(status)); trimmed != "" {
+		clauses = append(clauses, fmt.Sprintf("status = %s", sqlText(trimmed)))
+	}
+	return r.listScheduledRunsWithQuery(ctx, fmt.Sprintf(`
+SELECT
+	id,
+	chat_id,
+	parent_run_id,
+	user_request_raw,
+	max_generation_attempts,
+	scheduled_for,
+	status,
+	COALESCE(run_id, '') AS run_id,
+	COALESCE(error_message, '') AS error_message,
+	created_at,
+	COALESCE(triggered_at, '') AS triggered_at
+FROM scheduled_runs
+WHERE %s
+ORDER BY scheduled_for ASC, created_at ASC;
+`, strings.Join(clauses, " AND ")))
+}
+
+func (r *SQLiteRepository) UpdateScheduledRunTriggered(ctx context.Context, scheduledRunID, runID string, triggeredAt time.Time) error {
+	script := fmt.Sprintf(`
+UPDATE scheduled_runs
+SET status = %s,
+	run_id = %s,
+	error_message = '',
+	triggered_at = %s
+WHERE id = %s;
+`, sqlText(string(assistant.ScheduledRunStatusTriggered)), sqlText(runID), sqlTime(triggeredAt.UTC()), sqlText(scheduledRunID))
+	return r.exec(ctx, script)
+}
+
+func (r *SQLiteRepository) UpdateScheduledRunStatus(ctx context.Context, scheduledRunID string, status assistant.ScheduledRunStatus, errorMessage string) error {
+	triggeredAtExpr := "triggered_at"
+	if status != assistant.ScheduledRunStatusTriggered {
+		triggeredAtExpr = "NULL"
+	}
+	script := fmt.Sprintf(`
+UPDATE scheduled_runs
+SET status = %s,
+	error_message = %s,
+	run_id = CASE WHEN %s = 'triggered' THEN run_id ELSE NULL END,
+	triggered_at = %s
+WHERE id = %s;
+`, sqlText(string(status)), sqlText(strings.TrimSpace(errorMessage)), sqlText(string(status)), triggeredAtExpr, sqlText(scheduledRunID))
+	return r.exec(ctx, script)
+}
+
+func (r *SQLiteRepository) listScheduledRunsWithQuery(ctx context.Context, query string) ([]assistant.ScheduledRun, error) {
+	rows, err := queryRows[scheduledRunRow](ctx, r, query)
+	if err != nil {
+		return nil, err
+	}
+	scheduledRuns := make([]assistant.ScheduledRun, 0, len(rows))
+	for _, row := range rows {
+		scheduledRun, err := row.toAssistantScheduledRun()
+		if err != nil {
+			return nil, err
+		}
+		scheduledRuns = append(scheduledRuns, scheduledRun)
+	}
+	return scheduledRuns, nil
+}
+
 func (r *SQLiteRepository) GetRunRecord(ctx context.Context, runID string) (RunRecord, error) {
 	run, err := r.GetRun(ctx, runID)
 	if err != nil {
@@ -559,6 +766,10 @@ func (r *SQLiteRepository) GetRunRecord(ctx context.Context, runID string) (RunR
 	if err != nil {
 		return RunRecord{}, err
 	}
+	scheduledRuns, err := r.ListScheduledRunsByParent(ctx, runID)
+	if err != nil {
+		return RunRecord{}, err
+	}
 
 	run.AttemptCount = len(attempts)
 	if len(evaluations) > 0 {
@@ -571,15 +782,16 @@ func (r *SQLiteRepository) GetRunRecord(ctx context.Context, runID string) (RunR
 	}
 
 	return RunRecord{
-		Run:          run,
-		Events:       events,
-		Attempts:     attempts,
-		Artifacts:    artifacts,
-		Evidence:     evidence,
-		Evaluations:  evaluations,
-		ToolCalls:    toolCalls,
-		WebSteps:     webSteps,
-		WaitRequests: waitRequests,
+		Run:           run,
+		Events:        events,
+		Attempts:      attempts,
+		Artifacts:     artifacts,
+		Evidence:      evidence,
+		Evaluations:   evaluations,
+		ToolCalls:     toolCalls,
+		WebSteps:      webSteps,
+		WaitRequests:  waitRequests,
+		ScheduledRuns: scheduledRuns,
 	}, nil
 }
 

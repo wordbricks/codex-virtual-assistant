@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
 )
@@ -178,6 +179,57 @@ func FailedCard(run assistant.Run, summary string) LifecycleCard {
 		Details: []string{
 			fmt.Sprintf("Run id: %s", run.ID),
 			"Inspect the run details and retry with the missing information or access.",
+		},
+	}
+}
+
+func ScheduleCreatedCard(run assistant.Run, scheduledRuns []assistant.ScheduledRun) LifecycleCard {
+	details := []string{fmt.Sprintf("Parent run: %s", run.ID)}
+	if len(scheduledRuns) > 0 {
+		first := scheduledRuns[0].ScheduledFor.Local().Format(time.DateTime)
+		last := scheduledRuns[len(scheduledRuns)-1].ScheduledFor.Local().Format(time.DateTime)
+		details = append(details, fmt.Sprintf("Scheduled items: %d", len(scheduledRuns)))
+		details = append(details, fmt.Sprintf("Time range: %s to %s", first, last))
+		for idx, scheduledRun := range scheduledRuns {
+			details = append(details, fmt.Sprintf("%d. %s - %s", idx+1, scheduledRun.ScheduledFor.Local().Format(time.DateTime), firstNonEmpty(scheduledRun.UserRequestRaw, scheduledRun.ID)))
+			if idx >= 2 {
+				break
+			}
+		}
+	}
+	return LifecycleCard{
+		Badge:      "Scheduled",
+		Title:      "CVA queued deferred work",
+		StatusText: fmt.Sprintf("%d scheduled item(s) were created.", len(scheduledRuns)),
+		Details:    details,
+	}
+}
+
+func ScheduleTriggeredCard(scheduledRun assistant.ScheduledRun, createdRun assistant.Run) LifecycleCard {
+	details := []string{
+		fmt.Sprintf("Scheduled run: %s", scheduledRun.ID),
+		fmt.Sprintf("Triggered at: %s", scheduledRun.ScheduledFor.Local().Format(time.DateTime)),
+	}
+	if strings.TrimSpace(createdRun.ID) != "" {
+		details = append(details, fmt.Sprintf("Created run: %s", createdRun.ID))
+	}
+	return LifecycleCard{
+		Badge:      "Triggered",
+		Title:      "CVA started a scheduled run",
+		StatusText: firstNonEmpty(scheduledRun.UserRequestRaw, "A deferred task started."),
+		Details:    details,
+	}
+}
+
+func ScheduleFailedCard(scheduledRun assistant.ScheduledRun, errorMsg string) LifecycleCard {
+	return LifecycleCard{
+		Badge:      "Schedule failed",
+		Title:      "CVA could not start a scheduled run",
+		StatusText: firstNonEmpty(errorMsg, scheduledRun.ErrorMessage, "The scheduled task could not be started."),
+		Details: []string{
+			fmt.Sprintf("Scheduled run: %s", scheduledRun.ID),
+			fmt.Sprintf("Planned time: %s", scheduledRun.ScheduledFor.Local().Format(time.DateTime)),
+			firstNonEmpty(scheduledRun.UserRequestRaw, "Deferred task details were unavailable."),
 		},
 	}
 }

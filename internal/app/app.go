@@ -12,6 +12,7 @@ import (
 	"github.com/siisee11/CodexVirtualAssistant/internal/config"
 	"github.com/siisee11/CodexVirtualAssistant/internal/policy/gan"
 	"github.com/siisee11/CodexVirtualAssistant/internal/project"
+	"github.com/siisee11/CodexVirtualAssistant/internal/scheduler"
 	"github.com/siisee11/CodexVirtualAssistant/internal/store"
 	"github.com/siisee11/CodexVirtualAssistant/internal/wtl"
 )
@@ -23,6 +24,7 @@ type App struct {
 	events    *api.EventBroker
 	server    *http.Server
 	messenger agentmessage.Service
+	scheduler *scheduler.Scheduler
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -64,6 +66,7 @@ func NewWithExecutorAndMessenger(cfg config.Config, executor wtl.CodexPhaseExecu
 	runtime := wtl.NewCodexRuntime(executor, cfg.DefaultModel, time.Now)
 	engine := wtl.NewRunEngine(repo, runtime, events, policy, projectManager, messenger, time.Now)
 	runs := assistantapp.NewRunService(context.Background(), repo, engine, policy, time.Now)
+	backgroundScheduler := scheduler.New(repo, runs, events, cfg.SchedulerInterval, time.Now)
 
 	handler, err := api.NewHandler(cfg, runs, events)
 	if err != nil {
@@ -78,6 +81,7 @@ func NewWithExecutorAndMessenger(cfg config.Config, executor wtl.CodexPhaseExecu
 		runtime:   runtime,
 		events:    events,
 		messenger: messenger,
+		scheduler: backgroundScheduler,
 		server: &http.Server{
 			Addr:              cfg.HTTPAddr,
 			Handler:           handler,
@@ -135,6 +139,24 @@ func registerAgentMessageHooks(events *api.EventBroker, messenger agentmessage.S
 		spec, err := agentmessage.RenderLifecycleCard(agentmessage.FailedCard(payload.Record.Run, payload.Event.Summary))
 		return spec, err == nil
 	})
+	register(api.HookOnScheduleCreated, func(payload api.HookPayload) (string, bool) {
+		spec, err := agentmessage.RenderLifecycleCard(agentmessage.ScheduleCreatedCard(payload.Record.Run, payload.Record.ScheduledRuns))
+		return spec, err == nil
+	})
+	register(api.HookOnScheduleTriggered, func(payload api.HookPayload) (string, bool) {
+		if payload.ScheduledRun == nil || payload.CreatedRun == nil {
+			return "", false
+		}
+		spec, err := agentmessage.RenderLifecycleCard(agentmessage.ScheduleTriggeredCard(*payload.ScheduledRun, *payload.CreatedRun))
+		return spec, err == nil
+	})
+	register(api.HookOnScheduleFailed, func(payload api.HookPayload) (string, bool) {
+		if payload.ScheduledRun == nil {
+			return "", false
+		}
+		spec, err := agentmessage.RenderLifecycleCard(agentmessage.ScheduleFailedCard(*payload.ScheduledRun, payload.Event.Summary))
+		return spec, err == nil
+	})
 }
 
 func (a *App) Run(ctx context.Context) error {
@@ -145,6 +167,16 @@ func (a *App) Run(ctx context.Context) error {
 	go func() {
 		errCh <- a.server.ListenAndServe()
 	}()
+	if a.scheduler != nil {
+		go func() {
+			if err := a.scheduler.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				select {
+				case errCh <- err:
+				default:
+				}
+			}
+		}()
+	}
 
 	select {
 	case err := <-errCh:

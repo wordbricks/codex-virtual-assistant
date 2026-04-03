@@ -361,6 +361,74 @@ func TestRunsAPICancelAndEventsStream(t *testing.T) {
 	}
 }
 
+func TestScheduledRunsAPIListShowAndCancel(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestAPIHandler(t, &sequenceExecutor{
+		steps: []executorStep{
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request requires full workflow execution.")},
+			{role: assistant.AttemptRoleProjectSelector, result: projectSelectorPhaseResult("hospital-outreach", "Hospital Outreach", "Research and contact hospitals.")},
+			{role: assistant.AttemptRolePlanner, result: plannerPhaseResultWithSchedule("Research hospitals", []string{"Hospital shortlist"}, []assistant.ScheduleEntry{
+				{ScheduledFor: "13:00", Prompt: "Call the first shortlisted hospital."},
+			})},
+			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Hospital shortlist"})},
+			{role: assistant.AttemptRoleGenerator, result: generatorPhaseResult("Prepared hospital shortlist")},
+			{role: assistant.AttemptRoleEvaluator, result: evaluatorPhaseResult(true, 92, "The result package is complete.", nil, "")},
+			{role: assistant.AttemptRoleScheduler, result: schedulerPhaseResult([]assistant.ScheduleEntry{
+				{ScheduledFor: "2026-04-03T13:00:00Z", Prompt: "Call Saint Mary Hospital at +1-555-0100."},
+			})},
+			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered final report.", "Hospital outreach scheduled.")},
+		},
+	})
+
+	createResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "Research hospitals and schedule a call later.",
+	})
+	if createResponse.Code != http.StatusAccepted {
+		t.Fatalf("POST /runs status = %d, want %d", createResponse.Code, http.StatusAccepted)
+	}
+
+	var created createRunResponse
+	if err := json.Unmarshal(createResponse.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	record := waitForRunStatus(t, handler, created.Run.ID, assistant.RunStatusCompleted)
+	if len(record.ScheduledRuns) != 1 {
+		t.Fatalf("len(record.ScheduledRuns) = %d, want 1", len(record.ScheduledRuns))
+	}
+	scheduledRunID := record.ScheduledRuns[0].ID
+
+	listResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/scheduled?chat_id="+created.Run.ChatID+"&status=pending", nil)
+	if listResponse.Code != http.StatusOK {
+		t.Fatalf("GET /scheduled status = %d, want %d", listResponse.Code, http.StatusOK)
+	}
+	var listed struct {
+		ScheduledRuns []assistant.ScheduledRun `json:"scheduled_runs"`
+	}
+	if err := json.Unmarshal(listResponse.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if len(listed.ScheduledRuns) != 1 || listed.ScheduledRuns[0].ID != scheduledRunID {
+		t.Fatalf("listed = %#v, want scheduled run %s", listed, scheduledRunID)
+	}
+
+	showResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/scheduled/"+scheduledRunID, nil)
+	if showResponse.Code != http.StatusOK {
+		t.Fatalf("GET /scheduled/:id status = %d, want %d", showResponse.Code, http.StatusOK)
+	}
+
+	cancelResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/scheduled/"+scheduledRunID+"/cancel", map[string]any{})
+	if cancelResponse.Code != http.StatusOK {
+		t.Fatalf("POST /scheduled/:id/cancel status = %d, want %d", cancelResponse.Code, http.StatusOK)
+	}
+
+	byParentResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/runs/"+created.Run.ID+"/scheduled", nil)
+	if byParentResponse.Code != http.StatusOK {
+		t.Fatalf("GET /runs/:id/scheduled status = %d, want %d", byParentResponse.Code, http.StatusOK)
+	}
+}
+
 func TestRunAPIArtifactURL(t *testing.T) {
 	t.Parallel()
 
@@ -521,6 +589,27 @@ func plannerPhaseResult(goal string, deliverables []string) wtl.CodexPhaseResult
 	}
 }
 
+func plannerPhaseResultWithSchedule(goal string, deliverables []string, entries []assistant.ScheduleEntry) wtl.CodexPhaseResult {
+	output, _ := json.Marshal(map[string]any{
+		"goal":                    goal,
+		"deliverables":            deliverables,
+		"constraints":             []string{},
+		"tools_allowed":           []string{"agent-browser"},
+		"tools_required":          []string{"agent-browser"},
+		"done_definition":         []string{"Produce the requested deliverables"},
+		"evidence_required":       []string{"Capture browser evidence"},
+		"risk_flags":              []string{},
+		"max_generation_attempts": 2,
+		"schedule_plan": map[string]any{
+			"entries": entries,
+		},
+	})
+	return wtl.CodexPhaseResult{
+		Summary: "Planner normalized the task.",
+		Output:  string(output),
+	}
+}
+
 func gatePhaseResult(route, reason string) wtl.CodexPhaseResult {
 	output, _ := json.Marshal(map[string]any{
 		"route":   route,
@@ -641,6 +730,16 @@ func reportPhaseResult(summary, preview string) wtl.CodexPhaseResult {
 	})
 	return wtl.CodexPhaseResult{
 		Summary: summary,
+		Output:  string(output),
+	}
+}
+
+func schedulerPhaseResult(entries []assistant.ScheduleEntry) wtl.CodexPhaseResult {
+	output, _ := json.Marshal(map[string]any{
+		"entries": entries,
+	})
+	return wtl.CodexPhaseResult{
+		Summary: "Scheduler finalized the scheduled prompts.",
 		Output:  string(output),
 	}
 }

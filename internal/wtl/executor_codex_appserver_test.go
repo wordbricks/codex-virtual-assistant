@@ -99,6 +99,9 @@ func TestPhaseForAttemptRoleSupportsGateAnswerAndReport(t *testing.T) {
 	if got := phaseForAttemptRole(assistant.AttemptRoleReporter); got != assistant.RunPhaseReporting {
 		t.Fatalf("phaseForAttemptRole(reporter) = %q, want %q", got, assistant.RunPhaseReporting)
 	}
+	if got := phaseForAttemptRole(assistant.AttemptRoleScheduler); got != assistant.RunPhaseScheduling {
+		t.Fatalf("phaseForAttemptRole(scheduler) = %q, want %q", got, assistant.RunPhaseScheduling)
+	}
 }
 
 func TestPhaseOutputSchemaSupportsGateAnswerAndReport(t *testing.T) {
@@ -140,5 +143,17 @@ func TestPhaseOutputSchemaSupportsGateAnswerAndReport(t *testing.T) {
 	}
 	if _, ok := reportProperties["report_payload"]; !ok {
 		t.Fatalf("report schema properties = %#v, want report_payload", reportProperties)
+	}
+
+	scheduler := phaseOutputSchema(assistant.AttemptRoleScheduler)
+	if scheduler == nil {
+		t.Fatal("phaseOutputSchema(scheduler) = nil")
+	}
+	schedulerProperties, ok := scheduler["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("scheduler schema properties type = %T, want map[string]any", scheduler["properties"])
+	}
+	if _, ok := schedulerProperties["entries"]; !ok {
+		t.Fatalf("scheduler schema properties = %#v, want entries", schedulerProperties)
 	}
 }

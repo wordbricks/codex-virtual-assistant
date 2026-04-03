@@ -22,6 +22,9 @@ func TestBuildPlannerPromptDeclaresStrictJSONContract(t *testing.T) {
 	if !strings.Contains(bundle.System, "tools_allowed") || !strings.Contains(bundle.System, "done_definition") {
 		t.Fatalf("System prompt = %q, want required planner keys", bundle.System)
 	}
+	if !strings.Contains(bundle.System, "schedule_plan") {
+		t.Fatalf("System prompt = %q, want schedule_plan guidance", bundle.System)
+	}
 	if !strings.Contains(bundle.User, "Default max generation attempts: 4") {
 		t.Fatalf("User prompt = %q, want attempt count", bundle.User)
 	}
@@ -223,6 +226,41 @@ func TestDecodePlannerOutputNormalizesTaskSpec(t *testing.T) {
 	}
 	if len(spec.DoneDefinition) == 0 || len(spec.EvidenceRequired) == 0 {
 		t.Fatal("expected normalized done definition and evidence requirements")
+	}
+}
+
+func TestBuildAndDecodeSchedulerPrompt(t *testing.T) {
+	t.Parallel()
+
+	bundle := BuildSchedulerPrompt(SchedulerInput{
+		Run: assistant.Run{
+			UserRequestRaw: "Research hospitals and call them later.",
+			TaskSpec: assistant.TaskSpec{
+				Goal: "Research hospitals",
+				SchedulePlan: &assistant.SchedulePlan{
+					Entries: []assistant.ScheduleEntry{
+						{ScheduledFor: "13:00", Prompt: "Call the first hospital."},
+					},
+				},
+			},
+		},
+		Artifacts: []assistant.Artifact{{Title: "Hospital shortlist", Kind: assistant.ArtifactKindReport, MIMEType: "text/markdown"}},
+		Evidence:  []assistant.Evidence{{Summary: "Saint Mary Hospital listed oncology intake at +1-555-0100."}},
+	})
+
+	if !strings.Contains(bundle.System, "Finalize the deferred execution prompts") {
+		t.Fatalf("System prompt = %q, want scheduler guidance", bundle.System)
+	}
+	if !strings.Contains(bundle.User, "Planned schedule entries") {
+		t.Fatalf("User prompt = %q, want schedule entry context", bundle.User)
+	}
+
+	entries, err := DecodeSchedulerOutput([]byte(`{"entries":[{"scheduled_for":"2026-04-03T13:00:00Z","prompt":"Call Saint Mary Hospital at +1-555-0100."}]}`))
+	if err != nil {
+		t.Fatalf("DecodeSchedulerOutput() error = %v", err)
+	}
+	if len(entries) != 1 || !strings.Contains(entries[0].Prompt, "Saint Mary Hospital") {
+		t.Fatalf("entries = %#v, want finalized scheduled entry", entries)
 	}
 }
 

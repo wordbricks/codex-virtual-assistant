@@ -28,6 +28,7 @@ type Repository interface {
 	AddWaitRequest(context.Context, assistant.WaitRequest) error
 	GetRun(context.Context, string) (assistant.Run, error)
 	GetRunRecord(context.Context, string) (store.RunRecord, error)
+	SaveScheduledRun(context.Context, assistant.ScheduledRun) error
 }
 
 type ProjectManager interface {
@@ -183,7 +184,7 @@ func (e *RunEngine) continueRun(ctx context.Context, runID string, role assistan
 			if record.Run.Status == assistant.RunStatusWaiting || isTerminalStatus(record.Run.Status) {
 				return nil
 			}
-			role = assistant.AttemptRoleReporter
+			role = assistant.AttemptRoleScheduler
 			resumeInput = nil
 		case assistant.AttemptRoleProjectSelector:
 			if err := e.executeProjectSelector(ctx, &record, resumeInput); err != nil {
@@ -257,6 +258,9 @@ func (e *RunEngine) continueRun(ctx context.Context, runID string, role assistan
 			case DirectiveFail:
 				return nil
 			case DirectiveComplete:
+				role = assistant.AttemptRoleScheduler
+				resumeInput = nil
+			case DirectiveContinue:
 				role = assistant.AttemptRoleReporter
 				resumeInput = nil
 			case DirectiveRetry:
@@ -265,6 +269,19 @@ func (e *RunEngine) continueRun(ctx context.Context, runID string, role assistan
 			default:
 				return fmt.Errorf("wtl: unsupported directive %q", directive)
 			}
+		case assistant.AttemptRoleScheduler:
+			if err := e.executeScheduler(ctx, &record, resumeInput); err != nil {
+				return err
+			}
+			record, err = e.repo.GetRunRecord(ctx, runID)
+			if err != nil {
+				return err
+			}
+			if record.Run.Status == assistant.RunStatusWaiting || isTerminalStatus(record.Run.Status) {
+				return nil
+			}
+			role = assistant.AttemptRoleReporter
+			resumeInput = nil
 		case assistant.AttemptRoleReporter:
 			directive, err := e.executeReporter(ctx, &record, resumeInput)
 			if err != nil {
@@ -414,7 +431,7 @@ func (e *RunEngine) executeAnswer(ctx context.Context, record *store.RunRecord, 
 	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
 		return err
 	}
-	return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, firstNonEmpty(summary, "Answer completed. Starting final report delivery."))
+	return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseScheduling, firstNonEmpty(summary, "Answer completed. Preparing any deferred scheduled work before final reporting."))
 }
 
 func (e *RunEngine) executeProjectSelector(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) error {
@@ -694,7 +711,7 @@ func (e *RunEngine) executeEvaluator(ctx context.Context, record *store.RunRecor
 	}
 	switch e.policy.DecideEvaluation(updatedRecord.Run, updatedRecord.Attempts, evaluation) {
 	case gan.EvaluationDecisionComplete:
-		if err := e.publishEvent(ctx, updatedRecord.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, firstNonEmpty(evaluation.Summary, "Evaluation passed. Starting final report delivery.")); err != nil {
+		if err := e.publishEvent(ctx, updatedRecord.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseScheduling, firstNonEmpty(evaluation.Summary, "Evaluation passed. Preparing any deferred scheduled work before final reporting.")); err != nil {
 			return "", err
 		}
 		return DirectiveComplete, nil
@@ -708,6 +725,78 @@ func (e *RunEngine) executeEvaluator(ctx context.Context, record *store.RunRecor
 	default:
 		return "", fmt.Errorf("wtl: unknown evaluation decision")
 	}
+}
+
+func (e *RunEngine) executeScheduler(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) error {
+	now := e.now().UTC()
+	record.Run.Status = assistant.RunStatusScheduling
+	record.Run.Phase = assistant.RunPhaseScheduling
+	record.Run.WaitingFor = nil
+	record.Run.UpdatedAt = now
+	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+		return err
+	}
+	if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseScheduling, "Finalizing any deferred work items before the final report."); err != nil {
+		return err
+	}
+
+	if record.Run.TaskSpec.SchedulePlan == nil || len(record.Run.TaskSpec.SchedulePlan.Entries) == 0 {
+		return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, "No deferred work was scheduled. Delivering the final report.")
+	}
+
+	prompt := prompting.BuildSchedulerPrompt(prompting.SchedulerInput{
+		Run:       record.Run,
+		Artifacts: record.Artifacts,
+		Evidence:  record.Evidence,
+	})
+
+	attempt, response, err := e.executeAttempt(ctx, record.Run, record.Attempts, assistant.AttemptRoleScheduler, prompt, "", resumeInput, record.Run.Project.WorkspaceDir)
+	if err != nil {
+		return e.failRun(ctx, record.Run, fmt.Sprintf("Scheduler phase execution failed: %v", err), err)
+	}
+	if response.WaitRequest != nil {
+		return e.enterWaiting(ctx, record.Run, attempt, response.WaitRequest)
+	}
+
+	entries, err := prompting.DecodeSchedulerOutput([]byte(response.Output))
+	if err != nil {
+		return e.failRun(ctx, record.Run, fmt.Sprintf("Scheduler output could not be decoded: %v", err), err)
+	}
+
+	createdIDs := make([]string, 0, len(entries))
+	for idx, entry := range entries {
+		scheduledFor, err := assistant.ParseScheduledFor(entry.ScheduledFor, now)
+		if err != nil {
+			return e.failRun(ctx, record.Run, fmt.Sprintf("Scheduler entry %d could not parse scheduled_for: %v", idx+1, err), err)
+		}
+		scheduledRun := assistant.ScheduledRun{
+			ID:                    assistant.NewID("scheduled", now.Add(time.Duration(idx)*time.Millisecond)),
+			ChatID:                record.Run.ChatID,
+			ParentRunID:           record.Run.ID,
+			UserRequestRaw:        strings.TrimSpace(entry.Prompt),
+			MaxGenerationAttempts: record.Run.MaxGenerationAttempts,
+			ScheduledFor:          scheduledFor,
+			Status:                assistant.ScheduledRunStatusPending,
+			CreatedAt:             now.Add(time.Duration(idx) * time.Millisecond),
+		}
+		if err := e.repo.SaveScheduledRun(ctx, scheduledRun); err != nil {
+			return err
+		}
+		createdIDs = append(createdIDs, scheduledRun.ID)
+	}
+
+	record.Run.AttemptCount = len(record.Attempts) + 1
+	record.Run.UpdatedAt = e.now().UTC()
+	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+		return err
+	}
+	if err := e.publishEventWithData(ctx, record.Run.ID, assistant.EventTypeScheduleCreated, assistant.RunPhaseScheduling, fmt.Sprintf("Created %d scheduled run(s).", len(createdIDs)), map[string]any{
+		"scheduled_run_ids": createdIDs,
+		"count":             len(createdIDs),
+	}); err != nil {
+		return err
+	}
+	return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, fmt.Sprintf("Created %d scheduled run(s). Delivering the final report.", len(createdIDs)))
 }
 
 func (e *RunEngine) executeReporter(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) (Directive, error) {
@@ -963,12 +1052,17 @@ func (e *RunEngine) failRun(ctx context.Context, run assistant.Run, summary stri
 }
 
 func (e *RunEngine) publishEvent(ctx context.Context, runID string, eventType assistant.EventType, phase assistant.RunPhase, summary string) error {
+	return e.publishEventWithData(ctx, runID, eventType, phase, summary, nil)
+}
+
+func (e *RunEngine) publishEventWithData(ctx context.Context, runID string, eventType assistant.EventType, phase assistant.RunPhase, summary string, data map[string]any) error {
 	event := assistant.RunEvent{
 		ID:        assistant.NewID("event", e.now()),
 		RunID:     runID,
 		Type:      eventType,
 		Phase:     phase,
 		Summary:   summary,
+		Data:      data,
 		CreatedAt: e.now().UTC(),
 	}
 	if err := e.repo.AddRunEvent(ctx, event); err != nil {

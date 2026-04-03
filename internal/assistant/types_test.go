@@ -84,8 +84,63 @@ func TestLifecycleEnumsIncludeReporting(t *testing.T) {
 	if !containsRunStatus(AllRunStatuses(), RunStatusReporting) {
 		t.Fatalf("AllRunStatuses() = %#v, want reporting", AllRunStatuses())
 	}
+	if !containsRunStatus(AllRunStatuses(), RunStatusScheduling) {
+		t.Fatalf("AllRunStatuses() = %#v, want scheduling", AllRunStatuses())
+	}
 	if !containsRunPhase(AllRunPhases(), RunPhaseReporting) {
 		t.Fatalf("AllRunPhases() = %#v, want reporting", AllRunPhases())
+	}
+	if !containsRunPhase(AllRunPhases(), RunPhaseScheduling) {
+		t.Fatalf("AllRunPhases() = %#v, want scheduling", AllRunPhases())
+	}
+}
+
+func TestParseScheduledForSupportsRelativeAndClockTimes(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.April, 3, 12, 30, 0, 0, time.UTC)
+
+	relative, err := ParseScheduledFor("+30m", now)
+	if err != nil {
+		t.Fatalf("ParseScheduledFor(+30m) error = %v", err)
+	}
+	if want := now.Add(30 * time.Minute); !relative.Equal(want) {
+		t.Fatalf("relative = %s, want %s", relative, want)
+	}
+
+	clock, err := ParseScheduledFor("13:00", now)
+	if err != nil {
+		t.Fatalf("ParseScheduledFor(13:00) error = %v", err)
+	}
+	if want := time.Date(2026, time.April, 3, 13, 0, 0, 0, time.UTC); !clock.Equal(want) {
+		t.Fatalf("clock = %s, want %s", clock, want)
+	}
+
+	nextDay, err := ParseScheduledFor("11:00", now)
+	if err != nil {
+		t.Fatalf("ParseScheduledFor(11:00) error = %v", err)
+	}
+	if want := time.Date(2026, time.April, 4, 11, 0, 0, 0, time.UTC); !nextDay.Equal(want) {
+		t.Fatalf("nextDay = %s, want %s", nextDay, want)
+	}
+}
+
+func TestScheduledRunValidateRequiresTriggeredRunID(t *testing.T) {
+	t.Parallel()
+
+	run := ScheduledRun{
+		ID:                    "scheduled_123",
+		ChatID:                "chat_123",
+		ParentRunID:           "run_parent",
+		UserRequestRaw:        "Call the first hospital.",
+		MaxGenerationAttempts: 2,
+		ScheduledFor:          time.Date(2026, time.April, 3, 13, 0, 0, 0, time.UTC),
+		Status:                ScheduledRunStatusTriggered,
+		CreatedAt:             time.Date(2026, time.April, 3, 12, 0, 0, 0, time.UTC),
+	}
+
+	if err := run.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want triggered run id validation")
 	}
 }
 

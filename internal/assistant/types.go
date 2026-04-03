@@ -17,6 +17,7 @@ const (
 	RunStatusContracting      RunStatus = "contracting"
 	RunStatusGenerating       RunStatus = "generating"
 	RunStatusEvaluating       RunStatus = "evaluating"
+	RunStatusScheduling       RunStatus = "scheduling"
 	RunStatusReporting        RunStatus = "reporting"
 	RunStatusWaiting          RunStatus = "waiting"
 	RunStatusCompleted        RunStatus = "completed"
@@ -36,6 +37,7 @@ const (
 	RunPhaseContracting      RunPhase = "contracting"
 	RunPhaseGenerating       RunPhase = "generating"
 	RunPhaseEvaluating       RunPhase = "evaluating"
+	RunPhaseScheduling       RunPhase = "scheduling"
 	RunPhaseReporting        RunPhase = "reporting"
 	RunPhaseWaiting          RunPhase = "waiting"
 	RunPhaseCompleted        RunPhase = "completed"
@@ -53,6 +55,7 @@ const (
 	AttemptRoleContractor      AttemptRole = "contractor"
 	AttemptRoleGenerator       AttemptRole = "generator"
 	AttemptRoleEvaluator       AttemptRole = "evaluator"
+	AttemptRoleScheduler       AttemptRole = "scheduler"
 	AttemptRoleReporter        AttemptRole = "reporter"
 )
 
@@ -119,15 +122,18 @@ const (
 type EventType string
 
 const (
-	EventTypeRunCreated    EventType = "run_created"
-	EventTypePhaseChanged  EventType = "phase_changed"
-	EventTypeAttemptLogged EventType = "attempt_logged"
-	EventTypeWaiting       EventType = "waiting"
-	EventTypeArtifactAdded EventType = "artifact_added"
-	EventTypeEvaluation    EventType = "evaluation_recorded"
-	EventTypeReasoning     EventType = "reasoning"
-	EventTypeToolCallStart EventType = "tool_call_started"
-	EventTypeToolCallEnd   EventType = "tool_call_completed"
+	EventTypeRunCreated        EventType = "run_created"
+	EventTypePhaseChanged      EventType = "phase_changed"
+	EventTypeAttemptLogged     EventType = "attempt_logged"
+	EventTypeWaiting           EventType = "waiting"
+	EventTypeArtifactAdded     EventType = "artifact_added"
+	EventTypeEvaluation        EventType = "evaluation_recorded"
+	EventTypeReasoning         EventType = "reasoning"
+	EventTypeToolCallStart     EventType = "tool_call_started"
+	EventTypeToolCallEnd       EventType = "tool_call_completed"
+	EventTypeScheduleCreated   EventType = "schedule_created"
+	EventTypeScheduleTriggered EventType = "schedule_triggered"
+	EventTypeScheduleFailed    EventType = "schedule_failed"
 )
 
 type Run struct {
@@ -172,6 +178,7 @@ type TaskSpec struct {
 	EvidenceRequired      []string            `json:"evidence_required"`
 	RiskFlags             []string            `json:"risk_flags"`
 	MaxGenerationAttempts int                 `json:"max_generation_attempts"`
+	SchedulePlan          *SchedulePlan       `json:"schedule_plan,omitempty"`
 	AcceptanceContract    *AcceptanceContract `json:"acceptance_contract,omitempty"`
 }
 
@@ -334,12 +341,17 @@ func (s TaskSpec) Validate() error {
 		return errors.New("task spec evidence requirements are required")
 	case s.MaxGenerationAttempts <= 0:
 		return errors.New("task spec max generation attempts must be positive")
-	case s.AcceptanceContract != nil:
-		if err := s.AcceptanceContract.Validate(); err != nil {
-			return fmt.Errorf("task spec acceptance contract invalid: %w", err)
-		}
-		return nil
 	default:
+		if s.SchedulePlan != nil {
+			if err := s.SchedulePlan.Validate(); err != nil {
+				return fmt.Errorf("task spec schedule plan invalid: %w", err)
+			}
+		}
+		if s.AcceptanceContract != nil {
+			if err := s.AcceptanceContract.Validate(); err != nil {
+				return fmt.Errorf("task spec acceptance contract invalid: %w", err)
+			}
+		}
 		return nil
 	}
 }
@@ -395,6 +407,7 @@ func AllRunStatuses() []RunStatus {
 		RunStatusContracting,
 		RunStatusGenerating,
 		RunStatusEvaluating,
+		RunStatusScheduling,
 		RunStatusReporting,
 		RunStatusWaiting,
 		RunStatusCompleted,
@@ -414,6 +427,7 @@ func AllRunPhases() []RunPhase {
 		RunPhaseContracting,
 		RunPhaseGenerating,
 		RunPhaseEvaluating,
+		RunPhaseScheduling,
 		RunPhaseReporting,
 		RunPhaseWaiting,
 		RunPhaseCompleted,

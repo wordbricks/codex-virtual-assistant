@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoadFromEnvUsesDefaults(t *testing.T) {
 	t.Parallel()
@@ -48,6 +51,9 @@ func TestLoadFromEnvUsesDefaults(t *testing.T) {
 	if !cfg.CodexNetworkAccess {
 		t.Fatal("CodexNetworkAccess = false, want true")
 	}
+	if cfg.SchedulerInterval != 30*time.Second {
+		t.Fatalf("SchedulerInterval = %s, want 30s", cfg.SchedulerInterval)
+	}
 }
 
 func TestLoadFromEnvHonorsOverrides(t *testing.T) {
@@ -65,6 +71,7 @@ func TestLoadFromEnvHonorsOverrides(t *testing.T) {
 		"ASSISTANT_CODEX_APPROVAL_POLICY":   "on-request",
 		"ASSISTANT_CODEX_SANDBOX":           "danger-full-access",
 		"ASSISTANT_CODEX_NETWORK_ACCESS":    "false",
+		"ASSISTANT_SCHEDULER_INTERVAL":      "45s",
 	}
 
 	cfg, err := LoadFromEnv(func(key string) string { return env[key] }, func() (string, error) {
@@ -106,5 +113,8 @@ func TestLoadFromEnvHonorsOverrides(t *testing.T) {
 	}
 	if cfg.CodexNetworkAccess {
 		t.Fatal("CodexNetworkAccess = true, want false")
+	}
+	if cfg.SchedulerInterval != 45*time.Second {
+		t.Fatalf("SchedulerInterval = %s, want 45s", cfg.SchedulerInterval)
 	}
 }

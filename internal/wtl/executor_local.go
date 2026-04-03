@@ -38,6 +38,8 @@ func (e *HeuristicPhaseExecutor) RunPhase(_ context.Context, request CodexPhaseR
 		return e.runGenerator(request)
 	case assistant.AttemptRoleEvaluator:
 		return e.runEvaluator(request)
+	case assistant.AttemptRoleScheduler:
+		return e.runScheduler(request)
 	case assistant.AttemptRoleReporter:
 		return e.runReporter(request)
 	default:
@@ -134,6 +136,7 @@ func (e *HeuristicPhaseExecutor) runPlanner(request CodexPhaseRequest) (CodexPha
 		"evidence_required":       spec.EvidenceRequired,
 		"risk_flags":              spec.RiskFlags,
 		"max_generation_attempts": spec.MaxGenerationAttempts,
+		"schedule_plan":           spec.SchedulePlan,
 	})
 	if err != nil {
 		return CodexPhaseResult{}, err
@@ -242,6 +245,29 @@ func (e *HeuristicPhaseExecutor) runEvaluator(request CodexPhaseRequest) (CodexP
 	return CodexPhaseResult{
 		Summary: "Evaluator accepted the current result package.",
 		Output:  string(output),
+	}, nil
+}
+
+func (e *HeuristicPhaseExecutor) runScheduler(request CodexPhaseRequest) (CodexPhaseResult, error) {
+	entries := make([]map[string]any, 0)
+	if request.TaskSpec.SchedulePlan != nil {
+		for _, entry := range request.TaskSpec.SchedulePlan.Entries {
+			entries = append(entries, map[string]any{
+				"scheduled_for": entry.ScheduledFor,
+				"prompt":        entry.Prompt,
+			})
+		}
+	}
+	output, err := json.Marshal(map[string]any{
+		"entries": entries,
+	})
+	if err != nil {
+		return CodexPhaseResult{}, err
+	}
+	return CodexPhaseResult{
+		Summary:      "Scheduler finalized the deferred work items.",
+		Output:       string(output),
+		Observations: []string{"Scheduler used the current schedule plan to prepare deferred prompts."},
 	}, nil
 }
 

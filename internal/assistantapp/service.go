@@ -13,6 +13,7 @@ import (
 )
 
 var ErrRunNotWaiting = errors.New("assistant: run is not waiting")
+var ErrScheduledRunNotPending = errors.New("assistant: scheduled run is not pending")
 
 type InitialRunPolicy interface {
 	InitialRun(string, time.Time) assistant.Run
@@ -112,6 +113,32 @@ func (s *RunService) ResumeRun(ctx context.Context, runID string, input map[stri
 
 func (s *RunService) CancelRun(ctx context.Context, runID string) error {
 	return s.engine.Cancel(ctx, runID)
+}
+
+func (s *RunService) ListScheduledRuns(ctx context.Context, chatID string, status assistant.ScheduledRunStatus) ([]assistant.ScheduledRun, error) {
+	return s.repo.ListScheduledRuns(ctx, chatID, status)
+}
+
+func (s *RunService) GetScheduledRun(ctx context.Context, scheduledRunID string) (assistant.ScheduledRun, error) {
+	return s.repo.GetScheduledRun(ctx, scheduledRunID)
+}
+
+func (s *RunService) ListScheduledRunsByParent(ctx context.Context, parentRunID string) ([]assistant.ScheduledRun, error) {
+	return s.repo.ListScheduledRunsByParent(ctx, parentRunID)
+}
+
+func (s *RunService) CancelScheduledRun(ctx context.Context, scheduledRunID string) (assistant.ScheduledRun, error) {
+	scheduledRun, err := s.repo.GetScheduledRun(ctx, scheduledRunID)
+	if err != nil {
+		return assistant.ScheduledRun{}, err
+	}
+	if scheduledRun.Status != assistant.ScheduledRunStatusPending {
+		return assistant.ScheduledRun{}, fmt.Errorf("%w: %s is %s", ErrScheduledRunNotPending, scheduledRunID, scheduledRun.Status)
+	}
+	if err := s.repo.UpdateScheduledRunStatus(ctx, scheduledRunID, assistant.ScheduledRunStatusCancelled, ""); err != nil {
+		return assistant.ScheduledRun{}, err
+	}
+	return s.repo.GetScheduledRun(ctx, scheduledRunID)
 }
 
 func (s *RunService) waitForRunVisible(ctx context.Context, runID string) error {

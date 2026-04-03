@@ -12,24 +12,31 @@ import (
 type HookName string
 
 const (
-	HookOnRunStarted   HookName = "onRunStarted"
-	HookOnPhaseChanged HookName = "onPhaseChanged"
-	HookOnWaitEntered  HookName = "onWaitEntered"
-	HookOnRunCompleted HookName = "onRunCompleted"
-	HookOnRunExhausted HookName = "onRunExhausted"
-	HookOnRunFailed    HookName = "onRunFailed"
+	HookOnRunStarted        HookName = "onRunStarted"
+	HookOnPhaseChanged      HookName = "onPhaseChanged"
+	HookOnWaitEntered       HookName = "onWaitEntered"
+	HookOnRunCompleted      HookName = "onRunCompleted"
+	HookOnRunExhausted      HookName = "onRunExhausted"
+	HookOnRunFailed         HookName = "onRunFailed"
+	HookOnScheduleCreated   HookName = "onScheduleCreated"
+	HookOnScheduleTriggered HookName = "onScheduleTriggered"
+	HookOnScheduleFailed    HookName = "onScheduleFailed"
 )
 
 type HookPayload struct {
-	Name   HookName           `json:"name"`
-	Event  assistant.RunEvent `json:"event"`
-	Record *store.RunRecord   `json:"record,omitempty"`
+	Name         HookName                `json:"name"`
+	Event        assistant.RunEvent      `json:"event"`
+	Record       *store.RunRecord        `json:"record,omitempty"`
+	ScheduledRun *assistant.ScheduledRun `json:"scheduled_run,omitempty"`
+	CreatedRun   *assistant.Run          `json:"created_run,omitempty"`
 }
 
 type HookFunc func(context.Context, HookPayload) error
 
-type runRecordLoader interface {
+type snapshotLoader interface {
 	GetRunRecord(context.Context, string) (store.RunRecord, error)
+	GetRun(context.Context, string) (assistant.Run, error)
+	GetScheduledRun(context.Context, string) (assistant.ScheduledRun, error)
 }
 
 type registeredHook struct {
@@ -43,7 +50,7 @@ type EventBroker struct {
 	subscribers map[string]map[chan assistant.RunEvent]struct{}
 	hooks       map[HookName][]registeredHook
 	nextHookID  int
-	loader      runRecordLoader
+	loader      snapshotLoader
 }
 
 func NewEventBroker() *EventBroker {
@@ -53,7 +60,7 @@ func NewEventBroker() *EventBroker {
 	}
 }
 
-func (b *EventBroker) SetSnapshotLoader(loader runRecordLoader) {
+func (b *EventBroker) SetSnapshotLoader(loader snapshotLoader) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.loader = loader
@@ -138,7 +145,7 @@ func (b *EventBroker) Subscribe(runID string) (<-chan assistant.RunEvent, func()
 	}
 }
 
-func (b *EventBroker) hookPayloads(ctx context.Context, loader runRecordLoader, event assistant.RunEvent) []HookPayload {
+func (b *EventBroker) hookPayloads(ctx context.Context, loader snapshotLoader, event assistant.RunEvent) []HookPayload {
 	names := []HookName{}
 	switch event.Type {
 	case assistant.EventTypeRunCreated:
@@ -147,9 +154,17 @@ func (b *EventBroker) hookPayloads(ctx context.Context, loader runRecordLoader, 
 		names = append(names, HookOnPhaseChanged)
 	case assistant.EventTypeWaiting:
 		names = append(names, HookOnWaitEntered)
+	case assistant.EventTypeScheduleCreated:
+		names = append(names, HookOnScheduleCreated)
+	case assistant.EventTypeScheduleTriggered:
+		names = append(names, HookOnScheduleTriggered)
+	case assistant.EventTypeScheduleFailed:
+		names = append(names, HookOnScheduleFailed)
 	}
 
 	var snapshot *store.RunRecord
+	var scheduledRun *assistant.ScheduledRun
+	var createdRun *assistant.Run
 	if loader != nil && b.needsRunSnapshot(event) {
 		record, err := loader.GetRunRecord(ctx, event.RunID)
 		if err != nil {
@@ -166,6 +181,24 @@ func (b *EventBroker) hookPayloads(ctx context.Context, loader runRecordLoader, 
 			}
 		}
 	}
+	if loader != nil {
+		if id, ok := stringData(event.Data, "scheduled_run_id"); ok {
+			record, err := loader.GetScheduledRun(ctx, id)
+			if err != nil {
+				log.Printf("event hook scheduled run load failed for %s: %v", id, err)
+			} else {
+				scheduledRun = &record
+			}
+		}
+		if id, ok := stringData(event.Data, "created_run_id"); ok {
+			run, err := loader.GetRun(ctx, id)
+			if err != nil {
+				log.Printf("event hook created run load failed for %s: %v", id, err)
+			} else {
+				createdRun = &run
+			}
+		}
+	}
 
 	if snapshot == nil && event.Type == assistant.EventTypePhaseChanged && event.Phase == assistant.RunPhaseCompleted {
 		names = append(names, HookOnRunCompleted)
@@ -174,16 +207,23 @@ func (b *EventBroker) hookPayloads(ctx context.Context, loader runRecordLoader, 
 	payloads := make([]HookPayload, 0, len(names))
 	for _, name := range names {
 		payloads = append(payloads, HookPayload{
-			Name:   name,
-			Event:  event,
-			Record: snapshot,
+			Name:         name,
+			Event:        event,
+			Record:       snapshot,
+			ScheduledRun: scheduledRun,
+			CreatedRun:   createdRun,
 		})
 	}
 	return payloads
 }
 
 func (b *EventBroker) needsRunSnapshot(event assistant.RunEvent) bool {
-	return event.Type == assistant.EventTypeRunCreated || event.Type == assistant.EventTypePhaseChanged || event.Type == assistant.EventTypeWaiting
+	return event.Type == assistant.EventTypeRunCreated ||
+		event.Type == assistant.EventTypePhaseChanged ||
+		event.Type == assistant.EventTypeWaiting ||
+		event.Type == assistant.EventTypeScheduleCreated ||
+		event.Type == assistant.EventTypeScheduleTriggered ||
+		event.Type == assistant.EventTypeScheduleFailed
 }
 
 func (b *EventBroker) dispatchHooks(ctx context.Context, payload HookPayload) {
@@ -203,4 +243,22 @@ func (b *EventBroker) dispatchHooks(ctx context.Context, payload HookPayload) {
 			}
 		}(hook.fn, payload)
 	}
+}
+
+func stringData(data map[string]any, key string) (string, bool) {
+	if len(data) == 0 {
+		return "", false
+	}
+	value, ok := data[key]
+	if !ok {
+		return "", false
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", false
+	}
+	if text == "" {
+		return "", false
+	}
+	return text, true
 }

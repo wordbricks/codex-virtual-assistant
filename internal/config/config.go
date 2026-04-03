@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -18,6 +19,7 @@ const (
 	defaultCodexBin             = "codex"
 	defaultCodexApprovalPolicy  = "never"
 	defaultCodexSandboxMode     = "workspace-write"
+	defaultSchedulerInterval    = 30 * time.Second
 )
 
 type Config struct {
@@ -33,6 +35,7 @@ type Config struct {
 	CodexApprovalPolicy   string
 	CodexSandboxMode      string
 	CodexNetworkAccess    bool
+	SchedulerInterval     time.Duration
 }
 
 func Load() (Config, error) {
@@ -54,6 +57,7 @@ func LoadFromEnv(getenv func(string) string, getwd func() (string, error)) (Conf
 		CodexApprovalPolicy:   defaultCodexApprovalPolicy,
 		CodexSandboxMode:      defaultCodexSandboxMode,
 		CodexNetworkAccess:    true,
+		SchedulerInterval:     defaultSchedulerInterval,
 	}
 
 	if value := getenv("ASSISTANT_HTTP_ADDR"); value != "" {
@@ -97,6 +101,13 @@ func LoadFromEnv(getenv func(string) string, getwd func() (string, error)) (Conf
 		}
 		cfg.CodexNetworkAccess = parsed
 	}
+	if value := getenv("ASSISTANT_SCHEDULER_INTERVAL"); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse ASSISTANT_SCHEDULER_INTERVAL: %w", err)
+		}
+		cfg.SchedulerInterval = parsed
+	}
 	return cfg.Normalize(baseDir)
 }
 
@@ -132,6 +143,9 @@ func (c Config) Normalize(baseDir string) (Config, error) {
 	}
 	if c.CodexSandboxMode == "" {
 		c.CodexSandboxMode = defaultCodexSandboxMode
+	}
+	if c.SchedulerInterval == 0 {
+		c.SchedulerInterval = defaultSchedulerInterval
 	}
 
 	var err error
@@ -179,6 +193,8 @@ func (c Config) Validate() error {
 		return errors.New("config: codex approval policy is required")
 	case c.CodexSandboxMode == "":
 		return errors.New("config: codex sandbox mode is required")
+	case c.SchedulerInterval < 0:
+		return errors.New("config: scheduler interval must not be negative")
 	default:
 		return nil
 	}

@@ -203,6 +203,97 @@ func TestSQLiteRepositoryGetRunReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestSQLiteRepositoryScheduledRunsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	repo := openTestRepository(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.April, 3, 12, 0, 0, 0, time.UTC)
+
+	parent := assistant.NewRun("Research hospitals and schedule follow-up calls.", now, 3)
+	if err := repo.SaveRun(ctx, parent); err != nil {
+		t.Fatalf("SaveRun(parent) error = %v", err)
+	}
+
+	first := assistant.ScheduledRun{
+		ID:                    "scheduled_one",
+		ChatID:                parent.ChatID,
+		ParentRunID:           parent.ID,
+		UserRequestRaw:        "Call hospital A.",
+		MaxGenerationAttempts: 2,
+		ScheduledFor:          now.Add(30 * time.Minute),
+		Status:                assistant.ScheduledRunStatusPending,
+		CreatedAt:             now,
+	}
+	second := assistant.ScheduledRun{
+		ID:                    "scheduled_two",
+		ChatID:                parent.ChatID,
+		ParentRunID:           parent.ID,
+		UserRequestRaw:        "Call hospital B.",
+		MaxGenerationAttempts: 2,
+		ScheduledFor:          now.Add(90 * time.Minute),
+		Status:                assistant.ScheduledRunStatusPending,
+		CreatedAt:             now.Add(time.Minute),
+	}
+
+	if err := repo.SaveScheduledRun(ctx, first); err != nil {
+		t.Fatalf("SaveScheduledRun(first) error = %v", err)
+	}
+	if err := repo.SaveScheduledRun(ctx, second); err != nil {
+		t.Fatalf("SaveScheduledRun(second) error = %v", err)
+	}
+
+	pending, err := repo.ListPendingScheduledRuns(ctx, now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("ListPendingScheduledRuns() error = %v", err)
+	}
+	if len(pending) != 1 || pending[0].ID != first.ID {
+		t.Fatalf("pending = %#v, want only first scheduled run", pending)
+	}
+
+	childRun := assistant.NewRun("Call hospital A.", now.Add(31*time.Minute), 2)
+	childRun.ParentRunID = parent.ID
+	childRun.ChatID = parent.ChatID
+	if err := repo.SaveRun(ctx, childRun); err != nil {
+		t.Fatalf("SaveRun(child) error = %v", err)
+	}
+
+	triggeredAt := now.Add(31 * time.Minute)
+	if err := repo.UpdateScheduledRunTriggered(ctx, first.ID, childRun.ID, triggeredAt); err != nil {
+		t.Fatalf("UpdateScheduledRunTriggered() error = %v", err)
+	}
+	if err := repo.UpdateScheduledRunStatus(ctx, second.ID, assistant.ScheduledRunStatusCancelled, ""); err != nil {
+		t.Fatalf("UpdateScheduledRunStatus() error = %v", err)
+	}
+
+	record, err := repo.GetRunRecord(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("GetRunRecord() error = %v", err)
+	}
+	if len(record.ScheduledRuns) != 2 {
+		t.Fatalf("len(record.ScheduledRuns) = %d, want 2", len(record.ScheduledRuns))
+	}
+
+	updatedFirst, err := repo.GetScheduledRun(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("GetScheduledRun(first) error = %v", err)
+	}
+	if updatedFirst.Status != assistant.ScheduledRunStatusTriggered || updatedFirst.RunID != childRun.ID {
+		t.Fatalf("updatedFirst = %#v, want triggered %s", updatedFirst, childRun.ID)
+	}
+	if updatedFirst.TriggeredAt == nil || !updatedFirst.TriggeredAt.Equal(triggeredAt) {
+		t.Fatalf("TriggeredAt = %#v, want %s", updatedFirst.TriggeredAt, triggeredAt)
+	}
+
+	byChat, err := repo.ListScheduledRunsByChat(ctx, parent.ChatID)
+	if err != nil {
+		t.Fatalf("ListScheduledRunsByChat() error = %v", err)
+	}
+	if len(byChat) != 2 {
+		t.Fatalf("len(byChat) = %d, want 2", len(byChat))
+	}
+}
+
 func TestSQLiteRepositoryMigratesLegacyRunsTableForGateAndFollowupFields(t *testing.T) {
 	t.Parallel()
 

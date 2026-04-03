@@ -76,6 +76,8 @@ func NewHandler(cfg config.Config, runs *assistantapp.RunService, events *EventB
 	mux.HandleFunc("/api/v1/chats/", api.handleChatByID)
 	mux.HandleFunc("/api/v1/runs", api.handleRuns)
 	mux.HandleFunc("/api/v1/runs/", api.handleRunByID)
+	mux.HandleFunc("/api/v1/scheduled", api.handleScheduledRuns)
+	mux.HandleFunc("/api/v1/scheduled/", api.handleScheduledRunByID)
 	mux.Handle("/artifacts/", http.StripPrefix("/artifacts/", http.FileServer(http.Dir(cfg.ArtifactDir))))
 	mux.Handle("/assets/", http.StripPrefix("/", http.FileServer(http.FS(staticFS))))
 	mux.HandleFunc("/", api.serveIndex)
@@ -182,6 +184,13 @@ func (a *RunAPI) handleRunByID(w http.ResponseWriter, r *http.Request) {
 		}
 		a.enrichArtifactURLs(&record)
 		writeJSON(w, http.StatusOK, record)
+	case action == "scheduled" && r.Method == http.MethodGet:
+		scheduledRuns, err := a.runs.ListScheduledRunsByParent(r.Context(), runID)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"scheduled_runs": scheduledRuns})
 	case action == "events" && r.Method == http.MethodGet:
 		if err := a.streamRunEvents(w, r, runID); err != nil && !errors.Is(err, io.EOF) {
 			return
@@ -220,6 +229,49 @@ func (a *RunAPI) handleRunByID(w http.ResponseWriter, r *http.Request) {
 		}
 		a.enrichArtifactURLs(&record)
 		writeJSON(w, http.StatusOK, record)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *RunAPI) handleScheduledRuns(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		chatID := strings.TrimSpace(r.URL.Query().Get("chat_id"))
+		status := assistant.ScheduledRunStatus(strings.TrimSpace(r.URL.Query().Get("status")))
+		scheduledRuns, err := a.runs.ListScheduledRuns(r.Context(), chatID, status)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"scheduled_runs": scheduledRuns})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *RunAPI) handleScheduledRunByID(w http.ResponseWriter, r *http.Request) {
+	scheduledRunID, action, ok := parseScheduledPath(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	switch {
+	case action == "" && r.Method == http.MethodGet:
+		scheduledRun, err := a.runs.GetScheduledRun(r.Context(), scheduledRunID)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, scheduledRun)
+	case action == "cancel" && r.Method == http.MethodPost:
+		scheduledRun, err := a.runs.CancelScheduledRun(r.Context(), scheduledRunID)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, scheduledRun)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -354,6 +406,22 @@ func parseChatPath(path string) (chatID string, ok bool) {
 	return chatID, true
 }
 
+func parseScheduledPath(path string) (scheduledRunID, action string, ok bool) {
+	const prefix = "/api/v1/scheduled/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(path, prefix), "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return "", "", false
+	}
+	scheduledRunID = parts[0]
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+	return scheduledRunID, action, true
+}
+
 func decodeJSONBody(body io.ReadCloser, target any) error {
 	defer body.Close()
 	if body == nil {
@@ -380,6 +448,8 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	if errors.Is(err, store.ErrNotFound) {
 		status = http.StatusNotFound
 	} else if errors.Is(err, assistantapp.ErrRunNotWaiting) {
+		status = http.StatusConflict
+	} else if errors.Is(err, assistantapp.ErrScheduledRunNotPending) {
 		status = http.StatusConflict
 	}
 	http.Error(w, err.Error(), status)

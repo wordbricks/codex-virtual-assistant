@@ -18,16 +18,17 @@ var (
 )
 
 type TaskSpecDraft struct {
-	Goal                  string   `json:"goal"`
-	UserRequestRaw        string   `json:"user_request_raw"`
-	Deliverables          []string `json:"deliverables"`
-	Constraints           []string `json:"constraints"`
-	ToolsAllowed          []string `json:"tools_allowed"`
-	ToolsRequired         []string `json:"tools_required"`
-	DoneDefinition        []string `json:"done_definition"`
-	EvidenceRequired      []string `json:"evidence_required"`
-	RiskFlags             []string `json:"risk_flags"`
-	MaxGenerationAttempts int      `json:"max_generation_attempts"`
+	Goal                  string        `json:"goal"`
+	UserRequestRaw        string        `json:"user_request_raw"`
+	Deliverables          []string      `json:"deliverables"`
+	Constraints           []string      `json:"constraints"`
+	ToolsAllowed          []string      `json:"tools_allowed"`
+	ToolsRequired         []string      `json:"tools_required"`
+	DoneDefinition        []string      `json:"done_definition"`
+	EvidenceRequired      []string      `json:"evidence_required"`
+	RiskFlags             []string      `json:"risk_flags"`
+	MaxGenerationAttempts int           `json:"max_generation_attempts"`
+	SchedulePlan          *SchedulePlan `json:"schedule_plan,omitempty"`
 }
 
 type AcceptanceContractDraft struct {
@@ -119,12 +120,34 @@ func NormalizeTaskSpec(draft TaskSpecDraft, fallbackUserRequest string, defaultM
 		EvidenceRequired:      evidenceRequired,
 		RiskFlags:             riskFlags,
 		MaxGenerationAttempts: maxAttempts,
+		SchedulePlan:          normalizeSchedulePlan(draft.SchedulePlan),
 	}
 
 	if err := spec.Validate(); err != nil {
 		return TaskSpec{}, err
 	}
 	return spec, nil
+}
+
+func normalizeSchedulePlan(plan *SchedulePlan) *SchedulePlan {
+	if plan == nil {
+		return nil
+	}
+	entries := make([]ScheduleEntry, 0, len(plan.Entries))
+	for _, entry := range plan.Entries {
+		normalized := ScheduleEntry{
+			ScheduledFor: strings.TrimSpace(entry.ScheduledFor),
+			Prompt:       strings.TrimSpace(entry.Prompt),
+		}
+		if normalized.ScheduledFor == "" && normalized.Prompt == "" {
+			continue
+		}
+		entries = append(entries, normalized)
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	return &SchedulePlan{Entries: entries}
 }
 
 func NormalizeAcceptanceContract(draft AcceptanceContractDraft, spec TaskSpec) (AcceptanceContract, error) {

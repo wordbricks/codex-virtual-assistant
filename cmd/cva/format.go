@@ -138,6 +138,12 @@ func formatRunRecord(rec *store.RunRecord) string {
 		fmt.Fprintf(&b, "\n  Latest Evaluation: %s (score: %d)\n", icon, last.Score)
 		fmt.Fprintf(&b, "    %s\n", last.Summary)
 	}
+	if len(rec.ScheduledRuns) > 0 {
+		b.WriteString("\n  Scheduled Runs:\n")
+		for _, scheduledRun := range rec.ScheduledRuns {
+			fmt.Fprintf(&b, "    [%s] %s  %s\n", scheduledRun.Status, scheduledRun.ID, scheduledRun.ScheduledFor.Local().Format(time.DateTime))
+		}
+	}
 
 	return b.String()
 }
@@ -174,4 +180,36 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+func formatScheduledRunList(scheduledRuns []assistant.ScheduledRun) string {
+	if len(scheduledRuns) == 0 {
+		return "No scheduled runs found.\n"
+	}
+	var b strings.Builder
+	for _, scheduledRun := range scheduledRuns {
+		fmt.Fprintf(&b, "[%s] %s  %s\n", scheduledRun.Status, scheduledRun.ID, scheduledRun.ScheduledFor.Local().Format(time.DateTime))
+		fmt.Fprintf(&b, "      %s\n", truncate(scheduledRun.UserRequestRaw, 80))
+	}
+	return b.String()
+}
+
+func formatScheduledRun(scheduledRun assistant.ScheduledRun) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "[%s] %s\n", scheduledRun.Status, scheduledRun.ID)
+	fmt.Fprintf(&b, "  Chat:      %s\n", scheduledRun.ChatID)
+	fmt.Fprintf(&b, "  Parent:    %s\n", scheduledRun.ParentRunID)
+	fmt.Fprintf(&b, "  Scheduled: %s\n", scheduledRun.ScheduledFor.Local().Format(time.DateTime))
+	fmt.Fprintf(&b, "  Created:   %s\n", scheduledRun.CreatedAt.Local().Format(time.DateTime))
+	if scheduledRun.TriggeredAt != nil {
+		fmt.Fprintf(&b, "  Triggered: %s\n", scheduledRun.TriggeredAt.Local().Format(time.DateTime))
+	}
+	if scheduledRun.RunID != "" {
+		fmt.Fprintf(&b, "  Run:       %s\n", scheduledRun.RunID)
+	}
+	if scheduledRun.ErrorMessage != "" {
+		fmt.Fprintf(&b, "  Error:     %s\n", scheduledRun.ErrorMessage)
+	}
+	fmt.Fprintf(&b, "  Prompt:    %s\n", truncate(scheduledRun.UserRequestRaw, 160))
+	return b.String()
 }

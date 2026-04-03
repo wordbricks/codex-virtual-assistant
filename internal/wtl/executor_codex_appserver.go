@@ -925,6 +925,8 @@ func phaseForAttemptRole(role assistant.AttemptRole) assistant.RunPhase {
 		return assistant.RunPhaseContracting
 	case assistant.AttemptRoleEvaluator:
 		return assistant.RunPhaseEvaluating
+	case assistant.AttemptRoleScheduler:
+		return assistant.RunPhaseScheduling
 	case assistant.AttemptRoleReporter:
 		return assistant.RunPhaseReporting
 	default:
@@ -1313,6 +1315,30 @@ func phaseOutputSchema(role assistant.AttemptRole) map[string]any {
 				"evidence_required":       stringArraySchema(),
 				"risk_flags":              stringArraySchema(),
 				"max_generation_attempts": map[string]any{"type": "integer"},
+				"schedule_plan": map[string]any{
+					"anyOf": []any{
+						map[string]any{"type": "null"},
+						map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"entries": map[string]any{
+									"type": "array",
+									"items": map[string]any{
+										"type": "object",
+										"properties": map[string]any{
+											"scheduled_for": map[string]any{"type": "string"},
+											"prompt":        map[string]any{"type": "string"},
+										},
+										"required":             []string{"scheduled_for", "prompt"},
+										"additionalProperties": false,
+									},
+								},
+							},
+							"required":             []string{"entries"},
+							"additionalProperties": false,
+						},
+					},
+				},
 			},
 			"required": []string{
 				"goal",
@@ -1324,6 +1350,7 @@ func phaseOutputSchema(role assistant.AttemptRole) map[string]any {
 				"evidence_required",
 				"risk_flags",
 				"max_generation_attempts",
+				"schedule_plan",
 			},
 			"additionalProperties": false,
 		}
@@ -1373,6 +1400,26 @@ func phaseOutputSchema(role assistant.AttemptRole) map[string]any {
 				"evidence_checked",
 				"next_action_for_generator",
 			},
+			"additionalProperties": false,
+		}
+	case assistant.AttemptRoleScheduler:
+		return map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"entries": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"scheduled_for": map[string]any{"type": "string"},
+							"prompt":        map[string]any{"type": "string"},
+						},
+						"required":             []string{"scheduled_for", "prompt"},
+						"additionalProperties": false,
+					},
+				},
+			},
+			"required":             []string{"entries"},
 			"additionalProperties": false,
 		}
 	case assistant.AttemptRoleReporter:

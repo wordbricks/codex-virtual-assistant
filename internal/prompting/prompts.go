@@ -42,15 +42,16 @@ type ProjectSelectorInput struct {
 }
 
 type PlannerOutput struct {
-	Goal                  string   `json:"goal"`
-	Deliverables          []string `json:"deliverables"`
-	Constraints           []string `json:"constraints"`
-	ToolsAllowed          []string `json:"tools_allowed"`
-	ToolsRequired         []string `json:"tools_required"`
-	DoneDefinition        []string `json:"done_definition"`
-	EvidenceRequired      []string `json:"evidence_required"`
-	RiskFlags             []string `json:"risk_flags"`
-	MaxGenerationAttempts int      `json:"max_generation_attempts"`
+	Goal                  string                  `json:"goal"`
+	Deliverables          []string                `json:"deliverables"`
+	Constraints           []string                `json:"constraints"`
+	ToolsAllowed          []string                `json:"tools_allowed"`
+	ToolsRequired         []string                `json:"tools_required"`
+	DoneDefinition        []string                `json:"done_definition"`
+	EvidenceRequired      []string                `json:"evidence_required"`
+	RiskFlags             []string                `json:"risk_flags"`
+	MaxGenerationAttempts int                     `json:"max_generation_attempts"`
+	SchedulePlan          *assistant.SchedulePlan `json:"schedule_plan"`
 }
 
 type GateOutput struct {
@@ -85,6 +86,16 @@ type EvaluatorInput struct {
 	Attempt   assistant.Attempt
 	Artifacts []assistant.Artifact
 	Evidence  []assistant.Evidence
+}
+
+type SchedulerInput struct {
+	Run       assistant.Run
+	Artifacts []assistant.Artifact
+	Evidence  []assistant.Evidence
+}
+
+type SchedulerOutput struct {
+	Entries []assistant.ScheduleEntry `json:"entries"`
 }
 
 type ReportInput struct {
@@ -189,6 +200,10 @@ The JSON object must contain exactly these keys:
 - evidence_required
 - risk_flags
 - max_generation_attempts
+ - schedule_plan
+Use schedule_plan=null when all work should happen immediately.
+If the request includes future or time-distributed work, keep immediate work in the normal TaskSpec fields and place only the deferred work in schedule_plan.entries.
+Each schedule_plan entry must contain scheduled_for and prompt.
 Prefer "agent-browser" for browser work and keep deliverables and done_definition concrete and evaluator-verifiable.`),
 		User: strings.TrimSpace(fmt.Sprintf(
 			"%s\n\nUser request:\n%s\n\nDefault max generation attempts: %d\n\nProduce a normalized TaskSpec JSON object.",
@@ -336,6 +351,7 @@ func DecodePlannerOutput(raw []byte, input PlannerInput) (assistant.TaskSpec, er
 		EvidenceRequired:      output.EvidenceRequired,
 		RiskFlags:             output.RiskFlags,
 		MaxGenerationAttempts: output.MaxGenerationAttempts,
+		SchedulePlan:          output.SchedulePlan,
 	}, input.UserRequestRaw, input.MaxGenerationAttempts)
 }
 
@@ -441,6 +457,36 @@ When needs_user_input=false, report_payload must be the exact JSON object string
 	}
 }
 
+func BuildSchedulerPrompt(input SchedulerInput) Bundle {
+	builder := &strings.Builder{}
+	fmt.Fprintf(builder, "Original user request: %s\n", strings.TrimSpace(input.Run.UserRequestRaw))
+	fmt.Fprintf(builder, "Goal: %s\n", strings.TrimSpace(input.Run.TaskSpec.Goal))
+	if input.Run.TaskSpec.SchedulePlan != nil {
+		fmt.Fprintf(builder, "Planned schedule entries:\n")
+		for _, entry := range input.Run.TaskSpec.SchedulePlan.Entries {
+			fmt.Fprintf(builder, "- At %s: %s\n", strings.TrimSpace(entry.ScheduledFor), strings.TrimSpace(entry.Prompt))
+		}
+	}
+	appendArtifactHighlights(builder, input.Artifacts, 6)
+	appendEvidenceHighlights(builder, input.Evidence, 10)
+
+	return Bundle{
+		System: strings.TrimSpace(`
+You are the scheduler phase for a WTL GAN-policy based assistant.
+Finalize the deferred execution prompts using concrete details already discovered during the run.
+Resolve template placeholders into specific names, phone numbers, URLs, or other facts when the evidence supports them.
+Return one strict JSON object and nothing else.
+Do not wrap the JSON in markdown fences.
+The JSON object must contain exactly these keys:
+- entries
+Each entry object must contain exactly:
+- scheduled_for
+- prompt
+Use RFC3339 timestamps for scheduled_for whenever you can resolve them precisely.`),
+		User: strings.TrimSpace(builder.String()),
+	}
+}
+
 func DecodeEvaluatorOutput(raw []byte, runID, attemptID string, now time.Time) (assistant.Evaluation, error) {
 	var output EvaluatorOutput
 	if err := json.Unmarshal(raw, &output); err != nil {
@@ -521,6 +567,18 @@ func DecodeReportOutput(raw []byte) (ReportOutput, error) {
 		return ReportOutput{}, fmt.Errorf("decode report output: message_preview is required when delivery succeeds")
 	}
 	return output, nil
+}
+
+func DecodeSchedulerOutput(raw []byte) ([]assistant.ScheduleEntry, error) {
+	var output SchedulerOutput
+	if err := json.Unmarshal(raw, &output); err != nil {
+		return nil, fmt.Errorf("decode scheduler output: %w", err)
+	}
+	plan := assistant.SchedulePlan{Entries: output.Entries}
+	if err := plan.Validate(); err != nil {
+		return nil, fmt.Errorf("decode scheduler output: %w", err)
+	}
+	return output.Entries, nil
 }
 
 func projectPlannerContext(project assistant.ProjectContext) string {
