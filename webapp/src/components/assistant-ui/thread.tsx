@@ -52,6 +52,8 @@ type ThreadPhaseStatus =
   | "contracting"
   | "generating"
   | "evaluating"
+  | "scheduling"
+  | "reporting"
   | "waiting"
   | "completed"
   | "failed"
@@ -68,6 +70,8 @@ type ThreadPhaseEvent =
   | "contracting"
   | "generating"
   | "evaluating"
+  | "scheduling"
+  | "reporting"
   | "waiting"
   | "completed"
   | "failed"
@@ -756,6 +760,10 @@ function resolvePhaseTrack(status: ThreadPhaseStatus, events: ThreadPhaseEvent[]
 }
 
 function resolveDisplayPhase(status: ThreadPhaseStatus, events: ThreadPhaseEvent[], track: PhaseTrack): ThreadPhaseStatus {
+  if (status === "scheduling" || status === "reporting") {
+    return track === "answer" ? "answering" : "evaluating";
+  }
+
   if (status !== "waiting") return status;
 
   const candidates: ThreadPhaseEvent[] = track === "answer"
@@ -790,6 +798,10 @@ function phaseStatusPill(status: ThreadPhaseStatus) {
       return "Working";
     case "evaluating":
       return "Checking";
+    case "scheduling":
+      return "Scheduling";
+    case "reporting":
+      return "Reporting";
     case "waiting":
       return "Waiting";
     case "completed":

@@ -27,6 +27,8 @@ type RunStatus =
   | "contracting"
   | "generating"
   | "evaluating"
+  | "scheduling"
+  | "reporting"
   | "waiting"
   | "completed"
   | "failed"
@@ -188,6 +190,8 @@ const statusLabel: Record<RunStatus, string> = {
   contracting: "Contracting",
   generating: "Working",
   evaluating: "Checking",
+  scheduling: "Scheduling",
+  reporting: "Reporting",
   waiting: "Waiting",
   completed: "Done",
   failed: "Failed",
@@ -204,6 +208,8 @@ const statusMessage: Record<RunStatus, string> = {
   contracting: "Locking the acceptance contract before work starts…",
   generating: "Working on the task…",
   evaluating: "Checking whether the result is complete…",
+  scheduling: "Scheduling follow-up or deferred work…",
+  reporting: "Preparing the final report…",
   waiting: "Waiting for your input to continue.",
   completed: "Task completed.",
   failed: "Stopped — could not continue safely.",
@@ -1170,6 +1176,8 @@ function runStatusToMessageStatus(status: RunStatus): ThreadMessage["status"] {
     case "contracting":
     case "generating":
     case "evaluating":
+    case "scheduling":
+    case "reporting":
       return { type: "running" };
     case "waiting":
       return { type: "requires-action", reason: "interrupt" };
