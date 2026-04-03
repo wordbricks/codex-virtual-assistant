@@ -87,6 +87,16 @@ type EvaluatorInput struct {
 	Evidence  []assistant.Evidence
 }
 
+type ReportInput struct {
+	Run                 assistant.Run
+	Artifacts           []assistant.Artifact
+	Evidence            []assistant.Evidence
+	ToolCalls           []assistant.ToolCall
+	LatestEvaluation    *assistant.Evaluation
+	ChatAccountUsername string
+	MasterUsername      string
+}
+
 type EvaluatorOutput struct {
 	Passed                 bool     `json:"passed"`
 	Score                  int      `json:"score"`
@@ -121,6 +131,18 @@ type ContractOutput struct {
 	Constraints        []string         `json:"constraints"`
 	OutOfScope         []string         `json:"out_of_scope"`
 	RevisionNotes      string           `json:"revision_notes"`
+}
+
+type ReportOutput struct {
+	Summary         string `json:"summary"`
+	DeliveryStatus  string `json:"delivery_status"`
+	MessagePreview  string `json:"message_preview"`
+	ReportPayload   string `json:"report_payload"`
+	NeedsUserInput  bool   `json:"needs_user_input"`
+	WaitKind        string `json:"wait_kind"`
+	WaitTitle       string `json:"wait_title"`
+	WaitPrompt      string `json:"wait_prompt"`
+	WaitRiskSummary string `json:"wait_risk_summary"`
 }
 
 func BuildProjectSelectorPrompt(input ProjectSelectorInput) Bundle {
@@ -377,6 +399,48 @@ func BuildEvaluatorPrompt(input EvaluatorInput) Bundle {
 	}
 }
 
+func BuildReportPrompt(input ReportInput) Bundle {
+	builder := &strings.Builder{}
+	fmt.Fprintf(builder, "Original user request: %s\n", strings.TrimSpace(input.Run.UserRequestRaw))
+	fmt.Fprintf(builder, "Chat id: %s\n", strings.TrimSpace(input.Run.ChatID))
+	fmt.Fprintf(builder, "Chat account username: %s\n", strings.TrimSpace(input.ChatAccountUsername))
+	if strings.TrimSpace(input.MasterUsername) != "" {
+		fmt.Fprintf(builder, "Configured recipient username: %s\n", strings.TrimSpace(input.MasterUsername))
+	}
+	fmt.Fprintf(builder, "Goal: %s\n", strings.TrimSpace(input.Run.TaskSpec.Goal))
+	appendContractContext(builder, input.Run.TaskSpec)
+	if input.LatestEvaluation != nil {
+		fmt.Fprintf(builder, "Latest evaluation summary: %s\n", strings.TrimSpace(input.LatestEvaluation.Summary))
+	}
+	appendArtifactHighlights(builder, input.Artifacts, 6)
+	appendEvidenceHighlights(builder, input.Evidence, 10)
+	appendToolCallHighlights(builder, input.ToolCalls, 8)
+
+	return Bundle{
+		System: strings.TrimSpace(`
+You are the report phase for a WTL GAN-policy based assistant.
+Your job is to deliver the final user-facing result through agent-message before the run can complete.
+Before composing the message, call agent-message catalog prompt and use it as the source of truth for the json_render component catalog and constraints.
+Then send exactly one final report with agent-message send --kind json_render '<json-object>'.
+Return one strict JSON object and nothing else.
+Do not wrap the JSON in markdown fences.
+The JSON object must contain exactly these keys:
+- summary
+- delivery_status
+- message_preview
+- report_payload
+- needs_user_input
+- wait_kind
+- wait_title
+- wait_prompt
+- wait_risk_summary
+Use delivery_status="sent" only after the final report was successfully sent.
+Use needs_user_input=true only when you must safely pause for missing information or configuration.
+When needs_user_input=false, report_payload must be the exact JSON object string that was sent and message_preview must summarize the visible user-facing message.`),
+		User: strings.TrimSpace(builder.String()),
+	}
+}
+
 func DecodeEvaluatorOutput(raw []byte, runID, attemptID string, now time.Time) (assistant.Evaluation, error) {
 	var output EvaluatorOutput
 	if err := json.Unmarshal(raw, &output); err != nil {
@@ -422,6 +486,39 @@ func DecodeAnswerOutput(raw []byte) (AnswerOutput, error) {
 	}
 	if output.Output == "" {
 		return AnswerOutput{}, fmt.Errorf("decode answer output: output is required when needs_user_input is false")
+	}
+	return output, nil
+}
+
+func DecodeReportOutput(raw []byte) (ReportOutput, error) {
+	var output ReportOutput
+	if err := json.Unmarshal(raw, &output); err != nil {
+		return ReportOutput{}, fmt.Errorf("decode report output: %w", err)
+	}
+
+	output.Summary = strings.TrimSpace(output.Summary)
+	output.DeliveryStatus = strings.TrimSpace(output.DeliveryStatus)
+	output.MessagePreview = strings.TrimSpace(output.MessagePreview)
+	output.ReportPayload = strings.TrimSpace(output.ReportPayload)
+	output.WaitKind = strings.TrimSpace(output.WaitKind)
+	output.WaitTitle = strings.TrimSpace(output.WaitTitle)
+	output.WaitPrompt = strings.TrimSpace(output.WaitPrompt)
+	output.WaitRiskSummary = strings.TrimSpace(output.WaitRiskSummary)
+
+	if output.NeedsUserInput {
+		if output.WaitKind == "" || output.WaitPrompt == "" {
+			return ReportOutput{}, fmt.Errorf("decode report output: wait_kind and wait_prompt are required when needs_user_input is true")
+		}
+		return output, nil
+	}
+	if output.DeliveryStatus != "sent" {
+		return ReportOutput{}, fmt.Errorf("decode report output: delivery_status must be sent when no wait is requested")
+	}
+	if output.ReportPayload == "" {
+		return ReportOutput{}, fmt.Errorf("decode report output: report_payload is required when delivery succeeds")
+	}
+	if output.MessagePreview == "" {
+		return ReportOutput{}, fmt.Errorf("decode report output: message_preview is required when delivery succeeds")
 	}
 	return output, nil
 }
@@ -507,6 +604,42 @@ func appendParentContext(builder *strings.Builder, parent *ParentRunContext) {
 	for idx := len(evidence) - 1; idx >= 0 && idx >= len(evidence)-8; idx-- {
 		item := evidence[idx]
 		fmt.Fprintf(builder, "- [%s] %s\n", item.Kind, firstNonEmpty(item.Summary, item.Detail))
+	}
+}
+
+func appendArtifactHighlights(builder *strings.Builder, artifacts []assistant.Artifact, limit int) {
+	if len(artifacts) == 0 {
+		fmt.Fprintf(builder, "Artifacts: none.\n")
+		return
+	}
+	fmt.Fprintf(builder, "Artifacts (most recent first, capped to %d):\n", limit)
+	for idx := len(artifacts) - 1; idx >= 0 && idx >= len(artifacts)-limit; idx-- {
+		artifact := artifacts[idx]
+		fmt.Fprintf(builder, "- [%s] %s (%s)\n", artifact.Kind, firstNonEmpty(artifact.Title, artifact.ID), artifact.MIMEType)
+	}
+}
+
+func appendEvidenceHighlights(builder *strings.Builder, evidence []assistant.Evidence, limit int) {
+	if len(evidence) == 0 {
+		fmt.Fprintf(builder, "Evidence: none.\n")
+		return
+	}
+	fmt.Fprintf(builder, "Evidence highlights (most recent first, capped to %d):\n", limit)
+	for idx := len(evidence) - 1; idx >= 0 && idx >= len(evidence)-limit; idx-- {
+		item := evidence[idx]
+		fmt.Fprintf(builder, "- [%s] %s\n", item.Kind, firstNonEmpty(item.Summary, item.Detail))
+	}
+}
+
+func appendToolCallHighlights(builder *strings.Builder, toolCalls []assistant.ToolCall, limit int) {
+	if len(toolCalls) == 0 {
+		fmt.Fprintf(builder, "Recorded tool calls: none.\n")
+		return
+	}
+	fmt.Fprintf(builder, "Recorded tool calls (most recent first, capped to %d):\n", limit)
+	for idx := len(toolCalls) - 1; idx >= 0 && idx >= len(toolCalls)-limit; idx-- {
+		toolCall := toolCalls[idx]
+		fmt.Fprintf(builder, "- %s: %s\n", toolCall.ToolName, firstNonEmpty(toolCall.OutputSummary, toolCall.InputSummary))
 	}
 }
 

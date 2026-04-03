@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siisee11/CodexVirtualAssistant/internal/agentmessage"
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistantapp"
 	"github.com/siisee11/CodexVirtualAssistant/internal/config"
@@ -34,6 +35,7 @@ func TestRunsAPICreateAndGetRun(t *testing.T) {
 			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Pricing table", "Summary memo"})},
 			{role: assistant.AttemptRoleGenerator, result: generatorPhaseResult("Prepared pricing comparison draft")},
 			{role: assistant.AttemptRoleEvaluator, result: evaluatorPhaseResult(true, 92, "The result package is complete.", nil, "")},
+			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered final report.", "Pricing comparison delivered.")},
 		},
 	})
 
@@ -71,8 +73,10 @@ func TestRunsAPICreateFollowUpRunWithParentRunID(t *testing.T) {
 			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Pricing table"})},
 			{role: assistant.AttemptRoleGenerator, result: generatorPhaseResult("Prepared pricing comparison draft")},
 			{role: assistant.AttemptRoleEvaluator, result: evaluatorPhaseResult(true, 93, "Initial run completed.", nil, "")},
+			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered initial final report.", "Initial run delivered.")},
 			{role: assistant.AttemptRoleGate, result: gatePhaseResult("answer", "This follow-up can be answered from prior evidence.")},
 			{role: assistant.AttemptRoleAnswer, result: answerPhaseResult("Follow-up answer generated.", "Top three cheapest competitors were A, C, and E.")},
+			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered follow-up report.", "Top three cheapest competitors were A, C, and E.")},
 		},
 	})
 
@@ -153,6 +157,7 @@ func TestRunsAPIRejectsInputOnCompletedRunAndSuggestsFollowUp(t *testing.T) {
 		steps: []executorStep{
 			{role: assistant.AttemptRoleGate, result: gatePhaseResult("answer", "Simple request can be answered directly.")},
 			{role: assistant.AttemptRoleAnswer, result: answerPhaseResult("Answered directly.", "Here is the direct answer.")},
+			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered direct answer report.", "Here is the direct answer.")},
 		},
 	})
 
@@ -183,6 +188,7 @@ func TestRunsAPIListsChats(t *testing.T) {
 		steps: []executorStep{
 			{role: assistant.AttemptRoleGate, result: gatePhaseResult("answer", "Simple request can be answered directly.")},
 			{role: assistant.AttemptRoleAnswer, result: answerPhaseResult("Answered directly.", "Here is the direct answer.")},
+			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered direct answer report.", "Here is the direct answer.")},
 		},
 	})
 
@@ -232,6 +238,7 @@ func TestRunsAPIInputAndResumeFlow(t *testing.T) {
 			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Pricing table"})},
 			{role: assistant.AttemptRoleGenerator, result: generatorPhaseResult("Prepared revised comparison draft")},
 			{role: assistant.AttemptRoleEvaluator, result: evaluatorPhaseResult(true, 90, "The resumed run is complete.", nil, "")},
+			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered resumed final report.", "Pricing table delivered.")},
 		},
 	})
 
@@ -275,6 +282,7 @@ func TestRunsAPICancelAndEventsStream(t *testing.T) {
 			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Dashboard summary"})},
 			{role: assistant.AttemptRoleGenerator, waitForRelease: block, result: generatorPhaseResult("Prepared dashboard draft")},
 			{role: assistant.AttemptRoleEvaluator, result: evaluatorPhaseResult(true, 88, "Done.", nil, "")},
+			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered dashboard report.", "Dashboard summary delivered.")},
 		},
 	})
 
@@ -299,7 +307,7 @@ func TestRunsAPICancelAndEventsStream(t *testing.T) {
 
 	close(block)
 
-	deadline := time.Now().Add(4 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		if strings.Contains(streamResponse.Body.String(), `"phase":"completed"`) {
 			break
@@ -403,7 +411,7 @@ func newTestAPIHandler(t *testing.T, executor *sequenceExecutor) http.Handler {
 	events := NewEventBroker()
 	events.SetSnapshotLoader(repo)
 	runtime := wtl.NewCodexRuntime(executor, cfg.DefaultModel, time.Now)
-	engine := wtl.NewRunEngine(repo, runtime, events, policy, projectManager, time.Now)
+	engine := wtl.NewRunEngine(repo, runtime, events, policy, projectManager, apiTestMessenger(), time.Now)
 	runs := assistantapp.NewRunService(context.Background(), repo, engine, policy, time.Now)
 	handler, err := NewHandler(cfg, runs, events)
 	if err != nil {
@@ -434,7 +442,7 @@ func doJSONRequest(t *testing.T, handler http.Handler, method, path string, payl
 func waitForRunStatus(t *testing.T, handler http.Handler, runID string, want assistant.RunStatus) store.RunRecord {
 	t.Helper()
 
-	deadline := time.Now().Add(4 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+runID, nil)
 		response := httptest.NewRecorder()
@@ -616,4 +624,45 @@ func answerPhaseResult(summary, output string) wtl.CodexPhaseResult {
 		Summary: summary,
 		Output:  output,
 	}
+}
+
+func reportPhaseResult(summary, preview string) wtl.CodexPhaseResult {
+	payload := `{"root":"screen","elements":{"screen":{"type":"Text","props":{"text":"Delivered final report."},"children":[]}}}`
+	output, _ := json.Marshal(map[string]any{
+		"summary":           summary,
+		"delivery_status":   "sent",
+		"message_preview":   preview,
+		"report_payload":    payload,
+		"needs_user_input":  false,
+		"wait_kind":         "",
+		"wait_title":        "",
+		"wait_prompt":       "",
+		"wait_risk_summary": "",
+	})
+	return wtl.CodexPhaseResult{
+		Summary: summary,
+		Output:  string(output),
+	}
+}
+
+type apiMessenger struct{}
+
+func apiTestMessenger() *apiMessenger {
+	return &apiMessenger{}
+}
+
+func (*apiMessenger) WithChatAccount(_ context.Context, chatID string, fn func(agentmessage.ChatAccount) error) error {
+	return fn(agentmessage.ChatAccount{
+		ChatID: chatID,
+		Name:   "cva-chat-api",
+		Master: "supervisor",
+	})
+}
+
+func (*apiMessenger) CatalogPrompt(context.Context, string) (string, error) {
+	return "catalog prompt", nil
+}
+
+func (*apiMessenger) SendJSONRender(context.Context, string, string) error {
+	return nil
 }

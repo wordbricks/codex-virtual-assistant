@@ -17,6 +17,7 @@ const (
 	HookOnWaitEntered  HookName = "onWaitEntered"
 	HookOnRunCompleted HookName = "onRunCompleted"
 	HookOnRunExhausted HookName = "onRunExhausted"
+	HookOnRunFailed    HookName = "onRunFailed"
 )
 
 type HookPayload struct {
@@ -160,6 +161,8 @@ func (b *EventBroker) hookPayloads(ctx context.Context, loader runRecordLoader, 
 				names = append(names, HookOnRunCompleted)
 			case assistant.RunStatusExhausted:
 				names = append(names, HookOnRunExhausted)
+			case assistant.RunStatusFailed:
+				names = append(names, HookOnRunFailed)
 			}
 		}
 	}
@@ -180,7 +183,7 @@ func (b *EventBroker) hookPayloads(ctx context.Context, loader runRecordLoader, 
 }
 
 func (b *EventBroker) needsRunSnapshot(event assistant.RunEvent) bool {
-	return event.Type == assistant.EventTypePhaseChanged || event.Type == assistant.EventTypeWaiting
+	return event.Type == assistant.EventTypeRunCreated || event.Type == assistant.EventTypePhaseChanged || event.Type == assistant.EventTypeWaiting
 }
 
 func (b *EventBroker) dispatchHooks(ctx context.Context, payload HookPayload) {

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siisee11/CodexVirtualAssistant/internal/agentmessage"
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
 	"github.com/siisee11/CodexVirtualAssistant/internal/config"
 	"github.com/siisee11/CodexVirtualAssistant/internal/policy/gan"
@@ -43,11 +44,14 @@ func TestRunEngineRetriesGeneratorUntilEvaluationPasses(t *testing.T) {
 				{response: PhaseResponse{Summary: "First evaluation complete.", Output: evaluatorJSON(false, 72, "The table is missing source URLs.", []string{"Direct source URLs for each competitor"}, "Add direct source URLs for each competitor.")}},
 				{response: PhaseResponse{Summary: "Second evaluation complete.", Output: evaluatorJSON(true, 94, "The comparison now meets the done definition.", nil, "")}},
 			},
+			assistant.AttemptRoleReporter: {
+				{response: PhaseResponse{Summary: "Delivered final report.", Output: reportJSON("Delivered final report.", "Pricing comparison delivered.")}},
+			},
 		},
 	}
 	observer := &capturingObserver{}
 	projectManager := newEngineTestProjectManager(t, dataDir)
-	engine := NewRunEngine(repo, runtime, observer, gan.New(gan.Config{MaxGenerationAttempts: 2}), projectManager, fixedClock(now))
+	engine := NewRunEngine(repo, runtime, observer, gan.New(gan.Config{MaxGenerationAttempts: 2}), projectManager, fakeMessenger(), fixedClock(now))
 
 	run := assistant.NewRun("Compare competitor pricing and summarize it.", now, 2)
 	if err := engine.Start(context.Background(), run); err != nil {
@@ -62,8 +66,8 @@ func TestRunEngineRetriesGeneratorUntilEvaluationPasses(t *testing.T) {
 	if record.Run.Status != assistant.RunStatusCompleted {
 		t.Fatalf("Run.Status = %q, want %q", record.Run.Status, assistant.RunStatusCompleted)
 	}
-	if len(record.Attempts) != 8 {
-		t.Fatalf("len(Attempts) = %d, want 8", len(record.Attempts))
+	if len(record.Attempts) != 9 {
+		t.Fatalf("len(Attempts) = %d, want 9", len(record.Attempts))
 	}
 	if len(record.Evaluations) != 2 {
 		t.Fatalf("len(Evaluations) = %d, want 2", len(record.Evaluations))
@@ -74,8 +78,8 @@ func TestRunEngineRetriesGeneratorUntilEvaluationPasses(t *testing.T) {
 	if !record.Run.TaskSpec.HasAcceptedContract() {
 		t.Fatalf("AcceptanceContract = %#v, want agreed contract", record.Run.TaskSpec.AcceptanceContract)
 	}
-	if len(record.Artifacts) != 2 {
-		t.Fatalf("len(Artifacts) = %d, want 2", len(record.Artifacts))
+	if len(record.Artifacts) != 3 {
+		t.Fatalf("len(Artifacts) = %d, want 3", len(record.Artifacts))
 	}
 	if record.Attempts[0].Role != assistant.AttemptRoleGate {
 		t.Fatalf("Attempts[0].Role = %q, want %q", record.Attempts[0].Role, assistant.AttemptRoleGate)
@@ -111,9 +115,12 @@ func TestRunEngineWaitsAndResumes(t *testing.T) {
 			assistant.AttemptRoleEvaluator: {
 				{response: PhaseResponse{Summary: "Evaluation complete.", Output: evaluatorJSON(true, 90, "The run is complete.", nil, "")}},
 			},
+			assistant.AttemptRoleReporter: {
+				{response: PhaseResponse{Summary: "Delivered final report.", Output: reportJSON("Delivered final report.", "Pricing table delivered.")}},
+			},
 		},
 	}
-	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 2}), newEngineTestProjectManager(t, dataDir), fixedClock(now))
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 2}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
 
 	run := assistant.NewRun("Compare competitor pricing.", now, 2)
 	if err := engine.Start(context.Background(), run); err != nil {
@@ -168,7 +175,7 @@ func TestRunEngineCancelStopsWaitingRun(t *testing.T) {
 			},
 		},
 	}
-	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fixedClock(now))
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
 
 	run := assistant.NewRun("Open the dashboard and inspect the numbers.", now, 1)
 	if err := engine.Start(context.Background(), run); err != nil {
@@ -203,9 +210,12 @@ func TestRunEngineGateRoutesToAnswerAndCompletes(t *testing.T) {
 			assistant.AttemptRoleAnswer: {
 				{response: PhaseResponse{Summary: "Prepared direct answer.", Output: "Top 3 cheapest competitors: A, C, E."}},
 			},
+			assistant.AttemptRoleReporter: {
+				{response: PhaseResponse{Summary: "Delivered final report.", Output: reportJSON("Delivered final report.", "Top 3 cheapest competitors: A, C, E.")}},
+			},
 		},
 	}
-	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fixedClock(now))
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
 
 	run := assistant.NewRun("What were the top 3 cheapest competitors from the previous run?", now, 1)
 	if err := engine.Start(context.Background(), run); err != nil {
@@ -222,13 +232,13 @@ func TestRunEngineGateRoutesToAnswerAndCompletes(t *testing.T) {
 	if record.Run.GateRoute != assistant.RunRouteAnswer {
 		t.Fatalf("GateRoute = %q, want %q", record.Run.GateRoute, assistant.RunRouteAnswer)
 	}
-	if len(record.Attempts) != 2 {
-		t.Fatalf("len(Attempts) = %d, want 2", len(record.Attempts))
+	if len(record.Attempts) != 3 {
+		t.Fatalf("len(Attempts) = %d, want 3", len(record.Attempts))
 	}
-	if record.Attempts[0].Role != assistant.AttemptRoleGate || record.Attempts[1].Role != assistant.AttemptRoleAnswer {
-		t.Fatalf("attempt roles = %#v, want gate -> answer", []assistant.AttemptRole{record.Attempts[0].Role, record.Attempts[1].Role})
+	if record.Attempts[0].Role != assistant.AttemptRoleGate || record.Attempts[1].Role != assistant.AttemptRoleAnswer || record.Attempts[2].Role != assistant.AttemptRoleReporter {
+		t.Fatalf("attempt roles = %#v, want gate -> answer -> reporter", []assistant.AttemptRole{record.Attempts[0].Role, record.Attempts[1].Role, record.Attempts[2].Role})
 	}
-	if len(record.Artifacts) == 0 || !strings.Contains(record.Artifacts[len(record.Artifacts)-1].Content, "Top 3 cheapest competitors") {
+	if !artifactsContain(record.Artifacts, "Top 3 cheapest competitors") {
 		t.Fatalf("Artifacts = %#v, want persisted answer artifact", record.Artifacts)
 	}
 }
@@ -247,9 +257,12 @@ func TestRunEngineRetriesAnswerAfterTransientExecutorClosure(t *testing.T) {
 				{err: errors.New("codex app server closed during phase execution")},
 				{response: PhaseResponse{Summary: "Greeted the user.", Output: "Hi there!"}},
 			},
+			assistant.AttemptRoleReporter: {
+				{response: PhaseResponse{Summary: "Delivered final report.", Output: reportJSON("Delivered final report.", "Hi there!")}},
+			},
 		},
 	}
-	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fixedClock(now))
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
 
 	run := assistant.NewRun("hi", now, 1)
 	if err := engine.Start(context.Background(), run); err != nil {
@@ -263,11 +276,11 @@ func TestRunEngineRetriesAnswerAfterTransientExecutorClosure(t *testing.T) {
 	if record.Run.Status != assistant.RunStatusCompleted {
 		t.Fatalf("Run.Status = %q, want %q", record.Run.Status, assistant.RunStatusCompleted)
 	}
-	if len(record.Attempts) != 3 {
-		t.Fatalf("len(Attempts) = %d, want 3", len(record.Attempts))
+	if len(record.Attempts) != 4 {
+		t.Fatalf("len(Attempts) = %d, want 4", len(record.Attempts))
 	}
-	if record.Attempts[1].Role != assistant.AttemptRoleAnswer || record.Attempts[2].Role != assistant.AttemptRoleAnswer {
-		t.Fatalf("attempt roles = %#v, want gate -> answer -> answer", []assistant.AttemptRole{record.Attempts[0].Role, record.Attempts[1].Role, record.Attempts[2].Role})
+	if record.Attempts[1].Role != assistant.AttemptRoleAnswer || record.Attempts[2].Role != assistant.AttemptRoleAnswer || record.Attempts[3].Role != assistant.AttemptRoleReporter {
+		t.Fatalf("attempt roles = %#v, want gate -> answer -> answer -> reporter", []assistant.AttemptRole{record.Attempts[0].Role, record.Attempts[1].Role, record.Attempts[2].Role, record.Attempts[3].Role})
 	}
 	if got := runtime.index[assistant.AttemptRoleAnswer]; got != 2 {
 		t.Fatalf("answer runtime calls = %d, want 2", got)
@@ -287,9 +300,10 @@ func TestRunEnginePreservesWorkflowOrderAfterGate(t *testing.T) {
 			{role: assistant.AttemptRoleContractor, response: PhaseResponse{Summary: "Contract agreed.", Output: contractJSON("agreed", []string{"Validation report"}, []string{"Workflow executes in order"}, "")}},
 			{role: assistant.AttemptRoleGenerator, response: PhaseResponse{Summary: "Generator produced output."}},
 			{role: assistant.AttemptRoleEvaluator, response: PhaseResponse{Summary: "Evaluator passed.", Output: evaluatorJSON(true, 95, "Workflow order is correct.", nil, "")}},
+			{role: assistant.AttemptRoleReporter, response: PhaseResponse{Summary: "Delivered final report.", Output: reportJSON("Delivered final report.", "Workflow order is correct.")}},
 		},
 	}
-	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fixedClock(now))
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
 
 	run := assistant.NewRun("Validate workflow ordering after gate.", now, 1)
 	if err := engine.Start(context.Background(), run); err != nil {
@@ -314,6 +328,7 @@ func TestRunEnginePreservesWorkflowOrderAfterGate(t *testing.T) {
 		assistant.AttemptRoleContractor,
 		assistant.AttemptRoleGenerator,
 		assistant.AttemptRoleEvaluator,
+		assistant.AttemptRoleReporter,
 	}
 	if len(record.Attempts) != len(wantRoles) {
 		t.Fatalf("len(Attempts) = %d, want %d", len(record.Attempts), len(wantRoles))
@@ -322,6 +337,82 @@ func TestRunEnginePreservesWorkflowOrderAfterGate(t *testing.T) {
 		if got := record.Attempts[idx].Role; got != want {
 			t.Fatalf("Attempts[%d].Role = %q, want %q", idx, got, want)
 		}
+	}
+}
+
+func TestRunEngineReportCanEnterWaiting(t *testing.T) {
+	t.Parallel()
+
+	repo, dataDir := openEngineTestRepository(t)
+	now := time.Date(2026, time.March, 27, 17, 15, 0, 0, time.UTC)
+	runtime := &scriptedRuntime{
+		steps: map[assistant.AttemptRole][]runtimeStep{
+			assistant.AttemptRoleGate: {
+				{response: PhaseResponse{Summary: "Gate routed to answer.", Output: gateJSON("answer", "This is a read-only request.")}},
+			},
+			assistant.AttemptRoleAnswer: {
+				{response: PhaseResponse{Summary: "Prepared direct answer.", Output: "Here is the answer."}},
+			},
+			assistant.AttemptRoleReporter: {
+				{response: PhaseResponse{Summary: "Need confirmation before sending.", WaitRequest: &assistant.WaitRequest{
+					Kind:   assistant.WaitKindApproval,
+					Title:  "Confirm report delivery",
+					Prompt: "Approve sending the final report card.",
+				}}},
+			},
+		},
+	}
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
+
+	run := assistant.NewRun("Answer a quick follow-up.", now, 1)
+	if err := engine.Start(context.Background(), run); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	record, err := repo.GetRunRecord(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("GetRunRecord() error = %v", err)
+	}
+	if record.Run.Status != assistant.RunStatusWaiting {
+		t.Fatalf("Run.Status = %q, want %q", record.Run.Status, assistant.RunStatusWaiting)
+	}
+	if record.Run.WaitingFor == nil || record.Run.WaitingFor.Title != "Confirm report delivery" {
+		t.Fatalf("WaitingFor = %#v, want report wait request", record.Run.WaitingFor)
+	}
+}
+
+func TestRunEngineReportFailurePreventsCompletion(t *testing.T) {
+	t.Parallel()
+
+	repo, dataDir := openEngineTestRepository(t)
+	now := time.Date(2026, time.March, 27, 17, 30, 0, 0, time.UTC)
+	runtime := &scriptedRuntime{
+		steps: map[assistant.AttemptRole][]runtimeStep{
+			assistant.AttemptRoleGate: {
+				{response: PhaseResponse{Summary: "Gate routed to answer.", Output: gateJSON("answer", "This is a read-only request.")}},
+			},
+			assistant.AttemptRoleAnswer: {
+				{response: PhaseResponse{Summary: "Prepared direct answer.", Output: "Here is the answer."}},
+			},
+			assistant.AttemptRoleReporter: {
+				{response: PhaseResponse{Summary: "Report failed.", Output: `{"summary":"Report failed.","delivery_status":"wait","message_preview":"","report_payload":"","needs_user_input":false,"wait_kind":"","wait_title":"","wait_prompt":"","wait_risk_summary":""}`}},
+			},
+		},
+	}
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
+
+	run := assistant.NewRun("Answer a quick follow-up.", now, 1)
+	err := engine.Start(context.Background(), run)
+	if err == nil {
+		t.Fatal("Start() error = nil, want report failure")
+	}
+
+	record, getErr := repo.GetRunRecord(context.Background(), run.ID)
+	if getErr != nil {
+		t.Fatalf("GetRunRecord() error = %v", getErr)
+	}
+	if record.Run.Status != assistant.RunStatusFailed {
+		t.Fatalf("Run.Status = %q, want %q", record.Run.Status, assistant.RunStatusFailed)
 	}
 }
 
@@ -464,6 +555,11 @@ func evaluatorJSON(passed bool, score int, summary string, missing []string, nex
 	return fmt.Sprintf(`{"passed":%t,"score":%d,"summary":%q,"missing_requirements":%s,"incorrect_claims":[],"evidence_checked":["artifacts"],"next_action_for_generator":%q}`, passed, score, summary, missingValue, nextAction)
 }
 
+func reportJSON(summary, preview string) string {
+	payload := `{"root":"screen","elements":{"screen":{"type":"Text","props":{"text":"Delivered final report."},"children":[]}}}`
+	return fmt.Sprintf(`{"summary":%q,"delivery_status":"sent","message_preview":%q,"report_payload":%q,"needs_user_input":false,"wait_kind":"","wait_title":"","wait_prompt":"","wait_risk_summary":""}`, summary, preview, payload)
+}
+
 func stringsJoin(values []string) string {
 	switch len(values) {
 	case 0:
@@ -473,4 +569,40 @@ func stringsJoin(values []string) string {
 	default:
 		return values[0] + `","` + values[1]
 	}
+}
+
+type fakeAgentMessageService struct {
+	account agentmessage.ChatAccount
+}
+
+func fakeMessenger() *fakeAgentMessageService {
+	return &fakeAgentMessageService{
+		account: agentmessage.ChatAccount{
+			Name:   "cva-chat_test",
+			Master: "supervisor",
+		},
+	}
+}
+
+func (f *fakeAgentMessageService) WithChatAccount(_ context.Context, chatID string, fn func(agentmessage.ChatAccount) error) error {
+	account := f.account
+	account.ChatID = chatID
+	return fn(account)
+}
+
+func (f *fakeAgentMessageService) CatalogPrompt(context.Context, string) (string, error) {
+	return "catalog prompt", nil
+}
+
+func (f *fakeAgentMessageService) SendJSONRender(context.Context, string, string) error {
+	return nil
+}
+
+func artifactsContain(artifacts []assistant.Artifact, want string) bool {
+	for _, artifact := range artifacts {
+		if strings.Contains(artifact.Content, want) {
+			return true
+		}
+	}
+	return false
 }

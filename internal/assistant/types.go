@@ -17,6 +17,7 @@ const (
 	RunStatusContracting      RunStatus = "contracting"
 	RunStatusGenerating       RunStatus = "generating"
 	RunStatusEvaluating       RunStatus = "evaluating"
+	RunStatusReporting        RunStatus = "reporting"
 	RunStatusWaiting          RunStatus = "waiting"
 	RunStatusCompleted        RunStatus = "completed"
 	RunStatusFailed           RunStatus = "failed"
@@ -35,6 +36,7 @@ const (
 	RunPhaseContracting      RunPhase = "contracting"
 	RunPhaseGenerating       RunPhase = "generating"
 	RunPhaseEvaluating       RunPhase = "evaluating"
+	RunPhaseReporting        RunPhase = "reporting"
 	RunPhaseWaiting          RunPhase = "waiting"
 	RunPhaseCompleted        RunPhase = "completed"
 	RunPhaseFailed           RunPhase = "failed"
@@ -51,6 +53,7 @@ const (
 	AttemptRoleContractor      AttemptRole = "contractor"
 	AttemptRoleGenerator       AttemptRole = "generator"
 	AttemptRoleEvaluator       AttemptRole = "evaluator"
+	AttemptRoleReporter        AttemptRole = "reporter"
 )
 
 type RunRoute string
@@ -392,6 +395,7 @@ func AllRunStatuses() []RunStatus {
 		RunStatusContracting,
 		RunStatusGenerating,
 		RunStatusEvaluating,
+		RunStatusReporting,
 		RunStatusWaiting,
 		RunStatusCompleted,
 		RunStatusFailed,
@@ -410,6 +414,7 @@ func AllRunPhases() []RunPhase {
 		RunPhaseContracting,
 		RunPhaseGenerating,
 		RunPhaseEvaluating,
+		RunPhaseReporting,
 		RunPhaseWaiting,
 		RunPhaseCompleted,
 		RunPhaseFailed,

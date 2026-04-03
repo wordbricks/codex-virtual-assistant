@@ -150,6 +150,27 @@ func TestCodexRuntimeUsesReadOnlyContextToolsForGateAndAnswer(t *testing.T) {
 	}
 }
 
+func TestCodexRuntimeUsesAgentMessageToolsForReporter(t *testing.T) {
+	t.Parallel()
+
+	executor := &fakeCodexExecutor{
+		result: CodexPhaseResult{Output: "{}", Summary: "ok"},
+	}
+	runtime := NewCodexRuntime(executor, "", time.Now)
+
+	_, err := runtime.Execute(context.Background(), assistant.AttemptRoleReporter, PhaseRequest{
+		Run:     assistant.Run{ID: "run_report"},
+		Attempt: assistant.Attempt{ID: "attempt_report"},
+		Prompt:  prompting.Bundle{System: "report system", User: "report user"},
+	})
+	if err != nil {
+		t.Fatalf("Execute(reporter) error = %v", err)
+	}
+	if len(executor.request.Tools) == 0 || executor.request.Tools[0] != "agent-message" {
+		t.Fatalf("reporter tools = %#v, want agent-message tools", executor.request.Tools)
+	}
+}
+
 type fakeCodexExecutor struct {
 	request CodexPhaseRequest
 	result  CodexPhaseResult

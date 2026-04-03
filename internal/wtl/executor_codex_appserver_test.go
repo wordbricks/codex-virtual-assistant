@@ -87,7 +87,7 @@ func TestIsMeaningfulReasoningText(t *testing.T) {
 	}
 }
 
-func TestPhaseForAttemptRoleSupportsGateAndAnswer(t *testing.T) {
+func TestPhaseForAttemptRoleSupportsGateAnswerAndReport(t *testing.T) {
 	t.Parallel()
 
 	if got := phaseForAttemptRole(assistant.AttemptRoleGate); got != assistant.RunPhaseGating {
@@ -96,9 +96,12 @@ func TestPhaseForAttemptRoleSupportsGateAndAnswer(t *testing.T) {
 	if got := phaseForAttemptRole(assistant.AttemptRoleAnswer); got != assistant.RunPhaseAnswering {
 		t.Fatalf("phaseForAttemptRole(answer) = %q, want %q", got, assistant.RunPhaseAnswering)
 	}
+	if got := phaseForAttemptRole(assistant.AttemptRoleReporter); got != assistant.RunPhaseReporting {
+		t.Fatalf("phaseForAttemptRole(reporter) = %q, want %q", got, assistant.RunPhaseReporting)
+	}
 }
 
-func TestPhaseOutputSchemaSupportsGateAndAnswer(t *testing.T) {
+func TestPhaseOutputSchemaSupportsGateAnswerAndReport(t *testing.T) {
 	t.Parallel()
 
 	gate := phaseOutputSchema(assistant.AttemptRoleGate)
@@ -122,5 +125,20 @@ func TestPhaseOutputSchemaSupportsGateAndAnswer(t *testing.T) {
 	}
 	if _, ok := properties["wait_prompt"]; !ok {
 		t.Fatalf("answer schema properties = %#v, want wait_prompt", properties)
+	}
+
+	report := phaseOutputSchema(assistant.AttemptRoleReporter)
+	if report == nil {
+		t.Fatal("phaseOutputSchema(reporter) = nil")
+	}
+	reportProperties, ok := report["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("report schema properties type = %T, want map[string]any", report["properties"])
+	}
+	if _, ok := reportProperties["delivery_status"]; !ok {
+		t.Fatalf("report schema properties = %#v, want delivery_status", reportProperties)
+	}
+	if _, ok := reportProperties["report_payload"]; !ok {
+		t.Fatalf("report schema properties = %#v, want report_payload", reportProperties)
 	}
 }

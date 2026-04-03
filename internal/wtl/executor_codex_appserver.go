@@ -306,10 +306,13 @@ func (s *appServerTurnSession) buildPhaseResult(request CodexPhaseRequest) Codex
 	}
 
 	switch request.Role {
-	case assistant.AttemptRoleGenerator, assistant.AttemptRoleAnswer:
+	case assistant.AttemptRoleGenerator, assistant.AttemptRoleAnswer, assistant.AttemptRoleReporter:
 		var payload struct {
 			Summary         string `json:"summary"`
 			Output          string `json:"output"`
+			DeliveryStatus  string `json:"delivery_status"`
+			MessagePreview  string `json:"message_preview"`
+			ReportPayload   string `json:"report_payload"`
 			NeedsUserInput  bool   `json:"needs_user_input"`
 			WaitKind        string `json:"wait_kind"`
 			WaitTitle       string `json:"wait_title"`
@@ -317,8 +320,8 @@ func (s *appServerTurnSession) buildPhaseResult(request CodexPhaseRequest) Codex
 			WaitRiskSummary string `json:"wait_risk_summary"`
 		}
 		if err := json.Unmarshal([]byte(raw), &payload); err == nil {
-			response.Summary = strings.TrimSpace(firstNonEmpty(payload.Summary, summarizeOutput(payload.Output)))
-			response.Output = strings.TrimSpace(payload.Output)
+			response.Summary = strings.TrimSpace(firstNonEmpty(payload.Summary, summarizeOutput(payload.Output), payload.MessagePreview))
+			response.Output = strings.TrimSpace(firstNonEmpty(payload.Output, payload.ReportPayload))
 			if response.WaitRequest == nil && payload.NeedsUserInput {
 				response.WaitRequest = (&waitRequestPayload{
 					Kind:        payload.WaitKind,
@@ -333,13 +336,18 @@ func (s *appServerTurnSession) buildPhaseResult(request CodexPhaseRequest) Codex
 		}
 		if response.WaitRequest == nil && strings.TrimSpace(response.Output) != "" {
 			title := "Assistant draft result"
+			mimeType := "text/markdown"
 			if request.Role == assistant.AttemptRoleAnswer {
 				title = "Assistant answer"
+			}
+			if request.Role == assistant.AttemptRoleReporter {
+				title = "Delivered report payload"
+				mimeType = "application/json"
 			}
 			response.Artifacts = append(response.Artifacts, assistant.Artifact{
 				Kind:     assistant.ArtifactKindReport,
 				Title:    title,
-				MIMEType: "text/markdown",
+				MIMEType: mimeType,
 				Content:  response.Output,
 			})
 		}
@@ -917,6 +925,8 @@ func phaseForAttemptRole(role assistant.AttemptRole) assistant.RunPhase {
 		return assistant.RunPhaseContracting
 	case assistant.AttemptRoleEvaluator:
 		return assistant.RunPhaseEvaluating
+	case assistant.AttemptRoleReporter:
+		return assistant.RunPhaseReporting
 	default:
 		return assistant.RunPhaseGenerating
 	}
@@ -1362,6 +1372,33 @@ func phaseOutputSchema(role assistant.AttemptRole) map[string]any {
 				"incorrect_claims",
 				"evidence_checked",
 				"next_action_for_generator",
+			},
+			"additionalProperties": false,
+		}
+	case assistant.AttemptRoleReporter:
+		return map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"summary":           map[string]any{"type": "string"},
+				"delivery_status":   map[string]any{"type": "string", "enum": []string{"sent", "wait"}},
+				"message_preview":   map[string]any{"type": "string"},
+				"report_payload":    map[string]any{"type": "string"},
+				"needs_user_input":  map[string]any{"type": "boolean"},
+				"wait_kind":         map[string]any{"type": "string", "enum": []string{"", "approval", "clarification", "authentication"}},
+				"wait_title":        map[string]any{"type": "string"},
+				"wait_prompt":       map[string]any{"type": "string"},
+				"wait_risk_summary": map[string]any{"type": "string"},
+			},
+			"required": []string{
+				"summary",
+				"delivery_status",
+				"message_preview",
+				"report_payload",
+				"needs_user_input",
+				"wait_kind",
+				"wait_title",
+				"wait_prompt",
+				"wait_risk_summary",
 			},
 			"additionalProperties": false,
 		}

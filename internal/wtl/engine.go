@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/siisee11/CodexVirtualAssistant/internal/agentmessage"
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
 	"github.com/siisee11/CodexVirtualAssistant/internal/policy/gan"
 	"github.com/siisee11/CodexVirtualAssistant/internal/prompting"
@@ -35,15 +36,16 @@ type ProjectManager interface {
 }
 
 type RunEngine struct {
-	repo     Repository
-	runtime  Runtime
-	observer Observer
-	policy   gan.Policy
-	projects ProjectManager
-	now      func() time.Time
+	repo      Repository
+	runtime   Runtime
+	observer  Observer
+	policy    gan.Policy
+	projects  ProjectManager
+	messenger agentmessage.Service
+	now       func() time.Time
 }
 
-func NewRunEngine(repo Repository, runtime Runtime, observer Observer, policy gan.Policy, projects ProjectManager, now func() time.Time) *RunEngine {
+func NewRunEngine(repo Repository, runtime Runtime, observer Observer, policy gan.Policy, projects ProjectManager, messenger agentmessage.Service, now func() time.Time) *RunEngine {
 	if observer == nil {
 		observer = noopObserver{}
 	}
@@ -51,12 +53,13 @@ func NewRunEngine(repo Repository, runtime Runtime, observer Observer, policy ga
 		now = time.Now
 	}
 	return &RunEngine{
-		repo:     repo,
-		runtime:  runtime,
-		observer: observer,
-		policy:   policy,
-		projects: projects,
-		now:      now,
+		repo:      repo,
+		runtime:   runtime,
+		observer:  observer,
+		policy:    policy,
+		projects:  projects,
+		messenger: messenger,
+		now:       now,
 	}
 }
 
@@ -180,7 +183,8 @@ func (e *RunEngine) continueRun(ctx context.Context, runID string, role assistan
 			if record.Run.Status == assistant.RunStatusWaiting || isTerminalStatus(record.Run.Status) {
 				return nil
 			}
-			return fmt.Errorf("%w: answer phase completed without terminal transition", ErrInvalidRunState)
+			role = assistant.AttemptRoleReporter
+			resumeInput = nil
 		case assistant.AttemptRoleProjectSelector:
 			if err := e.executeProjectSelector(ctx, &record, resumeInput); err != nil {
 				return err
@@ -250,13 +254,27 @@ func (e *RunEngine) continueRun(ctx context.Context, runID string, role assistan
 			switch directive {
 			case DirectiveWait:
 				return nil
-			case DirectiveComplete, DirectiveFail:
+			case DirectiveFail:
 				return nil
+			case DirectiveComplete:
+				role = assistant.AttemptRoleReporter
+				resumeInput = nil
 			case DirectiveRetry:
 				role = assistant.AttemptRoleGenerator
 				resumeInput = nil
 			default:
 				return fmt.Errorf("wtl: unsupported directive %q", directive)
+			}
+		case assistant.AttemptRoleReporter:
+			directive, err := e.executeReporter(ctx, &record, resumeInput)
+			if err != nil {
+				return err
+			}
+			switch directive {
+			case DirectiveWait, DirectiveComplete, DirectiveFail:
+				return nil
+			default:
+				return fmt.Errorf("wtl: unsupported reporter directive %q", directive)
 			}
 		default:
 			return fmt.Errorf("wtl: unsupported role %q", role)
@@ -393,7 +411,10 @@ func (e *RunEngine) executeAnswer(ctx context.Context, record *store.RunRecord, 
 
 	record.Run.AttemptCount = len(record.Attempts) + 1
 	record.Run.UpdatedAt = e.now().UTC()
-	return e.completeRun(ctx, record.Run, firstNonEmpty(summary, "Answer completed."))
+	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+		return err
+	}
+	return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, firstNonEmpty(summary, "Answer completed. Starting final report delivery."))
 }
 
 func (e *RunEngine) executeProjectSelector(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) error {
@@ -673,7 +694,10 @@ func (e *RunEngine) executeEvaluator(ctx context.Context, record *store.RunRecor
 	}
 	switch e.policy.DecideEvaluation(updatedRecord.Run, updatedRecord.Attempts, evaluation) {
 	case gan.EvaluationDecisionComplete:
-		return DirectiveComplete, e.completeRun(ctx, updatedRecord.Run, evaluation.Summary)
+		if err := e.publishEvent(ctx, updatedRecord.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, firstNonEmpty(evaluation.Summary, "Evaluation passed. Starting final report delivery.")); err != nil {
+			return "", err
+		}
+		return DirectiveComplete, nil
 	case gan.EvaluationDecisionFail:
 		return DirectiveFail, e.exhaustRun(ctx, updatedRecord.Run, evaluation.Summary)
 	case gan.EvaluationDecisionRetry:
@@ -684,6 +708,103 @@ func (e *RunEngine) executeEvaluator(ctx context.Context, record *store.RunRecor
 	default:
 		return "", fmt.Errorf("wtl: unknown evaluation decision")
 	}
+}
+
+func (e *RunEngine) executeReporter(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) (Directive, error) {
+	if e.messenger == nil {
+		return DirectiveFail, e.failRun(ctx, record.Run, "Report delivery is not configured.", ErrInvalidRunState)
+	}
+
+	var directive Directive
+	var phaseErr error
+	err := e.messenger.WithChatAccount(ctx, record.Run.ChatID, func(account agentmessage.ChatAccount) error {
+		now := e.now().UTC()
+		record.Run.Status = assistant.RunStatusReporting
+		record.Run.Phase = assistant.RunPhaseReporting
+		record.Run.WaitingFor = nil
+		record.Run.UpdatedAt = now
+		if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+			return err
+		}
+		if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, "Delivering the final report through agent-message."); err != nil {
+			return err
+		}
+
+		prompt := prompting.BuildReportPrompt(prompting.ReportInput{
+			Run:                 record.Run,
+			Artifacts:           record.Artifacts,
+			Evidence:            record.Evidence,
+			ToolCalls:           record.ToolCalls,
+			LatestEvaluation:    record.Run.LatestEvaluation,
+			ChatAccountUsername: account.Name,
+			MasterUsername:      account.Master,
+		})
+
+		attempt, response, err := e.executeAttempt(ctx, record.Run, record.Attempts, assistant.AttemptRoleReporter, prompt, "", resumeInput, record.Run.Project.WorkspaceDir)
+		if err != nil {
+			phaseErr = e.failRun(ctx, record.Run, fmt.Sprintf("Report phase execution failed: %v", err), err)
+			directive = DirectiveFail
+			return nil
+		}
+		if response.WaitRequest != nil {
+			phaseErr = e.enterWaiting(ctx, record.Run, attempt, response.WaitRequest)
+			directive = DirectiveWait
+			return nil
+		}
+
+		reportOutput, err := prompting.DecodeReportOutput([]byte(response.Output))
+		if err != nil {
+			phaseErr = e.failRun(ctx, record.Run, fmt.Sprintf("Report output could not be decoded: %v", err), err)
+			directive = DirectiveFail
+			return nil
+		}
+		if reportOutput.NeedsUserInput {
+			phaseErr = e.enterWaiting(ctx, record.Run, attempt, &assistant.WaitRequest{
+				Kind:        assistant.WaitKind(reportOutput.WaitKind),
+				Title:       reportOutput.WaitTitle,
+				Prompt:      reportOutput.WaitPrompt,
+				RiskSummary: reportOutput.WaitRiskSummary,
+			})
+			directive = DirectiveWait
+			return nil
+		}
+		if reportOutput.DeliveryStatus != "sent" {
+			phaseErr = e.failRun(ctx, record.Run, firstNonEmpty(reportOutput.Summary, "Report delivery did not complete successfully."), ErrInvalidRunState)
+			directive = DirectiveFail
+			return nil
+		}
+
+		latestRecord, err := e.repo.GetRunRecord(ctx, record.Run.ID)
+		if err != nil {
+			return err
+		}
+
+		if !hasReportArtifact(latestRecord.Artifacts, attempt.ID, reportOutput.ReportPayload) {
+			now := e.now().UTC()
+			if err := e.repo.AddArtifact(ctx, assistant.Artifact{
+				ID:        assistant.NewID("artifact", now),
+				RunID:     record.Run.ID,
+				AttemptID: attempt.ID,
+				Kind:      assistant.ArtifactKindReport,
+				Title:     "Final report payload",
+				MIMEType:  "application/json",
+				Content:   reportOutput.ReportPayload,
+				CreatedAt: now,
+			}); err != nil {
+				return err
+			}
+		}
+
+		latestRecord.Run.AttemptCount = len(latestRecord.Attempts)
+		latestRecord.Run.UpdatedAt = e.now().UTC()
+		phaseErr = e.completeRun(ctx, latestRecord.Run, firstNonEmpty(reportOutput.Summary, "Final report delivered."))
+		directive = DirectiveComplete
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return directive, phaseErr
 }
 
 func (e *RunEngine) executeAttempt(ctx context.Context, run assistant.Run, existingAttempts []assistant.Attempt, role assistant.AttemptRole, prompt prompting.Bundle, critique string, resumeInput map[string]string, workingDir string) (assistant.Attempt, PhaseResponse, error) {
@@ -906,6 +1027,18 @@ func latestAttemptByRole(attempts []assistant.Attempt, role assistant.AttemptRol
 		}
 	}
 	return nil
+}
+
+func hasReportArtifact(artifacts []assistant.Artifact, attemptID string, content string) bool {
+	for _, artifact := range artifacts {
+		if artifact.AttemptID != attemptID {
+			continue
+		}
+		if artifact.Kind == assistant.ArtifactKindReport && strings.TrimSpace(artifact.Content) == strings.TrimSpace(content) {
+			return true
+		}
+	}
+	return false
 }
 
 func generatorPhaseSummary(record *store.RunRecord) string {

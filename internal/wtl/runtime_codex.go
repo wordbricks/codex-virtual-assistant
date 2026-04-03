@@ -213,6 +213,9 @@ func phaseTools(run assistant.Run, role assistant.AttemptRole) []string {
 	if role == assistant.AttemptRoleContractor {
 		return []string{"stored-plan"}
 	}
+	if role == assistant.AttemptRoleReporter {
+		return []string{"agent-message", "stored-artifacts", "stored-evidence", "stored-evaluations"}
+	}
 	tools := append([]string{}, run.TaskSpec.ToolsAllowed...)
 	if role == assistant.AttemptRoleEvaluator {
 		tools = append(tools, "stored-artifacts", "stored-evidence")

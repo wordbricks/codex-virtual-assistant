@@ -77,3 +77,32 @@ func TestRunValidateRejectsInvalidGateMetadata(t *testing.T) {
 		t.Fatal("Validate() error = nil, want gate metadata requires route error")
 	}
 }
+
+func TestLifecycleEnumsIncludeReporting(t *testing.T) {
+	t.Parallel()
+
+	if !containsRunStatus(AllRunStatuses(), RunStatusReporting) {
+		t.Fatalf("AllRunStatuses() = %#v, want reporting", AllRunStatuses())
+	}
+	if !containsRunPhase(AllRunPhases(), RunPhaseReporting) {
+		t.Fatalf("AllRunPhases() = %#v, want reporting", AllRunPhases())
+	}
+}
+
+func containsRunStatus(values []RunStatus, want RunStatus) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsRunPhase(values []RunPhase, want RunPhase) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}

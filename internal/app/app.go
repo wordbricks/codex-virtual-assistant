@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/siisee11/CodexVirtualAssistant/internal/agentmessage"
 	"github.com/siisee11/CodexVirtualAssistant/internal/api"
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistantapp"
 	"github.com/siisee11/CodexVirtualAssistant/internal/config"
@@ -16,11 +17,12 @@ import (
 )
 
 type App struct {
-	cfg     config.Config
-	store   *store.SQLiteRepository
-	runtime wtl.Runtime
-	events  *api.EventBroker
-	server  *http.Server
+	cfg       config.Config
+	store     *store.SQLiteRepository
+	runtime   wtl.Runtime
+	events    *api.EventBroker
+	server    *http.Server
+	messenger agentmessage.Service
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -33,10 +35,14 @@ func New(cfg config.Config) (*App, error) {
 		SandboxMode:    cfg.CodexSandboxMode,
 		NetworkAccess:  cfg.CodexNetworkAccess,
 	}, time.Now)
-	return NewWithExecutor(cfg, executor)
+	return NewWithExecutorAndMessenger(cfg, executor, agentmessage.NewClient())
 }
 
 func NewWithExecutor(cfg config.Config, executor wtl.CodexPhaseExecutor) (*App, error) {
+	return NewWithExecutorAndMessenger(cfg, executor, agentmessage.NewClient())
+}
+
+func NewWithExecutorAndMessenger(cfg config.Config, executor wtl.CodexPhaseExecutor, messenger agentmessage.Service) (*App, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -56,7 +62,7 @@ func NewWithExecutor(cfg config.Config, executor wtl.CodexPhaseExecutor) (*App, 
 		return nil, errors.New("codex executor is required")
 	}
 	runtime := wtl.NewCodexRuntime(executor, cfg.DefaultModel, time.Now)
-	engine := wtl.NewRunEngine(repo, runtime, events, policy, projectManager, time.Now)
+	engine := wtl.NewRunEngine(repo, runtime, events, policy, projectManager, messenger, time.Now)
 	runs := assistantapp.NewRunService(context.Background(), repo, engine, policy, time.Now)
 
 	handler, err := api.NewHandler(cfg, runs, events)
@@ -64,11 +70,14 @@ func NewWithExecutor(cfg config.Config, executor wtl.CodexPhaseExecutor) (*App, 
 		return nil, err
 	}
 
+	registerAgentMessageHooks(events, messenger)
+
 	return &App{
-		cfg:     cfg,
-		store:   repo,
-		runtime: runtime,
-		events:  events,
+		cfg:       cfg,
+		store:     repo,
+		runtime:   runtime,
+		events:    events,
+		messenger: messenger,
 		server: &http.Server{
 			Addr:              cfg.HTTPAddr,
 			Handler:           handler,
@@ -86,6 +95,46 @@ func (a *App) RegisterHook(name api.HookName, hook api.HookFunc) func() {
 		return func() {}
 	}
 	return a.events.RegisterHook(name, hook)
+}
+
+func registerAgentMessageHooks(events *api.EventBroker, messenger agentmessage.Service) {
+	if events == nil || messenger == nil {
+		return
+	}
+
+	register := func(name api.HookName, build func(api.HookPayload) (string, bool)) {
+		events.RegisterHook(name, func(ctx context.Context, payload api.HookPayload) error {
+			if payload.Record == nil {
+				return nil
+			}
+			spec, ok := build(payload)
+			if !ok {
+				return nil
+			}
+			return messenger.SendJSONRender(ctx, payload.Record.Run.ChatID, spec)
+		})
+	}
+
+	register(api.HookOnRunStarted, func(payload api.HookPayload) (string, bool) {
+		spec, err := agentmessage.RenderLifecycleCard(agentmessage.StartedCard(payload.Record.Run, payload.Event.Summary))
+		return spec, err == nil
+	})
+	register(api.HookOnWaitEntered, func(payload api.HookPayload) (string, bool) {
+		spec, err := agentmessage.RenderLifecycleCard(agentmessage.WaitingCard(payload.Record.Run))
+		return spec, err == nil
+	})
+	register(api.HookOnRunCompleted, func(payload api.HookPayload) (string, bool) {
+		spec, err := agentmessage.RenderLifecycleCard(agentmessage.CompletedCard(payload.Record.Run))
+		return spec, err == nil
+	})
+	register(api.HookOnRunExhausted, func(payload api.HookPayload) (string, bool) {
+		spec, err := agentmessage.RenderLifecycleCard(agentmessage.ExhaustedCard(payload.Record.Run))
+		return spec, err == nil
+	})
+	register(api.HookOnRunFailed, func(payload api.HookPayload) (string, bool) {
+		spec, err := agentmessage.RenderLifecycleCard(agentmessage.FailedCard(payload.Record.Run, payload.Event.Summary))
+		return spec, err == nil
+	})
 }
 
 func (a *App) Run(ctx context.Context) error {

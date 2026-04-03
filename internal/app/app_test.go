@@ -8,9 +8,11 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/siisee11/CodexVirtualAssistant/internal/agentmessage"
 	"github.com/siisee11/CodexVirtualAssistant/internal/api"
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
 	"github.com/siisee11/CodexVirtualAssistant/internal/config"
@@ -108,7 +110,7 @@ func TestNewServesOperatorWorkspaceShell(t *testing.T) {
 func TestNewAppCompletesRunEndToEnd(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(t)
+	app, _ := newTestApp(t)
 
 	create := doJSONRequest(t, app.Handler(), http.MethodPost, "/api/v1/runs", map[string]any{
 		"user_request_raw": "Research five competitor pricing pages and draft a comparison summary.",
@@ -142,7 +144,7 @@ func TestNewAppCompletesRunEndToEnd(t *testing.T) {
 func TestNewAppDispatchesRunCompletedHook(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(t)
+	app, _ := newTestApp(t)
 	hooks := make(chan api.HookPayload, 1)
 	unregister := app.RegisterHook(api.HookOnRunCompleted, func(_ context.Context, payload api.HookPayload) error {
 		hooks <- payload
@@ -185,7 +187,7 @@ func TestNewAppDispatchesRunCompletedHook(t *testing.T) {
 func TestNewAppWaitsAndResumesEndToEnd(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(t)
+	app, _ := newTestApp(t)
 
 	create := doJSONRequest(t, app.Handler(), http.MethodPost, "/api/v1/runs", map[string]any{
 		"user_request_raw": "Log in to HubSpot and update the lead status, then send a short summary.",
@@ -231,7 +233,37 @@ func TestNewAppWaitsAndResumesEndToEnd(t *testing.T) {
 	}
 }
 
-func newTestApp(t *testing.T) *App {
+func TestNewAppSendsLifecycleNotifications(t *testing.T) {
+	t.Parallel()
+
+	app, messenger := newTestApp(t)
+
+	create := doJSONRequest(t, app.Handler(), http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "Research five competitor pricing pages and draft a comparison summary.",
+	})
+	if create.Code != http.StatusAccepted {
+		t.Fatalf("POST /api/v1/runs status = %d, want %d", create.Code, http.StatusAccepted)
+	}
+
+	var response struct {
+		Run assistant.Run `json:"run"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	waitForRunStatus(t, app.Handler(), response.Run.ID, assistant.RunStatusCompleted)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if messenger.sendCount() >= 2 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("lifecycle notification count = %d, want at least 2", messenger.sendCount())
+}
+
+func newTestApp(t *testing.T) (*App, *capturingMessenger) {
 	t.Helper()
 
 	dataDir := t.TempDir()
@@ -249,7 +281,8 @@ func newTestApp(t *testing.T) *App {
 		CodexNetworkAccess:    true,
 	}
 
-	app, err := NewWithExecutor(cfg, wtl.NewHeuristicPhaseExecutor(time.Now))
+	messenger := &capturingMessenger{}
+	app, err := NewWithExecutorAndMessenger(cfg, wtl.NewHeuristicPhaseExecutor(time.Now), messenger)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -258,7 +291,7 @@ func newTestApp(t *testing.T) *App {
 		_ = app.store.Close()
 		_ = app.runtime.Close()
 	})
-	return app
+	return app, messenger
 }
 
 func doJSONRequest(t *testing.T, handler http.Handler, method, path string, payload any) *httptest.ResponseRecorder {
@@ -278,7 +311,7 @@ func doJSONRequest(t *testing.T, handler http.Handler, method, path string, payl
 func waitForRunStatus(t *testing.T, handler http.Handler, runID string, want assistant.RunStatus) store.RunRecord {
 	t.Helper()
 
-	deadline := time.Now().Add(4 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+runID, nil)
 		res := httptest.NewRecorder()
@@ -297,4 +330,34 @@ func waitForRunStatus(t *testing.T, handler http.Handler, runID string, want ass
 
 	t.Fatalf("run %s did not reach status %q", runID, want)
 	return store.RunRecord{}
+}
+
+type capturingMessenger struct {
+	mu    sync.Mutex
+	sends []string
+}
+
+func (m *capturingMessenger) WithChatAccount(_ context.Context, chatID string, fn func(agentmessage.ChatAccount) error) error {
+	return fn(agentmessage.ChatAccount{
+		ChatID: chatID,
+		Name:   "cva-chat-app",
+		Master: "supervisor",
+	})
+}
+
+func (m *capturingMessenger) CatalogPrompt(context.Context, string) (string, error) {
+	return "catalog prompt", nil
+}
+
+func (m *capturingMessenger) SendJSONRender(_ context.Context, _ string, payload string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sends = append(m.sends, payload)
+	return nil
+}
+
+func (m *capturingMessenger) sendCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.sends)
 }

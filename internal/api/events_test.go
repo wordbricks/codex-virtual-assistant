@@ -100,6 +100,42 @@ func TestEventBrokerDispatchesRunExhaustedHookFromSnapshot(t *testing.T) {
 	}
 }
 
+func TestEventBrokerDispatchesRunFailedHookFromSnapshot(t *testing.T) {
+	t.Parallel()
+
+	broker := NewEventBroker()
+	broker.SetSnapshotLoader(fakeRunRecordLoader{
+		record: store.RunRecord{
+			Run: assistant.Run{
+				ID:     "run_failed",
+				Status: assistant.RunStatusFailed,
+				Phase:  assistant.RunPhaseFailed,
+			},
+		},
+	})
+
+	payloads := make(chan HookPayload, 1)
+	unregister := broker.RegisterHook(HookOnRunFailed, func(_ context.Context, payload HookPayload) error {
+		payloads <- payload
+		return nil
+	})
+	defer unregister()
+
+	err := broker.Publish(context.Background(), assistant.RunEvent{
+		RunID: "run_failed",
+		Type:  assistant.EventTypePhaseChanged,
+		Phase: assistant.RunPhaseFailed,
+	})
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	got := waitForHookPayloads(t, payloads, 1)
+	if got[0].Name != HookOnRunFailed {
+		t.Fatalf("hook name = %q, want %q", got[0].Name, HookOnRunFailed)
+	}
+}
+
 func TestEventBrokerHookUnregisterStopsFutureDispatch(t *testing.T) {
 	t.Parallel()
 

@@ -326,3 +326,55 @@ func TestBuildEvaluatorPromptIncludesOriginalUserRequest(t *testing.T) {
 		t.Fatalf("User prompt = %q, want original user request context", bundle.User)
 	}
 }
+
+func TestBuildReportPromptIncludesAgentMessageContext(t *testing.T) {
+	t.Parallel()
+
+	bundle := BuildReportPrompt(ReportInput{
+		Run: assistant.Run{
+			ChatID:         "chat_abc123",
+			UserRequestRaw: "Summarize the saved competitor pricing report.",
+			TaskSpec: assistant.TaskSpec{
+				Goal:             "Summarize competitor pricing",
+				DoneDefinition:   []string{"Deliver the summary"},
+				EvidenceRequired: []string{"Saved report"},
+			},
+		},
+		ChatAccountUsername: "cva-chat_abc123",
+		MasterUsername:      "supervisor",
+	})
+
+	if !strings.Contains(bundle.System, "agent-message catalog prompt") {
+		t.Fatalf("System prompt = %q, want catalog prompt instruction", bundle.System)
+	}
+	if !strings.Contains(bundle.System, "report_payload") {
+		t.Fatalf("System prompt = %q, want report payload schema", bundle.System)
+	}
+	if !strings.Contains(bundle.User, "Chat account username: cva-chat_abc123") {
+		t.Fatalf("User prompt = %q, want chat account context", bundle.User)
+	}
+}
+
+func TestDecodeReportOutputBuildsDeliveryResult(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{
+		"summary": "Delivered the final report.",
+		"delivery_status": "sent",
+		"message_preview": "Final pricing comparison delivered to the user.",
+		"report_payload": "{\"root\":\"screen\",\"elements\":{\"screen\":{\"type\":\"Text\",\"props\":{\"text\":\"Done\"},\"children\":[]}}}",
+		"needs_user_input": false,
+		"wait_kind": "",
+		"wait_title": "",
+		"wait_prompt": "",
+		"wait_risk_summary": ""
+	}`)
+
+	output, err := DecodeReportOutput(raw)
+	if err != nil {
+		t.Fatalf("DecodeReportOutput() error = %v", err)
+	}
+	if output.DeliveryStatus != "sent" || output.ReportPayload == "" {
+		t.Fatalf("output = %#v, want sent payload", output)
+	}
+}

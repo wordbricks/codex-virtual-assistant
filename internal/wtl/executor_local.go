@@ -38,6 +38,8 @@ func (e *HeuristicPhaseExecutor) RunPhase(_ context.Context, request CodexPhaseR
 		return e.runGenerator(request)
 	case assistant.AttemptRoleEvaluator:
 		return e.runEvaluator(request)
+	case assistant.AttemptRoleReporter:
+		return e.runReporter(request)
 	default:
 		return CodexPhaseResult{}, fmt.Errorf("heuristic executor: unsupported role %q", request.Role)
 	}
@@ -240,6 +242,44 @@ func (e *HeuristicPhaseExecutor) runEvaluator(request CodexPhaseRequest) (CodexP
 	return CodexPhaseResult{
 		Summary: "Evaluator accepted the current result package.",
 		Output:  string(output),
+	}, nil
+}
+
+func (e *HeuristicPhaseExecutor) runReporter(request CodexPhaseRequest) (CodexPhaseResult, error) {
+	output, err := json.Marshal(map[string]any{
+		"summary":           "Delivered the final report through agent-message.",
+		"delivery_status":   "sent",
+		"message_preview":   fmt.Sprintf("Reported final result for: %s", strings.TrimSpace(firstLine(request.UserRequest))),
+		"report_payload":    `{"root":"screen","elements":{"screen":{"type":"Text","props":{"text":"Final report delivered."},"children":[]}}}`,
+		"needs_user_input":  false,
+		"wait_kind":         "",
+		"wait_title":        "",
+		"wait_prompt":       "",
+		"wait_risk_summary": "",
+	})
+	if err != nil {
+		return CodexPhaseResult{}, err
+	}
+	now := e.now().UTC()
+	return CodexPhaseResult{
+		Summary: "Report phase delivered a final agent-message card.",
+		Output:  string(output),
+		ToolRuns: []CodexToolRun{
+			{
+				Name:          "agent-message catalog prompt",
+				InputSummary:  "Load the json_render catalog prompt",
+				OutputSummary: "Loaded the catalog prompt successfully.",
+				StartedAt:     now,
+				FinishedAt:    now.Add(time.Second),
+			},
+			{
+				Name:          "agent-message send",
+				InputSummary:  "Send the final json_render report",
+				OutputSummary: "Final report delivered to the configured recipient.",
+				StartedAt:     now.Add(time.Second),
+				FinishedAt:    now.Add(2 * time.Second),
+			},
+		},
 	}, nil
 }
 
