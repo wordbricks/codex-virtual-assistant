@@ -14,6 +14,7 @@ import (
 const (
 	DefaultProjectSlug      = "no_project"
 	projectFileName         = "PROJECT.md"
+	browserProfileDirName   = ".browser-profile"
 	defaultNoProjectName    = "No Project"
 	defaultNoProjectPurpose = "Use this project for simple questions, one-off requests, and tasks that do not need long-lived project memory."
 	defaultNoProjectBelongs = "Short factual questions, quick translations, and standalone instructions with no continuing context."
@@ -70,9 +71,13 @@ func (m *Manager) EnsureProject(project assistant.ProjectContext) (assistant.Pro
 	project.Name = firstNonEmpty(project.Name, titleForSlug(slug))
 	project.Description = firstNonEmpty(project.Description, defaultDescriptionForSlug(slug))
 	project.WorkspaceDir = dir
+	project.BrowserProfileDir = filepath.Join(dir, browserProfileDirName)
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return assistant.ProjectContext{}, fmt.Errorf("create project dir %s: %w", dir, err)
+	}
+	if err := os.MkdirAll(project.BrowserProfileDir, 0o755); err != nil {
+		return assistant.ProjectContext{}, fmt.Errorf("create browser profile dir %s: %w", project.BrowserProfileDir, err)
 	}
 
 	projectFile := filepath.Join(dir, projectFileName)

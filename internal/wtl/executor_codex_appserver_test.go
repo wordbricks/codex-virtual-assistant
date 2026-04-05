@@ -1,6 +1,7 @@
 package wtl
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -155,5 +156,29 @@ func TestPhaseOutputSchemaSupportsGateAnswerAndReport(t *testing.T) {
 	}
 	if _, ok := schedulerProperties["entries"]; !ok {
 		t.Fatalf("scheduler schema properties = %#v, want entries", schedulerProperties)
+	}
+}
+
+func TestPhasePromptForCodexIncludesProjectBrowserProfileGuidance(t *testing.T) {
+	t.Parallel()
+
+	prompt := phasePromptForCodex(CodexPhaseRequest{
+		Role:   assistant.AttemptRoleGenerator,
+		Prompt: "Collect evidence and return the phase result.",
+		Project: assistant.ProjectContext{
+			Slug:              "x-growth",
+			Description:       "Grow the X presence over repeated tasks.",
+			BrowserProfileDir: "/tmp/cva/projects/x-growth/.browser-profile",
+		},
+	})
+
+	if !strings.Contains(prompt, "Project browser profile directory: /tmp/cva/projects/x-growth/.browser-profile") {
+		t.Fatalf("prompt = %q, want browser profile directory guidance", prompt)
+	}
+	if !strings.Contains(prompt, "agent-browser --profile") {
+		t.Fatalf("prompt = %q, want agent-browser profile reuse guidance", prompt)
+	}
+	if !strings.Contains(prompt, "--auto-connect") {
+		t.Fatalf("prompt = %q, want auto-connect fallback guidance", prompt)
 	}
 }

@@ -1237,6 +1237,13 @@ func phasePromptForCodex(request CodexPhaseRequest) string {
 			fmt.Sprintf("Current project purpose: %s", request.Project.Description),
 			"Review PROJECT.md and any existing project files when they are relevant to the task.",
 		)
+		if profileDir := strings.TrimSpace(request.Project.BrowserProfileDir); profileDir != "" {
+			parts = append(parts,
+				fmt.Sprintf("Project browser profile directory: %s", profileDir),
+				fmt.Sprintf("For agent-browser work in this project, prefer commands like agent-browser --profile %q ... so authenticated browser state is reused across runs for this project.", profileDir),
+				"Only fall back to --auto-connect or a fresh login when the project browser profile is unavailable or clearly unsuitable for the task.",
+			)
+		}
 	}
 	if len(request.Tools) > 0 {
 		parts = append(parts, "Tools expected in this phase: "+strings.Join(request.Tools, ", "))

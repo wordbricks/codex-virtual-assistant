@@ -85,10 +85,11 @@ type AcceptanceContract struct {
 }
 
 type ProjectContext struct {
-	Slug         string `json:"slug"`
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	WorkspaceDir string `json:"workspace_dir"`
+	Slug              string `json:"slug"`
+	Name              string `json:"name"`
+	Description       string `json:"description"`
+	WorkspaceDir      string `json:"workspace_dir"`
+	BrowserProfileDir string `json:"browser_profile_dir,omitempty"`
 }
 
 type ArtifactKind string

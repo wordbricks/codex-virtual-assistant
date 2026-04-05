@@ -47,6 +47,14 @@ func TestEnsureProjectCreatesProjectMarkdown(t *testing.T) {
 	if project.WorkspaceDir != filepath.Join(dataDir, "projects", "x-growth") {
 		t.Fatalf("WorkspaceDir = %q, want project directory", project.WorkspaceDir)
 	}
+	if project.BrowserProfileDir != filepath.Join(project.WorkspaceDir, ".browser-profile") {
+		t.Fatalf("BrowserProfileDir = %q, want project browser profile directory", project.BrowserProfileDir)
+	}
+	if info, err := os.Stat(project.BrowserProfileDir); err != nil {
+		t.Fatalf("Stat(%s) error = %v", project.BrowserProfileDir, err)
+	} else if !info.IsDir() {
+		t.Fatalf("%s is not a directory", project.BrowserProfileDir)
+	}
 	projectFile := filepath.Join(project.WorkspaceDir, "PROJECT.md")
 	content, err := os.ReadFile(projectFile)
 	if err != nil {

@@ -103,7 +103,7 @@ func TestBuildAnswerPromptDeclaresReadOrientedContract(t *testing.T) {
 	}
 }
 
-func TestBuildGeneratorPromptPrefersAgentBrowserAutoConnect(t *testing.T) {
+func TestBuildGeneratorPromptPrefersProjectBrowserProfiles(t *testing.T) {
 	t.Parallel()
 
 	bundle := BuildGeneratorPrompt(GeneratorInput{
@@ -112,8 +112,11 @@ func TestBuildGeneratorPromptPrefersAgentBrowserAutoConnect(t *testing.T) {
 		},
 	})
 
+	if !strings.Contains(strings.ToLower(bundle.System), "project-specific browser profile") {
+		t.Fatalf("System prompt = %q, want project browser profile guidance", bundle.System)
+	}
 	if !strings.Contains(bundle.System, "--auto-connect") {
-		t.Fatalf("System prompt = %q, want agent-browser auto-connect guidance", bundle.System)
+		t.Fatalf("System prompt = %q, want auto-connect fallback guidance", bundle.System)
 	}
 	if !strings.Contains(bundle.System, "agent-browser") {
 		t.Fatalf("System prompt = %q, want agent-browser guidance", bundle.System)

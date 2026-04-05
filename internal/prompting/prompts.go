@@ -397,7 +397,7 @@ func BuildGeneratorPrompt(input GeneratorInput) Bundle {
 		fmt.Fprintf(builder, "Evaluator critique to address: %s\n", input.PriorCritique)
 	}
 	return Bundle{
-		System: "You are the generator for a WTL GAN-policy based assistant. Complete the real work and retain evidence. When browser work uses agent-browser, try --auto-connect first so an existing authenticated Chrome session can be reused before falling back to manual login or other session bootstrapping. If you produce or export a browser recording during the task, prefer recording or re-encoding it as WebM instead of MP4 whenever the tool supports that choice.",
+		System: "You are the generator for a WTL GAN-policy based assistant. Complete the real work and retain evidence. When browser work uses agent-browser, prefer the project-specific browser profile when one is provided so the same authenticated session can be reused across runs in that project; only fall back to --auto-connect or manual login when no project profile is available. If you produce or export a browser recording during the task, prefer recording or re-encoding it as WebM instead of MP4 whenever the tool supports that choice.",
 		User:   strings.TrimSpace(builder.String()),
 	}
 }
