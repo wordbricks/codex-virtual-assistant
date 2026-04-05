@@ -124,6 +124,24 @@ func TestRenderLifecycleCardBuildsJSONSpec(t *testing.T) {
 	}
 }
 
+func TestPhaseChangedCardIncludesPhaseSummary(t *testing.T) {
+	t.Parallel()
+
+	payload, err := RenderLifecycleCard(PhaseChangedCard(assistant.Run{
+		ID: "run_456",
+	}, assistant.RunPhasePlanning, "Planning the task into a structured TaskSpec."))
+	if err != nil {
+		t.Fatalf("RenderLifecycleCard() error = %v", err)
+	}
+
+	if !strings.Contains(payload, "CVA entered planning") {
+		t.Fatalf("payload = %q, want phase title", payload)
+	}
+	if !strings.Contains(payload, "Planning the task into a structured TaskSpec.") {
+		t.Fatalf("payload = %q, want summary", payload)
+	}
+}
+
 type fakeRunner struct {
 	mu        sync.Mutex
 	master    string

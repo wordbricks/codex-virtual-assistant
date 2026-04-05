@@ -119,6 +119,18 @@ func StartedCard(run assistant.Run, summary string) LifecycleCard {
 	}
 }
 
+func PhaseChangedCard(run assistant.Run, phase assistant.RunPhase, summary string) LifecycleCard {
+	return LifecycleCard{
+		Badge:      "Phase changed",
+		Title:      fmt.Sprintf("CVA entered %s", humanizePhase(phase)),
+		StatusText: firstNonEmpty(summary, fmt.Sprintf("The run moved to %s.", humanizePhase(phase))),
+		Details: []string{
+			fmt.Sprintf("Run id: %s", run.ID),
+			fmt.Sprintf("Current phase: %s", phase),
+		},
+	}
+}
+
 func WaitingCard(run assistant.Run) LifecycleCard {
 	card := LifecycleCard{
 		Badge:      "Waiting",
@@ -241,6 +253,14 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func humanizePhase(phase assistant.RunPhase) string {
+	text := strings.ReplaceAll(strings.TrimSpace(string(phase)), "_", " ")
+	if text == "" {
+		return "the next phase"
+	}
+	return text
 }
 
 func nonEmptyDetails(values []string) []string {

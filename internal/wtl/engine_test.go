@@ -157,6 +157,55 @@ func TestRunEngineWaitsAndResumes(t *testing.T) {
 	}
 }
 
+func TestRunEngineFailsWhenContractKeepsRevising(t *testing.T) {
+	t.Parallel()
+
+	repo, dataDir := openEngineTestRepository(t)
+	now := time.Date(2026, time.March, 27, 15, 30, 0, 0, time.UTC)
+	runtime := &scriptedRuntime{
+		steps: map[assistant.AttemptRole][]runtimeStep{
+			assistant.AttemptRoleGate: {
+				{response: PhaseResponse{Summary: "Gate routed to workflow.", Output: gateJSON("workflow", "This request needs full execution work.")}},
+			},
+			assistant.AttemptRoleProjectSelector: {
+				{response: PhaseResponse{Summary: "Selected the competitor research project.", Output: selectorJSON("competitor-pricing", "Competitor Pricing", "Track repeat competitor pricing research.")}},
+			},
+			assistant.AttemptRolePlanner: {
+				{response: PhaseResponse{Summary: "Planner normalized the request.", Output: plannerJSON("Compare competitor pricing", []string{"Pricing table", "Summary memo"})}},
+			},
+			assistant.AttemptRoleContractor: {
+				{response: PhaseResponse{Summary: "Contract needs revision.", Output: contractJSON("revise", []string{"Pricing table", "Summary memo"}, []string{"Each competitor row includes a direct source URL"}, "Tighten the evidence requirements.")}},
+				{response: PhaseResponse{Summary: "Contract still needs revision.", Output: contractJSON("revise", []string{"Pricing table", "Summary memo"}, []string{"Each competitor row includes a direct source URL"}, "Clarify the exact acceptance criteria.")}},
+				{response: PhaseResponse{Summary: "Contract remains unresolved.", Output: contractJSON("revise", []string{"Pricing table", "Summary memo"}, []string{"Each competitor row includes a direct source URL"}, "Contract is still not converging.")}},
+			},
+		},
+	}
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 2}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
+
+	run := assistant.NewRun("Compare competitor pricing and summarize it.", now, 2)
+	if err := engine.Start(context.Background(), run); !errors.Is(err, ErrInvalidRunState) {
+		t.Fatalf("Start() error = %v, want ErrInvalidRunState", err)
+	}
+
+	record, err := repo.GetRunRecord(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("GetRunRecord() error = %v", err)
+	}
+
+	if record.Run.Status != assistant.RunStatusFailed {
+		t.Fatalf("Run.Status = %q, want %q", record.Run.Status, assistant.RunStatusFailed)
+	}
+	if len(record.Attempts) != 6 {
+		t.Fatalf("len(Attempts) = %d, want 6", len(record.Attempts))
+	}
+	if got := countAttemptsByRole(record.Attempts, assistant.AttemptRoleContractor); got != maxContractRevisionAttempts {
+		t.Fatalf("contract attempts = %d, want %d", got, maxContractRevisionAttempts)
+	}
+	if record.Run.TaskSpec.AcceptanceContract == nil || record.Run.TaskSpec.AcceptanceContract.Status != assistant.ContractStatusDraft {
+		t.Fatalf("AcceptanceContract = %#v, want final draft contract snapshot", record.Run.TaskSpec.AcceptanceContract)
+	}
+}
+
 func TestRunEngineCancelStopsWaitingRun(t *testing.T) {
 	t.Parallel()
 

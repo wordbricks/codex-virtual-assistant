@@ -16,6 +16,8 @@ import (
 
 var ErrInvalidRunState = errors.New("wtl: invalid run state")
 
+const maxContractRevisionAttempts = 3
+
 type Repository interface {
 	SaveRun(context.Context, assistant.Run) error
 	AddRunEvent(context.Context, assistant.RunEvent) error
@@ -604,6 +606,12 @@ func (e *RunEngine) executeContract(ctx context.Context, record *store.RunRecord
 		}
 		return true, nil
 	case prompting.ContractDecisionRevise:
+		if countAttemptsByRole(record.Attempts, assistant.AttemptRoleContractor)+1 >= maxContractRevisionAttempts {
+			return false, e.failRun(ctx, record.Run, firstNonEmpty(
+				contract.RevisionNotes,
+				fmt.Sprintf("Acceptance contract did not converge after %d revision attempts.", maxContractRevisionAttempts),
+			), ErrInvalidRunState)
+		}
 		if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseContracting, firstNonEmpty(contract.RevisionNotes, "Acceptance contract needs another revision before generation starts.")); err != nil {
 			return false, err
 		}
@@ -1121,6 +1129,16 @@ func latestAttemptByRole(attempts []assistant.Attempt, role assistant.AttemptRol
 		}
 	}
 	return nil
+}
+
+func countAttemptsByRole(attempts []assistant.Attempt, role assistant.AttemptRole) int {
+	count := 0
+	for _, attempt := range attempts {
+		if attempt.Role == role {
+			count++
+		}
+	}
+	return count
 }
 
 func hasReportArtifact(artifacts []assistant.Artifact, attemptID string, content string) bool {

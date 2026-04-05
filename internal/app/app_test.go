@@ -263,6 +263,49 @@ func TestNewAppSendsLifecycleNotifications(t *testing.T) {
 	t.Fatalf("lifecycle notification count = %d, want at least 2", messenger.sendCount())
 }
 
+func TestRegisterAgentMessageHooksSendsPhaseChangedNotification(t *testing.T) {
+	t.Parallel()
+
+	broker := api.NewEventBroker()
+	broker.SetSnapshotLoader(testHookSnapshotLoader{
+		record: store.RunRecord{
+			Run: assistant.Run{
+				ID:     "run_phase",
+				ChatID: "chat_phase",
+				Status: assistant.RunStatusPlanning,
+				Phase:  assistant.RunPhasePlanning,
+			},
+		},
+	})
+
+	messenger := &capturingMessenger{}
+	registerAgentMessageHooks(broker, messenger)
+
+	err := broker.Publish(context.Background(), assistant.RunEvent{
+		RunID:   "run_phase",
+		Type:    assistant.EventTypePhaseChanged,
+		Phase:   assistant.RunPhasePlanning,
+		Summary: "Planning the task into a structured TaskSpec.",
+	})
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		payloads := messenger.payloads()
+		for _, payload := range payloads {
+			if strings.Contains(payload, "CVA entered planning") &&
+				strings.Contains(payload, "Planning the task into a structured TaskSpec.") {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	t.Fatalf("phase change notification not found in payloads: %#v", messenger.payloads())
+}
+
 func newTestApp(t *testing.T) (*App, *capturingMessenger) {
 	t.Helper()
 
@@ -368,4 +411,26 @@ func (m *capturingMessenger) sendCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.sends)
+}
+
+func (m *capturingMessenger) payloads() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.sends...)
+}
+
+type testHookSnapshotLoader struct {
+	record store.RunRecord
+}
+
+func (l testHookSnapshotLoader) GetRunRecord(context.Context, string) (store.RunRecord, error) {
+	return l.record, nil
+}
+
+func (l testHookSnapshotLoader) GetRun(context.Context, string) (assistant.Run, error) {
+	return l.record.Run, nil
+}
+
+func (l testHookSnapshotLoader) GetScheduledRun(context.Context, string) (assistant.ScheduledRun, error) {
+	return assistant.ScheduledRun{}, store.ErrNotFound
 }
