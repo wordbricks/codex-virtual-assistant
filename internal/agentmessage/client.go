@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -25,6 +26,7 @@ var (
 	ErrNoMasterRecipient = errors.New("agent-message master recipient is not configured")
 
 	usernameSanitizer = regexp.MustCompile(`[^a-z0-9._-]+`)
+	readLinePattern   = regexp.MustCompile(`^\[(\d+)\]\s+(\S+)\s+([^:]+):\s?(.*)$`)
 )
 
 type ChatAccount struct {
@@ -37,6 +39,19 @@ type Service interface {
 	WithChatAccount(context.Context, string, func(ChatAccount) error) error
 	CatalogPrompt(context.Context, string) (string, error)
 	SendJSONRender(context.Context, string, string) error
+	ReadReplies(context.Context, string) ([]IncomingMessage, error)
+	ReactToMessage(context.Context, string, string, string) error
+}
+
+type IncomingMessage struct {
+	ID     string
+	Sender string
+	Text   string
+}
+
+type readMessage struct {
+	IncomingMessage
+	Index int
 }
 
 type commandRunner interface {
@@ -46,17 +61,24 @@ type commandRunner interface {
 type Client struct {
 	mu     sync.Mutex
 	runner commandRunner
+	cache  map[string][]readMessage
 }
 
 func NewClient() *Client {
-	return &Client{runner: execRunner{}}
+	return &Client{
+		runner: execRunner{},
+		cache:  map[string][]readMessage{},
+	}
 }
 
 func NewClientWithRunner(runner commandRunner) *Client {
 	if runner == nil {
 		runner = execRunner{}
 	}
-	return &Client{runner: runner}
+	return &Client{
+		runner: runner,
+		cache:  map[string][]readMessage{},
+	}
 }
 
 func DeriveChatAccountName(chatID string) string {
@@ -125,6 +147,60 @@ func (c *Client) SendJSONRender(ctx context.Context, chatID string, payload stri
 	})
 }
 
+func (c *Client) ReadReplies(ctx context.Context, chatID string) ([]IncomingMessage, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	account, err := c.ensureChatAccountLocked(ctx, chatID)
+	if err != nil {
+		if errors.Is(err, ErrNoMasterRecipient) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if strings.TrimSpace(account.Master) == "" {
+		return nil, nil
+	}
+
+	output, err := c.runner.Run(ctx, "read", account.Master, "--n", "50")
+	if err != nil {
+		return nil, err
+	}
+	messages := parseReadOutput(output)
+	c.cache[account.ChatID] = messages
+
+	replies := make([]IncomingMessage, 0, len(messages))
+	for _, message := range messages {
+		if strings.TrimSpace(message.Sender) != account.Master {
+			continue
+		}
+		text := strings.TrimSpace(message.Text)
+		if text == "" || text == "[json-render]" || text == "deleted message" {
+			continue
+		}
+		replies = append(replies, message.IncomingMessage)
+	}
+	return replies, nil
+}
+
+func (c *Client) ReactToMessage(ctx context.Context, chatID, messageID, emoji string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if strings.TrimSpace(messageID) == "" || strings.TrimSpace(emoji) == "" {
+		return nil
+	}
+	if _, err := c.ensureChatAccountLocked(ctx, chatID); err != nil {
+		return err
+	}
+	index, ok := c.cachedMessageIndexLocked(chatID, messageID)
+	if !ok {
+		return fmt.Errorf("agent-message message %s is not in the latest read cache for chat %s", messageID, chatID)
+	}
+	_, err := c.runner.Run(ctx, "react", strconv.Itoa(index), emoji)
+	return err
+}
+
 func (c *Client) ensureChatAccountLocked(ctx context.Context, chatID string) (ChatAccount, error) {
 	account := ChatAccount{
 		ChatID: strings.TrimSpace(chatID),
@@ -157,6 +233,39 @@ func (c *Client) ensureChatAccountLocked(ctx context.Context, chatID string) (Ch
 	}
 	account.Master = currentMaster
 	return account, nil
+}
+
+func (c *Client) cachedMessageIndexLocked(chatID, messageID string) (int, bool) {
+	for _, message := range c.cache[strings.TrimSpace(chatID)] {
+		if message.ID == strings.TrimSpace(messageID) {
+			return message.Index, true
+		}
+	}
+	return 0, false
+}
+
+func parseReadOutput(raw string) []readMessage {
+	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
+	messages := make([]readMessage, 0, len(lines))
+	for _, line := range lines {
+		match := readLinePattern.FindStringSubmatch(strings.TrimSpace(line))
+		if len(match) != 5 {
+			continue
+		}
+		index, err := strconv.Atoi(match[1])
+		if err != nil || index <= 0 {
+			continue
+		}
+		messages = append(messages, readMessage{
+			IncomingMessage: IncomingMessage{
+				ID:     strings.TrimSpace(match[2]),
+				Sender: strings.TrimSpace(match[3]),
+				Text:   strings.TrimSpace(match[4]),
+			},
+			Index: index,
+		})
+	}
+	return messages
 }
 
 func (c *Client) currentMasterLocked(ctx context.Context) (string, error) {

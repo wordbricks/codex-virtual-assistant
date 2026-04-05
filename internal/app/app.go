@@ -25,6 +25,7 @@ type App struct {
 	server    *http.Server
 	messenger agentmessage.Service
 	scheduler *scheduler.Scheduler
+	replies   *replyBridge
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -82,6 +83,7 @@ func NewWithExecutorAndMessenger(cfg config.Config, executor wtl.CodexPhaseExecu
 		events:    events,
 		messenger: messenger,
 		scheduler: backgroundScheduler,
+		replies:   newReplyBridge(runs, messenger, 5*time.Second),
 		server: &http.Server{
 			Addr:              cfg.HTTPAddr,
 			Handler:           handler,
@@ -170,6 +172,16 @@ func (a *App) Run(ctx context.Context) error {
 	if a.scheduler != nil {
 		go func() {
 			if err := a.scheduler.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				select {
+				case errCh <- err:
+				default:
+				}
+			}
+		}()
+	}
+	if a.replies != nil {
+		go func() {
+			if err := a.replies.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				select {
 				case errCh <- err:
 				default:

@@ -663,6 +663,14 @@ func (f *fakeAgentMessageService) SendJSONRender(context.Context, string, string
 	return nil
 }
 
+func (f *fakeAgentMessageService) ReadReplies(context.Context, string) ([]agentmessage.IncomingMessage, error) {
+	return nil, nil
+}
+
+func (f *fakeAgentMessageService) ReactToMessage(context.Context, string, string, string) error {
+	return nil
+}
+
 func artifactsContain(artifacts []assistant.Artifact, want string) bool {
 	for _, artifact := range artifacts {
 		if strings.Contains(artifact.Content, want) {

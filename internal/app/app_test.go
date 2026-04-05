@@ -356,6 +356,14 @@ func (m *capturingMessenger) SendJSONRender(_ context.Context, _ string, payload
 	return nil
 }
 
+func (*capturingMessenger) ReadReplies(context.Context, string) ([]agentmessage.IncomingMessage, error) {
+	return nil, nil
+}
+
+func (*capturingMessenger) ReactToMessage(context.Context, string, string, string) error {
+	return nil
+}
+
 func (m *capturingMessenger) sendCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()

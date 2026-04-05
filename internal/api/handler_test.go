@@ -765,3 +765,11 @@ func (*apiMessenger) CatalogPrompt(context.Context, string) (string, error) {
 func (*apiMessenger) SendJSONRender(context.Context, string, string) error {
 	return nil
 }
+
+func (*apiMessenger) ReadReplies(context.Context, string) ([]agentmessage.IncomingMessage, error) {
+	return nil, nil
+}
+
+func (*apiMessenger) ReactToMessage(context.Context, string, string, string) error {
+	return nil
+}

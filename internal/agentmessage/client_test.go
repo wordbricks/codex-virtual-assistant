@@ -50,6 +50,55 @@ func TestSendJSONRenderCreatesAndReusesChatAccount(t *testing.T) {
 	}
 }
 
+func TestReadRepliesFiltersIncomingMasterMessages(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{
+		master: "supervisor",
+		readOutput: strings.Join([]string{
+			"[1] msg_1 cva-chat_abc: [json-render]",
+			"[2] msg_2 supervisor: First follow-up",
+			"[3] msg_3 supervisor: deleted message",
+			"[4] msg_4 supervisor: Second follow-up",
+		}, "\n"),
+	}
+	client := NewClientWithRunner(runner)
+
+	replies, err := client.ReadReplies(context.Background(), "chat_abc")
+	if err != nil {
+		t.Fatalf("ReadReplies() error = %v", err)
+	}
+	if len(replies) != 2 {
+		t.Fatalf("len(replies) = %d, want 2", len(replies))
+	}
+	if replies[0].ID != "msg_2" || replies[0].Text != "First follow-up" {
+		t.Fatalf("replies[0] = %#v", replies[0])
+	}
+	if replies[1].ID != "msg_4" || replies[1].Text != "Second follow-up" {
+		t.Fatalf("replies[1] = %#v", replies[1])
+	}
+}
+
+func TestReactToMessageUsesCachedReadIndex(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{
+		master: "supervisor",
+		readOutput: "[1] msg_1 supervisor: Please continue",
+	}
+	client := NewClientWithRunner(runner)
+
+	if _, err := client.ReadReplies(context.Background(), "chat_abc"); err != nil {
+		t.Fatalf("ReadReplies() error = %v", err)
+	}
+	if err := client.ReactToMessage(context.Background(), "chat_abc", "msg_1", "👀"); err != nil {
+		t.Fatalf("ReactToMessage() error = %v", err)
+	}
+	if got := strings.Join(runner.lastArgs, " "); got != "react 1 👀" {
+		t.Fatalf("lastArgs = %q, want react command", got)
+	}
+}
+
 func TestRenderLifecycleCardBuildsJSONSpec(t *testing.T) {
 	t.Parallel()
 
@@ -81,11 +130,14 @@ type fakeRunner struct {
 	profiles  map[string]bool
 	registers int
 	sends     int
+	readOutput string
+	lastArgs  []string
 }
 
 func (r *fakeRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.lastArgs = append([]string(nil), args...)
 
 	if r.profiles == nil {
 		r.profiles = map[string]bool{}
@@ -115,6 +167,12 @@ func (r *fakeRunner) Run(_ context.Context, args ...string) (string, error) {
 	if len(args) >= 4 && args[0] == "send" {
 		r.sends++
 		return "sent\n", nil
+	}
+	if len(args) >= 3 && args[0] == "read" {
+		return r.readOutput, nil
+	}
+	if len(args) == 3 && args[0] == "react" {
+		return "reaction added\n", nil
 	}
 	return "", nil
 }
