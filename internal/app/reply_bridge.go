@@ -94,7 +94,14 @@ func (b *replyBridge) pollChat(ctx context.Context, chatID string) error {
 
 	lastSeen, seenBefore := b.getLastSeen(chatID)
 	if !seenBefore {
-		b.setLastSeen(chatID, replies[len(replies)-1].ID)
+		latest := replies[len(replies)-1]
+		if err := b.messenger.ReactToMessage(ctx, chatID, latest.ID, replyReactionEmoji); err != nil {
+			return err
+		}
+		if err := b.processReply(ctx, chatID, latest.Text); err != nil {
+			return err
+		}
+		b.setLastSeen(chatID, latest.ID)
 		return nil
 	}
 

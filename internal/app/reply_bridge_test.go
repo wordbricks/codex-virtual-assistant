@@ -9,7 +9,7 @@ import (
 	"github.com/siisee11/CodexVirtualAssistant/internal/store"
 )
 
-func TestReplyBridgeSeedsLastSeenWithoutProcessingBacklog(t *testing.T) {
+func TestReplyBridgeProcessesLatestReplyOnFirstPoll(t *testing.T) {
 	t.Parallel()
 
 	runs := &fakeReplyRuns{
@@ -31,8 +31,11 @@ func TestReplyBridgeSeedsLastSeenWithoutProcessingBacklog(t *testing.T) {
 	if err := bridge.pollOnce(context.Background()); err != nil {
 		t.Fatalf("pollOnce() error = %v", err)
 	}
-	if len(runs.created) != 0 || len(runs.resumed) != 0 {
-		t.Fatalf("processed backlog unexpectedly: created=%d resumed=%d", len(runs.created), len(runs.resumed))
+	if len(messenger.reactions) != 1 || messenger.reactions[0] != "chat_1:msg_1:👀" {
+		t.Fatalf("reactions = %#v, want one reaction for the latest reply", messenger.reactions)
+	}
+	if len(runs.created) != 1 || runs.created[0].request != "old reply" {
+		t.Fatalf("created = %#v, want initial latest reply to be processed", runs.created)
 	}
 }
 
@@ -50,7 +53,7 @@ func TestReplyBridgeReactsThenCreatesFollowUpForCompletedRun(t *testing.T) {
 	}
 	messenger := &fakeReplyMessenger{
 		repliesByChat: map[string][]agentmessage.IncomingMessage{
-			"chat_1": {{ID: "msg_1", Sender: "supervisor", Text: "old reply"}},
+			"chat_1": nil,
 		},
 	}
 	bridge := newReplyBridge(runs, messenger, 0)
@@ -59,7 +62,6 @@ func TestReplyBridgeReactsThenCreatesFollowUpForCompletedRun(t *testing.T) {
 	}
 
 	messenger.repliesByChat["chat_1"] = []agentmessage.IncomingMessage{
-		{ID: "msg_1", Sender: "supervisor", Text: "old reply"},
 		{ID: "msg_2", Sender: "supervisor", Text: "new follow-up"},
 	}
 	if err := bridge.pollOnce(context.Background()); err != nil {
@@ -91,7 +93,7 @@ func TestReplyBridgeResumesWaitingRun(t *testing.T) {
 	}
 	messenger := &fakeReplyMessenger{
 		repliesByChat: map[string][]agentmessage.IncomingMessage{
-			"chat_1": {{ID: "msg_1", Sender: "supervisor", Text: "old reply"}},
+			"chat_1": nil,
 		},
 	}
 	bridge := newReplyBridge(runs, messenger, 0)
@@ -100,7 +102,6 @@ func TestReplyBridgeResumesWaitingRun(t *testing.T) {
 	}
 
 	messenger.repliesByChat["chat_1"] = []agentmessage.IncomingMessage{
-		{ID: "msg_1", Sender: "supervisor", Text: "old reply"},
 		{ID: "msg_2", Sender: "supervisor", Text: "resume please"},
 	}
 	if err := bridge.pollOnce(context.Background()); err != nil {
