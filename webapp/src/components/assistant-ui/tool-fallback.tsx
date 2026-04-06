@@ -21,6 +21,57 @@ import {
 import { cn } from "@/lib/utils";
 
 const ANIMATION_DURATION = 200;
+const MAX_TOOL_LABEL_LENGTH = 120;
+
+function truncateLabel(value: string, max = MAX_TOOL_LABEL_LENGTH) {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 1).trimEnd()}…`;
+}
+
+function safeJsonParse(value?: string): unknown {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function commandFromArgs(argsText?: string): string | null {
+  const parsed = safeJsonParse(argsText);
+  if (!parsed || typeof parsed !== "object") return null;
+
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.cmd === "string" && record.cmd.trim()) {
+    return record.cmd.trim();
+  }
+  if (typeof record.command === "string" && record.command.trim()) {
+    return record.command.trim();
+  }
+  if (Array.isArray(record.argv)) {
+    const argv = record.argv.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+    if (argv.length > 0) {
+      return argv.join(" ");
+    }
+  }
+
+  return null;
+}
+
+function formatToolDisplay(toolName: string, argsText?: string) {
+  const command = commandFromArgs(argsText);
+  if (!command) {
+    return {
+      primary: toolName,
+      secondary: null as string | null,
+    };
+  }
+
+  return {
+    primary: truncateLabel(command),
+    secondary: command === toolName ? null : toolName,
+  };
+}
 
 export type ToolFallbackRootProps = Omit<
   React.ComponentProps<typeof Collapsible>,
@@ -92,11 +143,13 @@ const statusIconMap: Record<ToolStatus, React.ElementType> = {
 
 function ToolFallbackTrigger({
   toolName,
+  argsText,
   status,
   className,
   ...props
 }: React.ComponentProps<typeof CollapsibleTrigger> & {
   toolName: string;
+  argsText?: string;
   status?: ToolCallMessagePartStatus;
 }) {
   const statusType = status?.type ?? "complete";
@@ -106,6 +159,7 @@ function ToolFallbackTrigger({
 
   const Icon = statusIconMap[statusType];
   const label = isCancelled ? "Cancelled tool" : "Used tool";
+  const display = formatToolDisplay(toolName, argsText);
 
   return (
     <CollapsibleTrigger
@@ -127,20 +181,25 @@ function ToolFallbackTrigger({
       <span
         data-slot="tool-fallback-trigger-label"
         className={cn(
-          "aui-tool-fallback-trigger-label-wrapper relative inline-block grow text-left leading-none",
+          "aui-tool-fallback-trigger-label-wrapper relative inline-block grow text-left",
           isCancelled && "text-muted-foreground line-through",
         )}
       >
-        <span>
-          {label}: <b>{toolName}</b>
+        <span className="block leading-none">
+          {label}: <b>{display.primary}</b>
         </span>
+        {display.secondary ? (
+          <span className="mt-1 block font-mono text-xs leading-snug text-muted-foreground">
+            via {display.secondary}
+          </span>
+        ) : null}
         {isRunning && (
           <span
             aria-hidden
             data-slot="tool-fallback-trigger-shimmer"
             className="aui-tool-fallback-trigger-shimmer shimmer pointer-events-none absolute inset-0 motion-reduce:animate-none"
           >
-            {label}: <b>{toolName}</b>
+            {label}: <b>{display.primary}</b>
           </span>
         )}
       </span>
@@ -281,7 +340,7 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
     <ToolFallbackRoot
       className={cn(isCancelled && "border-muted-foreground/30 bg-muted/30")}
     >
-      <ToolFallbackTrigger toolName={toolName} status={status} />
+      <ToolFallbackTrigger toolName={toolName} argsText={argsText} status={status} />
       <ToolFallbackContent>
         <ToolFallbackError status={status} />
         <ToolFallbackArgs
