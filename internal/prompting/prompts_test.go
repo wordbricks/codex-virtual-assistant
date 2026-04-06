@@ -121,6 +121,9 @@ func TestBuildGeneratorPromptPrefersProjectBrowserProfiles(t *testing.T) {
 	if !strings.Contains(bundle.System, "agent-browser") {
 		t.Fatalf("System prompt = %q, want agent-browser guidance", bundle.System)
 	}
+	if !strings.Contains(bundle.System, "--headed") {
+		t.Fatalf("System prompt = %q, want headed browser guidance", bundle.System)
+	}
 	if !strings.Contains(strings.ToLower(bundle.System), "webm") {
 		t.Fatalf("System prompt = %q, want WebM recording guidance", bundle.System)
 	}
