@@ -32,8 +32,9 @@ Clone this repository, install prerequisites, build it, and run it locally.
    - Install sqlite3 and make sure it is on PATH.
    - Install `ffmpeg` and make sure it is on PATH. CVA uses it to turn captured browser frames into the report video replay.
    - Install the codex CLI and authenticate it so `codex app-server` can run.
-   - Install the `agent-browser` skill at project scope:
-     - npx skills add https://github.com/vercel-labs/agent-browser --skill agent-browser
+   - Install the `agent-browser` CLI and browser runtime:
+     - npm install -g agent-browser
+     - agent-browser install
 
 3. Build the CLI binary:
    - mkdir -p dist
@@ -68,6 +69,13 @@ go run ./cmd/assistantd --yolo
 ```
 
 The server now uses `codex app-server` as the default execution runtime for planner/generator/evaluator phases. Make sure the `codex` CLI is installed, authenticated, and able to run `codex app-server` on your machine before you start a run from the UI.
+
+Install `agent-browser` on the same machine so Codex can execute browser work through the current CLI:
+
+```bash
+npm install -g agent-browser
+agent-browser install
+```
 
 If you want browser activity to appear as an embedded replay video in the final supervisor report, `ffmpeg` must also be installed and available on `PATH`.
 
@@ -148,6 +156,7 @@ node --check web/static/app.js
 
 - Go 1.26+
 - `codex` CLI installed and authenticated; the default runtime shells out to `codex app-server`
+- `agent-browser` CLI installed and initialized with `agent-browser install`
 - `sqlite3` available on the local machine; the current repository layer uses the system SQLite CLI for local persistence in this sandboxed environment
 - `ffmpeg` available on the local machine; browser-session report videos are generated only when `ffmpeg` is present on `PATH`
 - Node.js is optional, but useful for checking the browser script during local development

@@ -115,6 +115,15 @@ func TestBuildGeneratorPromptPrefersProjectBrowserProfiles(t *testing.T) {
 	if !strings.Contains(strings.ToLower(bundle.System), "project-specific browser profile") {
 		t.Fatalf("System prompt = %q, want project browser profile guidance", bundle.System)
 	}
+	if !strings.Contains(bundle.System, "agent-browser open <url> --headed") {
+		t.Fatalf("System prompt = %q, want current agent-browser open guidance", bundle.System)
+	}
+	if !strings.Contains(bundle.System, "agent-browser snapshot -i --json") {
+		t.Fatalf("System prompt = %q, want current agent-browser snapshot guidance", bundle.System)
+	}
+	if !strings.Contains(bundle.System, "--session-name") {
+		t.Fatalf("System prompt = %q, want session persistence guidance", bundle.System)
+	}
 	if !strings.Contains(bundle.System, "--auto-connect") {
 		t.Fatalf("System prompt = %q, want auto-connect fallback guidance", bundle.System)
 	}
