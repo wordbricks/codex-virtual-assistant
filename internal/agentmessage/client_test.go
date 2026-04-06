@@ -142,6 +142,23 @@ func TestPhaseChangedCardIncludesPhaseSummary(t *testing.T) {
 	}
 }
 
+func TestStartedCardIncludesUserRequest(t *testing.T) {
+	t.Parallel()
+
+	payload, err := RenderLifecycleCard(StartedCard(assistant.Run{
+		ID:             "run_789",
+		Phase:          assistant.RunPhaseQueued,
+		UserRequestRaw: "Research five competitor pricing pages and summarize them.",
+	}, "Run created from the user request."))
+	if err != nil {
+		t.Fatalf("RenderLifecycleCard() error = %v", err)
+	}
+
+	if !strings.Contains(payload, "Research five competitor pricing pages and summarize them.") {
+		t.Fatalf("payload = %q, want user request", payload)
+	}
+}
+
 type fakeRunner struct {
 	mu        sync.Mutex
 	master    string

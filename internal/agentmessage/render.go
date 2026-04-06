@@ -113,6 +113,7 @@ func StartedCard(run assistant.Run, summary string) LifecycleCard {
 		Title:      "CVA accepted your request",
 		StatusText: firstNonEmpty(summary, "The run has entered the workflow."),
 		Details: []string{
+			firstNonEmpty(run.UserRequestRaw, "User request unavailable."),
 			fmt.Sprintf("Run id: %s", run.ID),
 			fmt.Sprintf("Current phase: %s", run.Phase),
 		},
