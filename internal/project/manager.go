@@ -15,7 +15,7 @@ const (
 	DefaultProjectSlug      = "no_project"
 	projectFileName         = "PROJECT.md"
 	browserProfileDirName   = ".browser-profile"
-	defaultBrowserCDPPort   = 9222
+	defaultBrowserCDPPort   = 9223
 	defaultNoProjectName    = "No Project"
 	defaultNoProjectPurpose = "Use this project for simple questions, one-off requests, and tasks that do not need long-lived project memory."
 	defaultNoProjectBelongs = "Short factual questions, quick translations, and standalone instructions with no continuing context."

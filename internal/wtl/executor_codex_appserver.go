@@ -1330,7 +1330,7 @@ func phasePromptForCodex(request CodexPhaseRequest) string {
 		if profileDir := strings.TrimSpace(request.Project.BrowserProfileDir); profileDir != "" {
 			port := request.Project.BrowserCDPPort
 			if port <= 0 {
-				port = 9222
+				port = 9223
 			}
 			parts = append(parts,
 				fmt.Sprintf("Project browser profile directory: %s", profileDir),

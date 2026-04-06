@@ -170,17 +170,17 @@ func TestPhasePromptForCodexIncludesProjectBrowserProfileGuidance(t *testing.T) 
 			Slug:              "x-growth",
 			Description:       "Grow the X presence over repeated tasks.",
 			BrowserProfileDir: "/tmp/cva/projects/x-growth/.browser-profile",
-			BrowserCDPPort:    9222,
+			BrowserCDPPort:    9223,
 		},
 	})
 
 	if !strings.Contains(prompt, "Project browser profile directory: /tmp/cva/projects/x-growth/.browser-profile") {
 		t.Fatalf("prompt = %q, want browser profile directory guidance", prompt)
 	}
-	if !strings.Contains(prompt, "Project browser CDP endpoint: http://localhost:9222") {
+	if !strings.Contains(prompt, "Project browser CDP endpoint: http://localhost:9223") {
 		t.Fatalf("prompt = %q, want project browser CDP endpoint guidance", prompt)
 	}
-	if !strings.Contains(prompt, "open -na \"Google Chrome\"") || !strings.Contains(prompt, "agent-browser connect http://localhost:9222") {
+	if !strings.Contains(prompt, "open -na \"Google Chrome\"") || !strings.Contains(prompt, "agent-browser connect http://localhost:9223") {
 		t.Fatalf("prompt = %q, want dedicated profile launch and connect guidance", prompt)
 	}
 	if !strings.Contains(prompt, "Reuse the same project browser profile across runs") || !strings.Contains(prompt, "--session-name") {
