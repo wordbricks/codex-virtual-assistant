@@ -150,7 +150,7 @@ func TestCodexRuntimeUsesReadOnlyContextToolsForGateAndAnswer(t *testing.T) {
 	}
 }
 
-func TestCodexRuntimeUsesAgentMessageToolsForReporter(t *testing.T) {
+func TestCodexRuntimeUsesStoredContextToolsForReporter(t *testing.T) {
 	t.Parallel()
 
 	executor := &fakeCodexExecutor{
@@ -166,8 +166,8 @@ func TestCodexRuntimeUsesAgentMessageToolsForReporter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute(reporter) error = %v", err)
 	}
-	if len(executor.request.Tools) == 0 || executor.request.Tools[0] != "agent-message" {
-		t.Fatalf("reporter tools = %#v, want agent-message tools", executor.request.Tools)
+	if len(executor.request.Tools) == 0 || executor.request.Tools[0] != "stored-artifacts" {
+		t.Fatalf("reporter tools = %#v, want stored context tools", executor.request.Tools)
 	}
 }
 

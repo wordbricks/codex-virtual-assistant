@@ -1263,6 +1263,7 @@ func phasePromptForCodex(request CodexPhaseRequest) string {
 	parts := []string{
 		"You are operating inside Codex Virtual Assistant.",
 		"Use available tools directly when needed. Do not describe hypothetical steps when you can execute them.",
+		"Carry out the request, then notify the user of the result through the agent-message CLI before you finish the phase response.",
 		"If you need login, approval, or missing business context, stop and return the required wait_request field instead of calling request_user_input.",
 		"Return only the schema-conforming final response for this phase.",
 	}
@@ -1275,8 +1276,8 @@ func phasePromptForCodex(request CodexPhaseRequest) string {
 		if profileDir := strings.TrimSpace(request.Project.BrowserProfileDir); profileDir != "" {
 			parts = append(parts,
 				fmt.Sprintf("Project browser profile directory: %s", profileDir),
-				fmt.Sprintf("For agent-browser work in this project, prefer commands like agent-browser --headed --profile %q ... so authenticated browser state is reused across runs for this project.", profileDir),
-				"Only fall back to --auto-connect or a fresh login when the project browser profile is unavailable or clearly unsuitable for the task.",
+				fmt.Sprintf("For agent-browser work in this project, prefer commands like agent-browser --profile %q open <url> --headed so authenticated browser state is reused across runs for this project.", profileDir),
+				"If profile reuse is unsuitable, prefer explicit session persistence such as --session-name before falling back to --auto-connect or a fresh login.",
 				"Keep agent-browser in foreground/headed mode unless the task explicitly requires otherwise.",
 			)
 		}

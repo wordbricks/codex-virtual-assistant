@@ -176,14 +176,20 @@ func TestPhasePromptForCodexIncludesProjectBrowserProfileGuidance(t *testing.T) 
 	if !strings.Contains(prompt, "Project browser profile directory: /tmp/cva/projects/x-growth/.browser-profile") {
 		t.Fatalf("prompt = %q, want browser profile directory guidance", prompt)
 	}
-	if !strings.Contains(prompt, "agent-browser") || !strings.Contains(prompt, "--profile") {
+	if !strings.Contains(prompt, "agent-browser") || !strings.Contains(prompt, "--profile") || !strings.Contains(prompt, "open <url> --headed") {
 		t.Fatalf("prompt = %q, want agent-browser profile reuse guidance", prompt)
 	}
 	if !strings.Contains(prompt, "--headed") {
 		t.Fatalf("prompt = %q, want headed browser guidance", prompt)
 	}
+	if !strings.Contains(prompt, "--session-name") {
+		t.Fatalf("prompt = %q, want session persistence guidance", prompt)
+	}
 	if !strings.Contains(prompt, "--auto-connect") {
 		t.Fatalf("prompt = %q, want auto-connect fallback guidance", prompt)
+	}
+	if !strings.Contains(prompt, "notify the user of the result through the agent-message CLI") {
+		t.Fatalf("prompt = %q, want agent-message notification guidance", prompt)
 	}
 }
 
