@@ -127,6 +127,12 @@ func TestBuildGeneratorPromptPrefersProjectBrowserProfiles(t *testing.T) {
 	if !strings.Contains(bundle.System, "--auto-connect") {
 		t.Fatalf("System prompt = %q, want auto-connect fallback guidance", bundle.System)
 	}
+	if !strings.Contains(bundle.System, "saved auth state before using --auto-connect") {
+		t.Fatalf("System prompt = %q, want saved state priority guidance", bundle.System)
+	}
+	if !strings.Contains(bundle.System, "agent-browser state load <path>") {
+		t.Fatalf("System prompt = %q, want explicit state load guidance", bundle.System)
+	}
 	if !strings.Contains(bundle.System, "agent-browser") {
 		t.Fatalf("System prompt = %q, want agent-browser guidance", bundle.System)
 	}

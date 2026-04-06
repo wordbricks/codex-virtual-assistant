@@ -188,6 +188,12 @@ func TestPhasePromptForCodexIncludesProjectBrowserProfileGuidance(t *testing.T) 
 	if !strings.Contains(prompt, "--auto-connect") {
 		t.Fatalf("prompt = %q, want auto-connect fallback guidance", prompt)
 	}
+	if !strings.Contains(prompt, "saved auth state before using --auto-connect") {
+		t.Fatalf("prompt = %q, want saved state priority guidance", prompt)
+	}
+	if !strings.Contains(prompt, "agent-browser state load <path>") {
+		t.Fatalf("prompt = %q, want explicit state load guidance", prompt)
+	}
 	if !strings.Contains(prompt, "notify the user of the result through the agent-message CLI") {
 		t.Fatalf("prompt = %q, want agent-message notification guidance", prompt)
 	}
