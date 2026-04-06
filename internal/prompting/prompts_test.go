@@ -139,6 +139,9 @@ func TestBuildGeneratorPromptPrefersExplicitStatePersistence(t *testing.T) {
 	if !strings.Contains(bundle.System, "agent-browser state load <path>") {
 		t.Fatalf("System prompt = %q, want explicit state load guidance", bundle.System)
 	}
+	if !strings.Contains(bundle.System, "Allow remote debugging?") || !strings.Contains(bundle.System, "return a wait_request for approval") {
+		t.Fatalf("System prompt = %q, want Chrome remote debugging approval guidance", bundle.System)
+	}
 	if !strings.Contains(bundle.System, "agent-browser") {
 		t.Fatalf("System prompt = %q, want agent-browser guidance", bundle.System)
 	}

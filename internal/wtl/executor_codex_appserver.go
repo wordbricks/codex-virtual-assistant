@@ -317,6 +317,13 @@ func (s *appServerTurnSession) buildPhaseResult(request CodexPhaseRequest) Codex
 
 	raw := strings.TrimSpace(firstNonEmpty(s.finalText, s.textBuilder.String()))
 	if raw == "" {
+		if response.WaitRequest == nil {
+			response.WaitRequest = s.remoteDebugApprovalWaitRequest()
+		}
+		if response.WaitRequest != nil {
+			response.Summary = firstNonEmpty(response.WaitRequest.Title, "Input required")
+			return response
+		}
 		response.Summary = "Codex completed the phase without returning final text."
 		return response
 	}
@@ -394,6 +401,10 @@ func (s *appServerTurnSession) buildPhaseResult(request CodexPhaseRequest) Codex
 	if response.WaitRequest != nil {
 		response.Output = ""
 		response.Summary = firstNonEmpty(response.WaitRequest.Title, response.Summary)
+	} else if wait := s.remoteDebugApprovalWaitRequest(); wait != nil {
+		response.WaitRequest = wait
+		response.Output = ""
+		response.Summary = firstNonEmpty(wait.Title, response.Summary)
 	}
 	return response
 }
@@ -1259,6 +1270,41 @@ func waitRequestFromQuestions(questions []struct {
 	}
 }
 
+func (s *appServerTurnSession) remoteDebugApprovalWaitRequest() *assistant.WaitRequest {
+	combined := strings.ToLower(strings.Join([]string{
+		s.turnErrMsg,
+		s.stderr.String(),
+		s.finalText,
+		s.textBuilder.String(),
+	}, "\n"))
+	if !strings.Contains(combined, "timed out") {
+		return nil
+	}
+
+	foundRemoteDebugSignal := strings.Contains(combined, "remote debugging") ||
+		strings.Contains(combined, "allow remote debugging")
+
+	for _, tool := range s.toolRuns {
+		commandText := strings.ToLower(strings.TrimSpace(tool.InputSummary + "\n" + tool.OutputSummary))
+		if strings.Contains(commandText, "agent-browser") &&
+			(strings.Contains(commandText, "--cdp") || strings.Contains(commandText, " connect ")) {
+			foundRemoteDebugSignal = true
+			break
+		}
+	}
+
+	if !foundRemoteDebugSignal {
+		return nil
+	}
+
+	return &assistant.WaitRequest{
+		Kind:        assistant.WaitKindApproval,
+		Title:       "Chrome approval required",
+		Prompt:      "Google Chrome may be asking whether to allow remote debugging. Please click 'Allow' in Chrome, then resume the run.",
+		RiskSummary: "Real Chrome CDP attach requires user approval before automation can continue.",
+	}
+}
+
 func phasePromptForCodex(request CodexPhaseRequest) string {
 	parts := []string{
 		"You are operating inside Codex Virtual Assistant.",
@@ -1282,6 +1328,7 @@ func phasePromptForCodex(request CodexPhaseRequest) string {
 				"If --auto-connect succeeds, immediately save a fresh auth state to a project-local path.",
 				"After a successful state save, do not keep relying on --auto-connect in the same task unless the saved state fails and login must be recovered again.",
 				"When reusing saved state, prefer opening a blank page, running agent-browser state load <path>, and only then opening the target URL instead of relying on --state during the initial open command.",
+				"When attaching to a real Google Chrome session with agent-browser connect or --cdp, Chrome may show an 'Allow remote debugging?' dialog. If an attach attempt or the first browser command times out during that flow, do not assume the attempt failed. Ask the user to click Allow in Chrome, return a wait_request for approval, and retry after the user confirms approval.",
 				"For agent-browser work, prefer commands like agent-browser open <url> --headed, then agent-browser snapshot -i --json before interacting.",
 				"Keep agent-browser in foreground/headed mode unless the task explicitly requires otherwise.",
 			)

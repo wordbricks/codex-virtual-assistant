@@ -200,6 +200,9 @@ func TestPhasePromptForCodexIncludesProjectBrowserProfileGuidance(t *testing.T) 
 	if !strings.Contains(prompt, "agent-browser state load <path>") {
 		t.Fatalf("prompt = %q, want explicit state load guidance", prompt)
 	}
+	if !strings.Contains(prompt, "Allow remote debugging?") || !strings.Contains(prompt, "return a wait_request for approval") {
+		t.Fatalf("prompt = %q, want Chrome remote debugging approval guidance", prompt)
+	}
 	if !strings.Contains(prompt, "notify the user of the result through the agent-message CLI") {
 		t.Fatalf("prompt = %q, want agent-message notification guidance", prompt)
 	}
@@ -255,5 +258,33 @@ func TestBuildPhaseResultPreservesReporterEnvelope(t *testing.T) {
 	}
 	if got := result.Artifacts[0].Content; got != output.ReportPayload {
 		t.Fatalf("artifact content = %q, want report payload %q", got, output.ReportPayload)
+	}
+}
+
+func TestBuildPhaseResultPromotesChromeRemoteDebugTimeoutToWaitRequest(t *testing.T) {
+	t.Parallel()
+
+	session := newAppServerTurnSession(AppServerPhaseExecutorConfig{}, func() time.Time {
+		return time.Date(2026, time.April, 6, 6, 1, 52, 0, time.UTC)
+	})
+	session.turnErrMsg = "Operation timed out. The page may still be loading or the element may not exist."
+	session.toolRuns = append(session.toolRuns, CodexToolRun{
+		Name:         "agent-browser",
+		InputSummary: "agent-browser --cdp 9222 open https://x.com/DevNam125129",
+		OutputSummary: "Google Chrome showed an Allow remote debugging dialog before attach completed.",
+	})
+
+	result := session.buildPhaseResult(CodexPhaseRequest{
+		Role: assistant.AttemptRoleGenerator,
+	})
+
+	if result.WaitRequest == nil {
+		t.Fatalf("WaitRequest = nil, want Chrome approval wait request")
+	}
+	if got := result.WaitRequest.Kind; got != assistant.WaitKindApproval {
+		t.Fatalf("WaitRequest.Kind = %q, want %q", got, assistant.WaitKindApproval)
+	}
+	if !strings.Contains(result.WaitRequest.Prompt, "Allow") {
+		t.Fatalf("WaitRequest.Prompt = %q, want Allow guidance", result.WaitRequest.Prompt)
 	}
 }
