@@ -1276,10 +1276,13 @@ func phasePromptForCodex(request CodexPhaseRequest) string {
 		if profileDir := strings.TrimSpace(request.Project.BrowserProfileDir); profileDir != "" {
 			parts = append(parts,
 				fmt.Sprintf("Project browser profile directory: %s", profileDir),
-				fmt.Sprintf("For agent-browser work in this project, prefer commands like agent-browser --profile %q open <url> --headed so authenticated browser state is reused across runs for this project.", profileDir),
-				"If profile reuse is unsuitable, prefer explicit session persistence such as --session-name. Prefer a previously saved auth state before using --auto-connect.",
-				"Use --auto-connect only when saved state is missing or login must be recovered, and when it succeeds save a fresh state immediately.",
+				fmt.Sprintf("For this project, agent-browser --profile %q may be used together with explicit auth state files, but do not rely on --session-name for auth persistence.", profileDir),
+				"Persist auth with explicit state files instead. Prefer a previously saved auth state before using --auto-connect.",
+				"Use --auto-connect only when saved state is missing or login must be recovered.",
+				"If --auto-connect succeeds, immediately save a fresh auth state to a project-local path.",
+				"After a successful state save, do not keep relying on --auto-connect in the same task unless the saved state fails and login must be recovered again.",
 				"When reusing saved state, prefer opening a blank page, running agent-browser state load <path>, and only then opening the target URL instead of relying on --state during the initial open command.",
+				"For agent-browser work, prefer commands like agent-browser open <url> --headed, then agent-browser snapshot -i --json before interacting.",
 				"Keep agent-browser in foreground/headed mode unless the task explicitly requires otherwise.",
 			)
 		}

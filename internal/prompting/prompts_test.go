@@ -103,7 +103,7 @@ func TestBuildAnswerPromptDeclaresReadOrientedContract(t *testing.T) {
 	}
 }
 
-func TestBuildGeneratorPromptPrefersProjectBrowserProfiles(t *testing.T) {
+func TestBuildGeneratorPromptPrefersExplicitStatePersistence(t *testing.T) {
 	t.Parallel()
 
 	bundle := BuildGeneratorPrompt(GeneratorInput{
@@ -112,8 +112,8 @@ func TestBuildGeneratorPromptPrefersProjectBrowserProfiles(t *testing.T) {
 		},
 	})
 
-	if !strings.Contains(strings.ToLower(bundle.System), "project-specific browser profile") {
-		t.Fatalf("System prompt = %q, want project browser profile guidance", bundle.System)
+	if !strings.Contains(bundle.System, "project-specific browser profile is available") || !strings.Contains(bundle.System, "--session-name") {
+		t.Fatalf("System prompt = %q, want profile-plus-state guidance and session-name warning", bundle.System)
 	}
 	if !strings.Contains(bundle.System, "agent-browser open <url> --headed") {
 		t.Fatalf("System prompt = %q, want current agent-browser open guidance", bundle.System)
@@ -121,14 +121,20 @@ func TestBuildGeneratorPromptPrefersProjectBrowserProfiles(t *testing.T) {
 	if !strings.Contains(bundle.System, "agent-browser snapshot -i --json") {
 		t.Fatalf("System prompt = %q, want current agent-browser snapshot guidance", bundle.System)
 	}
-	if !strings.Contains(bundle.System, "--session-name") {
-		t.Fatalf("System prompt = %q, want session persistence guidance", bundle.System)
+	if !strings.Contains(bundle.System, "Persist auth with explicit state files instead.") {
+		t.Fatalf("System prompt = %q, want explicit state persistence guidance", bundle.System)
 	}
 	if !strings.Contains(bundle.System, "--auto-connect") {
 		t.Fatalf("System prompt = %q, want auto-connect fallback guidance", bundle.System)
 	}
 	if !strings.Contains(bundle.System, "saved auth state before using --auto-connect") {
 		t.Fatalf("System prompt = %q, want saved state priority guidance", bundle.System)
+	}
+	if !strings.Contains(bundle.System, "immediately save a fresh auth state to a project-local path") {
+		t.Fatalf("System prompt = %q, want auto-connect save guidance", bundle.System)
+	}
+	if !strings.Contains(bundle.System, "do not keep relying on --auto-connect in the same task") {
+		t.Fatalf("System prompt = %q, want auto-connect handoff guidance", bundle.System)
 	}
 	if !strings.Contains(bundle.System, "agent-browser state load <path>") {
 		t.Fatalf("System prompt = %q, want explicit state load guidance", bundle.System)

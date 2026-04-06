@@ -176,20 +176,26 @@ func TestPhasePromptForCodexIncludesProjectBrowserProfileGuidance(t *testing.T) 
 	if !strings.Contains(prompt, "Project browser profile directory: /tmp/cva/projects/x-growth/.browser-profile") {
 		t.Fatalf("prompt = %q, want browser profile directory guidance", prompt)
 	}
-	if !strings.Contains(prompt, "agent-browser") || !strings.Contains(prompt, "--profile") || !strings.Contains(prompt, "open <url> --headed") {
-		t.Fatalf("prompt = %q, want agent-browser profile reuse guidance", prompt)
+	if !strings.Contains(prompt, "agent-browser --profile") || !strings.Contains(prompt, "--session-name") {
+		t.Fatalf("prompt = %q, want profile-plus-state guidance and session-name warning", prompt)
 	}
 	if !strings.Contains(prompt, "--headed") {
 		t.Fatalf("prompt = %q, want headed browser guidance", prompt)
 	}
-	if !strings.Contains(prompt, "--session-name") {
-		t.Fatalf("prompt = %q, want session persistence guidance", prompt)
+	if !strings.Contains(prompt, "Persist auth with explicit state files instead.") {
+		t.Fatalf("prompt = %q, want explicit state persistence guidance", prompt)
 	}
 	if !strings.Contains(prompt, "--auto-connect") {
 		t.Fatalf("prompt = %q, want auto-connect fallback guidance", prompt)
 	}
 	if !strings.Contains(prompt, "saved auth state before using --auto-connect") {
 		t.Fatalf("prompt = %q, want saved state priority guidance", prompt)
+	}
+	if !strings.Contains(prompt, "immediately save a fresh auth state to a project-local path") {
+		t.Fatalf("prompt = %q, want auto-connect save guidance", prompt)
+	}
+	if !strings.Contains(prompt, "do not keep relying on --auto-connect in the same task") {
+		t.Fatalf("prompt = %q, want auto-connect handoff guidance", prompt)
 	}
 	if !strings.Contains(prompt, "agent-browser state load <path>") {
 		t.Fatalf("prompt = %q, want explicit state load guidance", prompt)
