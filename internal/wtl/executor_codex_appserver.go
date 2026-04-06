@@ -31,6 +31,7 @@ type AppServerPhaseExecutorConfig struct {
 	ApprovalPolicy string
 	SandboxMode    string
 	NetworkAccess  bool
+	AgentBrowserHeaded bool
 }
 
 type AppServerPhaseExecutor struct {
@@ -56,6 +57,9 @@ func NewAppServerPhaseExecutor(config AppServerPhaseExecutorConfig, now func() t
 	}
 	if strings.TrimSpace(config.Cwd) == "" {
 		config.Cwd = "."
+	}
+	if !config.AgentBrowserHeaded {
+		config.AgentBrowserHeaded = true
 	}
 	return &AppServerPhaseExecutor{
 		config: config,
@@ -164,6 +168,7 @@ func (s *appServerTurnSession) start(ctx context.Context, cwd string) error {
 
 	cmd := exec.CommandContext(ctx, s.config.BinaryPath, "app-server")
 	cmd.Dir = s.cwd
+	cmd.Env = s.appServerEnv()
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -279,6 +284,25 @@ func (s *appServerTurnSession) run(ctx context.Context, request CodexPhaseReques
 	return response, nil
 }
 
+func (s *appServerTurnSession) appServerEnv() []string {
+	env := append([]string{}, os.Environ()...)
+	if s.config.AgentBrowserHeaded {
+		env = upsertEnv(env, "AGENT_BROWSER_HEADED", "true")
+	}
+	return env
+}
+
+func upsertEnv(env []string, key string, value string) []string {
+	prefix := key + "="
+	for idx, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			env[idx] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
+}
+
 func (s *appServerTurnSession) buildPhaseResult(request CodexPhaseRequest) CodexPhaseResult {
 	response := CodexPhaseResult{
 		ToolRuns:     append([]CodexToolRun{}, s.toolRuns...),
@@ -321,7 +345,14 @@ func (s *appServerTurnSession) buildPhaseResult(request CodexPhaseRequest) Codex
 		}
 		if err := json.Unmarshal([]byte(raw), &payload); err == nil {
 			response.Summary = strings.TrimSpace(firstNonEmpty(payload.Summary, summarizeOutput(payload.Output), payload.MessagePreview))
-			response.Output = strings.TrimSpace(firstNonEmpty(payload.Output, payload.ReportPayload))
+			switch request.Role {
+			case assistant.AttemptRoleReporter:
+				// Preserve the full structured reporter JSON so the engine can decode
+				// delivery_status/message_preview/report_payload without losing fields.
+				response.Output = raw
+			default:
+				response.Output = strings.TrimSpace(firstNonEmpty(payload.Output, payload.ReportPayload))
+			}
 			if response.WaitRequest == nil && payload.NeedsUserInput {
 				response.WaitRequest = (&waitRequestPayload{
 					Kind:        payload.WaitKind,
@@ -337,18 +368,22 @@ func (s *appServerTurnSession) buildPhaseResult(request CodexPhaseRequest) Codex
 		if response.WaitRequest == nil && strings.TrimSpace(response.Output) != "" {
 			title := "Assistant draft result"
 			mimeType := "text/markdown"
+			artifactContent := response.Output
 			if request.Role == assistant.AttemptRoleAnswer {
 				title = "Assistant answer"
 			}
 			if request.Role == assistant.AttemptRoleReporter {
 				title = "Delivered report payload"
 				mimeType = "application/json"
+				if err := json.Unmarshal([]byte(raw), &payload); err == nil && strings.TrimSpace(payload.ReportPayload) != "" {
+					artifactContent = strings.TrimSpace(payload.ReportPayload)
+				}
 			}
 			response.Artifacts = append(response.Artifacts, assistant.Artifact{
 				Kind:     assistant.ArtifactKindReport,
 				Title:    title,
 				MIMEType: mimeType,
-				Content:  response.Output,
+				Content:  artifactContent,
 			})
 		}
 	default:
@@ -1240,8 +1275,9 @@ func phasePromptForCodex(request CodexPhaseRequest) string {
 		if profileDir := strings.TrimSpace(request.Project.BrowserProfileDir); profileDir != "" {
 			parts = append(parts,
 				fmt.Sprintf("Project browser profile directory: %s", profileDir),
-				fmt.Sprintf("For agent-browser work in this project, prefer commands like agent-browser --profile %q ... so authenticated browser state is reused across runs for this project.", profileDir),
+				fmt.Sprintf("For agent-browser work in this project, prefer commands like agent-browser --headed --profile %q ... so authenticated browser state is reused across runs for this project.", profileDir),
 				"Only fall back to --auto-connect or a fresh login when the project browser profile is unavailable or clearly unsuitable for the task.",
+				"Keep agent-browser in foreground/headed mode unless the task explicitly requires otherwise.",
 			)
 		}
 	}

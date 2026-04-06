@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
+	"github.com/siisee11/CodexVirtualAssistant/internal/prompting"
 )
 
 func TestCollectReasoningSkipsEmptyStructuredContent(t *testing.T) {
@@ -175,10 +176,66 @@ func TestPhasePromptForCodexIncludesProjectBrowserProfileGuidance(t *testing.T) 
 	if !strings.Contains(prompt, "Project browser profile directory: /tmp/cva/projects/x-growth/.browser-profile") {
 		t.Fatalf("prompt = %q, want browser profile directory guidance", prompt)
 	}
-	if !strings.Contains(prompt, "agent-browser --profile") {
+	if !strings.Contains(prompt, "agent-browser") || !strings.Contains(prompt, "--profile") {
 		t.Fatalf("prompt = %q, want agent-browser profile reuse guidance", prompt)
+	}
+	if !strings.Contains(prompt, "--headed") {
+		t.Fatalf("prompt = %q, want headed browser guidance", prompt)
 	}
 	if !strings.Contains(prompt, "--auto-connect") {
 		t.Fatalf("prompt = %q, want auto-connect fallback guidance", prompt)
+	}
+}
+
+func TestAppServerEnvForcesAgentBrowserHeaded(t *testing.T) {
+	t.Parallel()
+
+	session := newAppServerTurnSession(AppServerPhaseExecutorConfig{
+		AgentBrowserHeaded: true,
+	}, func() time.Time {
+		return time.Date(2026, time.April, 5, 4, 0, 0, 0, time.UTC)
+	})
+
+	env := session.appServerEnv()
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "AGENT_BROWSER_HEADED=true") {
+		t.Fatalf("env = %q, want AGENT_BROWSER_HEADED=true", joined)
+	}
+}
+
+func TestBuildPhaseResultPreservesReporterEnvelope(t *testing.T) {
+	t.Parallel()
+
+	session := newAppServerTurnSession(AppServerPhaseExecutorConfig{}, func() time.Time {
+		return time.Date(2026, time.April, 6, 6, 1, 52, 0, time.UTC)
+	})
+	session.finalText = `{
+		"summary": "Delivered the final report through agent-message.",
+		"delivery_status": "sent",
+		"message_preview": "DevNam X login check delivered.",
+		"report_payload": "{\"root\":\"main\",\"elements\":{\"main\":{\"type\":\"Text\",\"props\":{\"text\":\"Outcome: not logged in\"},\"children\":[]}}}",
+		"needs_user_input": false,
+		"wait_kind": "",
+		"wait_title": "",
+		"wait_prompt": "",
+		"wait_risk_summary": ""
+	}`
+
+	result := session.buildPhaseResult(CodexPhaseRequest{
+		Role: assistant.AttemptRoleReporter,
+	})
+
+	output, err := prompting.DecodeReportOutput([]byte(result.Output))
+	if err != nil {
+		t.Fatalf("DecodeReportOutput(result.Output) error = %v", err)
+	}
+	if output.DeliveryStatus != "sent" {
+		t.Fatalf("delivery_status = %q, want sent", output.DeliveryStatus)
+	}
+	if len(result.Artifacts) != 1 {
+		t.Fatalf("len(result.Artifacts) = %d, want 1", len(result.Artifacts))
+	}
+	if got := result.Artifacts[0].Content; got != output.ReportPayload {
+		t.Fatalf("artifact content = %q, want report payload %q", got, output.ReportPayload)
 	}
 }
