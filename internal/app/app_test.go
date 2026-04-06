@@ -263,7 +263,7 @@ func TestNewAppSendsLifecycleNotifications(t *testing.T) {
 	t.Fatalf("lifecycle notification count = %d, want at least 2", messenger.sendCount())
 }
 
-func TestRegisterAgentMessageHooksSendsPhaseChangedNotification(t *testing.T) {
+func TestRegisterAgentMessageHooksSkipsPhaseChangedNotification(t *testing.T) {
 	t.Parallel()
 
 	broker := api.NewEventBroker()
@@ -294,16 +294,11 @@ func TestRegisterAgentMessageHooksSendsPhaseChangedNotification(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		payloads := messenger.payloads()
-		for _, payload := range payloads {
-			if strings.Contains(payload, "CVA entered planning") &&
-				strings.Contains(payload, "Planning the task into a structured TaskSpec.") {
-				return
-			}
+		if len(payloads) != 0 {
+			t.Fatalf("phase change notification should not be sent; payloads = %#v", payloads)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-
-	t.Fatalf("phase change notification not found in payloads: %#v", messenger.payloads())
 }
 
 func newTestApp(t *testing.T) (*App, *capturingMessenger) {

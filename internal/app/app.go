@@ -125,10 +125,6 @@ func registerAgentMessageHooks(events *api.EventBroker, messenger agentmessage.S
 		spec, err := agentmessage.RenderLifecycleCard(agentmessage.StartedCard(payload.Record.Run, payload.Event.Summary))
 		return spec, err == nil
 	})
-	register(api.HookOnPhaseChanged, func(payload api.HookPayload) (string, bool) {
-		spec, err := agentmessage.RenderLifecycleCard(agentmessage.PhaseChangedCard(payload.Record.Run, payload.Event.Phase, payload.Event.Summary))
-		return spec, err == nil
-	})
 	register(api.HookOnWaitEntered, func(payload api.HookPayload) (string, bool) {
 		spec, err := agentmessage.RenderLifecycleCard(agentmessage.WaitingCard(payload.Record.Run))
 		return spec, err == nil
