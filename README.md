@@ -4,7 +4,8 @@ Codex Virtual Assistant is a WTL GAN-policy based web personal virtual assistant
 
 This repository now includes the first runnable product foundation outside `specs/`:
 
-- `cmd/assistantd` boots a local HTTP server.
+- `cmd/cva` provides the main CLI, including `cva start` for the local HTTP server.
+- `cmd/assistantd` remains as a compatibility server entrypoint.
 - `internal/assistant` defines shared run, task, attempt, evaluation, artifact, evidence, and wait-state types, plus `TaskSpec` normalization defaults.
 - `internal/assistantapp` owns background run creation, status lookup, resume/input, and cancel orchestration over the engine and store.
 - `internal/prompting` defines the planner and evaluator JSON contracts plus strict output decoding.
@@ -34,13 +35,13 @@ Clone this repository, install prerequisites, build it, and run it locally.
    - Install the `agent-browser` skill at project scope:
      - npx skills add https://github.com/vercel-labs/agent-browser --skill agent-browser
 
-3. Build the server binary:
+3. Build the CLI binary:
    - mkdir -p dist
-   - go build -o dist/assistantd ./cmd/assistantd
+   - go build -o dist/cva ./cmd/cva
 
 4. Start the app:
-   - ./dist/assistantd
-   - or run with full Codex filesystem access: ./dist/assistantd --yolo
+   - ./dist/cva start
+   - or run with full Codex filesystem access: ./dist/cva start --yolo
 
 5. Open the UI:
    - http://127.0.0.1:8080
@@ -49,12 +50,18 @@ Clone this repository, install prerequisites, build it, and run it locally.
 ## Run locally
 
 ```bash
-go run ./cmd/assistantd
+go run ./cmd/cva start
 ```
 
 Then open `http://127.0.0.1:8080`.
 
 To force the Codex app server to run with `danger-full-access`, start the server with:
+
+```bash
+go run ./cmd/cva start --yolo
+```
+
+Legacy compatibility entrypoint:
 
 ```bash
 go run ./cmd/assistantd --yolo
@@ -124,7 +131,7 @@ Local state locations:
 Useful local verification commands:
 
 ```bash
-GOCACHE=/tmp/cva-go-build go test ./cmd/assistantd ./internal/... ./web
+GOCACHE=/tmp/cva-go-build go test ./cmd/cva ./cmd/assistantd ./internal/... ./web
 node --check web/static/app.js
 ```
 

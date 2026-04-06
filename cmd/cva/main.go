@@ -3,13 +3,18 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
+	"github.com/siisee11/CodexVirtualAssistant/internal/app"
+	"github.com/siisee11/CodexVirtualAssistant/internal/config"
 )
 
 const defaultAddr = "http://127.0.0.1:8080"
@@ -46,27 +51,36 @@ func main() {
 		os.Exit(1)
 	}
 
-	client := NewClient(addr)
 	cmd := filtered[0]
 	cmdArgs := filtered[1:]
 
 	var err error
 	switch cmd {
+	case "start":
+		err = cmdStart(ctx, cmdArgs)
 	case "run":
+		client := NewClient(addr)
 		err = cmdRun(ctx, client, cmdArgs, jsonMode)
 	case "status":
+		client := NewClient(addr)
 		err = cmdStatus(ctx, client, cmdArgs, jsonMode)
 	case "list":
+		client := NewClient(addr)
 		err = cmdList(ctx, client, jsonMode)
 	case "chat":
+		client := NewClient(addr)
 		err = cmdChat(ctx, client, cmdArgs, jsonMode)
 	case "watch":
+		client := NewClient(addr)
 		err = cmdWatch(ctx, client, cmdArgs, jsonMode)
 	case "cancel":
+		client := NewClient(addr)
 		err = cmdCancel(ctx, client, cmdArgs, jsonMode)
 	case "resume":
+		client := NewClient(addr)
 		err = cmdResume(ctx, client, cmdArgs)
 	case "schedule":
+		client := NewClient(addr)
 		err = cmdSchedule(ctx, client, cmdArgs, jsonMode)
 	case "help", "--help", "-h":
 		printUsage()
@@ -80,6 +94,38 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func cmdStart(ctx context.Context, args []string) error {
+	yolo := false
+	for _, arg := range args {
+		switch arg {
+		case "--yolo":
+			yolo = true
+		default:
+			return fmt.Errorf("usage: cva start [--yolo]")
+		}
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	if yolo {
+		cfg.CodexSandboxMode = "danger-full-access"
+		log.Printf("cva start with --yolo; Codex sandbox forced to %s", cfg.CodexSandboxMode)
+	}
+
+	application, err := app.New(cfg)
+	if err != nil {
+		return fmt.Errorf("bootstrap app: %w", err)
+	}
+
+	log.Printf("cva server listening on %s", cfg.HTTPAddr)
+	if err := application.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("run app: %w", err)
+	}
+	return nil
 }
 
 func cmdRun(ctx context.Context, c *Client, args []string, jsonMode bool) error {
@@ -312,6 +358,7 @@ Usage:
   cva [--addr URL] [--json] <command> [args...]
 
 Commands:
+  start [--yolo]                        Start the local CVA server
   run [--follow-up <run_id>] "request"   Create a new run and stream events
   status <run_id>                        Show run details
   list                                   List all chats
