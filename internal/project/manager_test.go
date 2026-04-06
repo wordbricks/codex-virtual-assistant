@@ -50,6 +50,9 @@ func TestEnsureProjectCreatesProjectMarkdown(t *testing.T) {
 	if project.BrowserProfileDir != filepath.Join(project.WorkspaceDir, ".browser-profile") {
 		t.Fatalf("BrowserProfileDir = %q, want project browser profile directory", project.BrowserProfileDir)
 	}
+	if project.BrowserCDPPort != 9222 {
+		t.Fatalf("BrowserCDPPort = %d, want 9222", project.BrowserCDPPort)
+	}
 	if info, err := os.Stat(project.BrowserProfileDir); err != nil {
 		t.Fatalf("Stat(%s) error = %v", project.BrowserProfileDir, err)
 	} else if !info.IsDir() {

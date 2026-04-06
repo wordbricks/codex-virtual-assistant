@@ -170,14 +170,21 @@ func TestPhasePromptForCodexIncludesProjectBrowserProfileGuidance(t *testing.T) 
 			Slug:              "x-growth",
 			Description:       "Grow the X presence over repeated tasks.",
 			BrowserProfileDir: "/tmp/cva/projects/x-growth/.browser-profile",
+			BrowserCDPPort:    9222,
 		},
 	})
 
 	if !strings.Contains(prompt, "Project browser profile directory: /tmp/cva/projects/x-growth/.browser-profile") {
 		t.Fatalf("prompt = %q, want browser profile directory guidance", prompt)
 	}
-	if !strings.Contains(prompt, "agent-browser --profile") || !strings.Contains(prompt, "--session-name") {
-		t.Fatalf("prompt = %q, want profile-plus-state guidance and session-name warning", prompt)
+	if !strings.Contains(prompt, "Project browser CDP endpoint: http://localhost:9222") {
+		t.Fatalf("prompt = %q, want project browser CDP endpoint guidance", prompt)
+	}
+	if !strings.Contains(prompt, "open -na \"Google Chrome\"") || !strings.Contains(prompt, "agent-browser connect http://localhost:9222") {
+		t.Fatalf("prompt = %q, want dedicated profile launch and connect guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Reuse the same project browser profile across runs") || !strings.Contains(prompt, "--session-name") {
+		t.Fatalf("prompt = %q, want project profile reuse guidance and session-name warning", prompt)
 	}
 	if !strings.Contains(prompt, "--headed") {
 		t.Fatalf("prompt = %q, want headed browser guidance", prompt)
@@ -188,9 +195,6 @@ func TestPhasePromptForCodexIncludesProjectBrowserProfileGuidance(t *testing.T) 
 	if !strings.Contains(prompt, "--auto-connect") {
 		t.Fatalf("prompt = %q, want auto-connect fallback guidance", prompt)
 	}
-	if !strings.Contains(prompt, "saved auth state before using --auto-connect") {
-		t.Fatalf("prompt = %q, want saved state priority guidance", prompt)
-	}
 	if !strings.Contains(prompt, "immediately save a fresh auth state to a project-local path") {
 		t.Fatalf("prompt = %q, want auto-connect save guidance", prompt)
 	}
@@ -200,7 +204,7 @@ func TestPhasePromptForCodexIncludesProjectBrowserProfileGuidance(t *testing.T) 
 	if !strings.Contains(prompt, "agent-browser state load <path>") {
 		t.Fatalf("prompt = %q, want explicit state load guidance", prompt)
 	}
-	if !strings.Contains(prompt, "Allow remote debugging?") || !strings.Contains(prompt, "return a wait_request for approval") {
+	if !strings.Contains(prompt, "When using --auto-connect") || !strings.Contains(prompt, "return a wait_request for approval") {
 		t.Fatalf("prompt = %q, want Chrome remote debugging approval guidance", prompt)
 	}
 	if !strings.Contains(prompt, "notify the user of the result through the agent-message CLI") {
@@ -269,8 +273,8 @@ func TestBuildPhaseResultPromotesChromeRemoteDebugTimeoutToWaitRequest(t *testin
 	})
 	session.turnErrMsg = "Operation timed out. The page may still be loading or the element may not exist."
 	session.toolRuns = append(session.toolRuns, CodexToolRun{
-		Name:         "agent-browser",
-		InputSummary: "agent-browser --cdp 9222 open https://x.com/DevNam125129",
+		Name:          "agent-browser",
+		InputSummary:  "agent-browser --auto-connect open https://x.com/DevNam125129",
 		OutputSummary: "Google Chrome showed an Allow remote debugging dialog before attach completed.",
 	})
 

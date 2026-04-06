@@ -90,6 +90,7 @@ type ProjectContext struct {
 	Description       string `json:"description"`
 	WorkspaceDir      string `json:"workspace_dir"`
 	BrowserProfileDir string `json:"browser_profile_dir,omitempty"`
+	BrowserCDPPort    int    `json:"browser_cdp_port,omitempty"`
 }
 
 type ArtifactKind string

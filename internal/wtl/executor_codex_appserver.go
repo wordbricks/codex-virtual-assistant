@@ -24,13 +24,13 @@ import (
 var urlPattern = regexp.MustCompile(`https?://[^\s"'<>]+`)
 
 type AppServerPhaseExecutorConfig struct {
-	BinaryPath     string
-	Cwd            string
-	ArtifactDir    string
-	Model          string
-	ApprovalPolicy string
-	SandboxMode    string
-	NetworkAccess  bool
+	BinaryPath         string
+	Cwd                string
+	ArtifactDir        string
+	Model              string
+	ApprovalPolicy     string
+	SandboxMode        string
+	NetworkAccess      bool
 	AgentBrowserHeaded bool
 }
 
@@ -1287,7 +1287,7 @@ func (s *appServerTurnSession) remoteDebugApprovalWaitRequest() *assistant.WaitR
 	for _, tool := range s.toolRuns {
 		commandText := strings.ToLower(strings.TrimSpace(tool.InputSummary + "\n" + tool.OutputSummary))
 		if strings.Contains(commandText, "agent-browser") &&
-			(strings.Contains(commandText, "--cdp") || strings.Contains(commandText, " connect ")) {
+			strings.Contains(commandText, "--auto-connect") {
 			foundRemoteDebugSignal = true
 			break
 		}
@@ -1328,15 +1328,23 @@ func phasePromptForCodex(request CodexPhaseRequest) string {
 			"Review PROJECT.md and any existing project files when they are relevant to the task.",
 		)
 		if profileDir := strings.TrimSpace(request.Project.BrowserProfileDir); profileDir != "" {
+			port := request.Project.BrowserCDPPort
+			if port <= 0 {
+				port = 9222
+			}
 			parts = append(parts,
 				fmt.Sprintf("Project browser profile directory: %s", profileDir),
-				fmt.Sprintf("For this project, agent-browser --profile %q may be used together with explicit auth state files, but do not rely on --session-name for auth persistence.", profileDir),
-				"Persist auth with explicit state files instead. Prefer a previously saved auth state before using --auto-connect.",
-				"Use --auto-connect only when saved state is missing or login must be recovered.",
+				fmt.Sprintf("Project browser CDP endpoint: http://localhost:%d", port),
+				fmt.Sprintf("Prefer launching Chrome for this project with a dedicated profile, for example on macOS: open -na \"Google Chrome\" --args --user-data-dir=%q --remote-debugging-port=%d --no-first-run --no-default-browser-check --new-window about:blank", profileDir, port),
+				fmt.Sprintf("After Chrome is running, prefer agent-browser connect http://localhost:%d before opening target URLs.", port),
+				"Reuse the same project browser profile across runs so site login state persists in the profile directory.",
+				"Persist auth with explicit state files instead.",
+				"Use explicit auth state files only as a secondary export/import mechanism, and do not rely on --session-name for auth persistence.",
+				"Use --auto-connect only when the task must attach to the user's already-running Chrome session and the project-specific browser profile cannot be used.",
 				"If --auto-connect succeeds, immediately save a fresh auth state to a project-local path.",
 				"After a successful state save, do not keep relying on --auto-connect in the same task unless the saved state fails and login must be recovered again.",
 				"When reusing saved state, prefer opening a blank page, running agent-browser state load <path>, and only then opening the target URL instead of relying on --state during the initial open command.",
-				"When attaching to a real Google Chrome session with agent-browser connect or --cdp, Chrome may show an 'Allow remote debugging?' dialog. If an attach attempt or the first browser command times out during that flow, do not assume the attempt failed. Ask the user to click Allow in Chrome, return a wait_request for approval, and retry after the user confirms approval.",
+				"When using --auto-connect to attach to a real Google Chrome session, Chrome may show an 'Allow remote debugging?' dialog. If an attach attempt or the first browser command times out during that flow, do not assume the attempt failed. Ask the user to click Allow in Chrome, return a wait_request for approval, and retry after the user confirms approval.",
 				"For agent-browser work, prefer commands like agent-browser open <url> --headed, then agent-browser snapshot -i --json before interacting.",
 				"Keep agent-browser in foreground/headed mode unless the task explicitly requires otherwise.",
 			)
