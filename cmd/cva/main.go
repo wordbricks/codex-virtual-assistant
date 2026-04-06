@@ -275,9 +275,55 @@ func cmdResume(ctx context.Context, c *Client, args []string) error {
 
 func cmdSchedule(ctx context.Context, c *Client, args []string, jsonMode bool) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: cva schedule <list|show|cancel> ...")
+		return fmt.Errorf("usage: cva schedule <create|list|show|cancel> ...")
 	}
 	switch args[0] {
+	case "create":
+		var runID string
+		var scheduledFor string
+		maxAttempts := 0
+		var filtered []string
+		for i := 1; i < len(args); i++ {
+			switch {
+			case args[i] == "--run" && i+1 < len(args):
+				runID = args[i+1]
+				i++
+			case strings.HasPrefix(args[i], "--run="):
+				runID = strings.TrimPrefix(args[i], "--run=")
+			case args[i] == "--at" && i+1 < len(args):
+				scheduledFor = args[i+1]
+				i++
+			case strings.HasPrefix(args[i], "--at="):
+				scheduledFor = strings.TrimPrefix(args[i], "--at=")
+			case args[i] == "--max-attempts" && i+1 < len(args):
+				var err error
+				maxAttempts, err = parsePositiveInt(args[i+1])
+				if err != nil {
+					return fmt.Errorf("invalid --max-attempts: %w", err)
+				}
+				i++
+			case strings.HasPrefix(args[i], "--max-attempts="):
+				var err error
+				maxAttempts, err = parsePositiveInt(strings.TrimPrefix(args[i], "--max-attempts="))
+				if err != nil {
+					return fmt.Errorf("invalid --max-attempts: %w", err)
+				}
+			default:
+				filtered = append(filtered, args[i])
+			}
+		}
+		if runID == "" || scheduledFor == "" || len(filtered) == 0 {
+			return fmt.Errorf("usage: cva schedule create --run <run_id> --at <scheduled_for> [--max-attempts N] \"prompt\"")
+		}
+		scheduledRun, err := c.CreateScheduledRun(ctx, runID, scheduledFor, strings.Join(filtered, " "), maxAttempts)
+		if err != nil {
+			return err
+		}
+		if jsonMode {
+			return printJSON(scheduledRun)
+		}
+		fmt.Print(formatScheduledRun(*scheduledRun))
+		return nil
 	case "list":
 		var chatID string
 		var status assistant.ScheduledRunStatus
@@ -345,6 +391,21 @@ func isTerminalPhase(p assistant.RunPhase) bool {
 	return false
 }
 
+func parsePositiveInt(raw string) (int, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, fmt.Errorf("value is required")
+	}
+	var parsed int
+	if _, err := fmt.Sscanf(value, "%d", &parsed); err != nil {
+		return 0, err
+	}
+	if parsed <= 0 {
+		return 0, fmt.Errorf("must be positive")
+	}
+	return parsed, nil
+}
+
 func printJSON(v any) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -366,9 +427,10 @@ Commands:
   watch <run_id>                         Stream live events for a run
   cancel <run_id>                        Cancel a running task
   resume <run_id> [key=value ...]        Resume a waiting run with input
-  schedule list [--chat ID] [--status S] List scheduled runs
-  schedule show <scheduled_run_id>       Show a scheduled run
-  schedule cancel <scheduled_run_id>     Cancel a pending scheduled run
+  schedule create --run ID --at WHEN "prompt"  Create a scheduled run
+  schedule list [--chat ID] [--status S]       List scheduled runs
+  schedule show <scheduled_run_id>             Show a scheduled run
+  schedule cancel <scheduled_run_id>           Cancel a pending scheduled run
 
 Global Options:
   --addr URL    API server address (default: http://127.0.0.1:8080, env: CVA_ADDR)

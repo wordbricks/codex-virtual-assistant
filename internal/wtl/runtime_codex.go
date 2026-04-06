@@ -202,24 +202,22 @@ func composePhasePrompt(request PhaseRequest) string {
 
 func phaseTools(run assistant.Run, role assistant.AttemptRole) []string {
 	if role == assistant.AttemptRoleProjectSelector {
-		return []string{"shell", "filesystem", "project-selection"}
+		return []string{"shell", "filesystem", "project-selection", "schedule-management"}
 	}
 	if role == assistant.AttemptRoleGate {
-		return []string{"stored-parent-run", "stored-artifacts", "stored-evidence", "stored-evaluations"}
+		return []string{"stored-parent-run", "stored-artifacts", "stored-evidence", "stored-evaluations", "schedule-management"}
 	}
 	if role == assistant.AttemptRoleAnswer {
-		return []string{"stored-parent-run", "stored-artifacts", "stored-evidence", "stored-evaluations"}
+		return []string{"stored-parent-run", "stored-artifacts", "stored-evidence", "stored-evaluations", "schedule-management"}
 	}
 	if role == assistant.AttemptRoleContractor {
-		return []string{"stored-plan"}
-	}
-	if role == assistant.AttemptRoleScheduler {
-		return []string{"stored-plan", "stored-artifacts", "stored-evidence"}
+		return []string{"stored-plan", "schedule-management"}
 	}
 	if role == assistant.AttemptRoleReporter {
-		return []string{"stored-artifacts", "stored-evidence", "stored-evaluations"}
+		return []string{"stored-artifacts", "stored-evidence", "stored-evaluations", "schedule-management"}
 	}
 	tools := append([]string{}, run.TaskSpec.ToolsAllowed...)
+	tools = append(tools, "schedule-management")
 	if role == assistant.AttemptRoleEvaluator {
 		tools = append(tools, "stored-artifacts", "stored-evidence")
 	}

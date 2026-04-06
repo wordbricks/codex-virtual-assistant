@@ -1311,7 +1311,15 @@ func phasePromptForCodex(request CodexPhaseRequest) string {
 		"Use available tools directly when needed. Do not describe hypothetical steps when you can execute them.",
 		"Carry out the request, then notify the user of the result through the agent-message CLI before you finish the phase response.",
 		"If you need login, approval, or missing business context, stop and return the required wait_request field instead of calling request_user_input.",
+		"If the task needs deferred follow-up work, create scheduled runs directly instead of expecting a separate scheduler phase.",
 		"Return only the schema-conforming final response for this phase.",
+	}
+	if strings.TrimSpace(request.RunID) != "" {
+		parts = append(parts,
+			fmt.Sprintf("Current run id: %s", request.RunID),
+			fmt.Sprintf("You can create a scheduled run with: cva schedule create --run %s --at <scheduled_for> \"<prompt>\"", request.RunID),
+			fmt.Sprintf("Equivalent API endpoint: POST /api/v1/runs/%s/scheduled with JSON {\"scheduled_for\":\"...\",\"prompt\":\"...\"}.", request.RunID),
+		)
 	}
 	if request.Role != assistant.AttemptRoleProjectSelector && strings.TrimSpace(request.Project.Slug) != "" {
 		parts = append(parts,

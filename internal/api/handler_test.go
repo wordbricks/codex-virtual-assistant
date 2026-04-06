@@ -374,9 +374,6 @@ func TestScheduledRunsAPIListShowAndCancel(t *testing.T) {
 			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Hospital shortlist"})},
 			{role: assistant.AttemptRoleGenerator, result: generatorPhaseResult("Prepared hospital shortlist")},
 			{role: assistant.AttemptRoleEvaluator, result: evaluatorPhaseResult(true, 92, "The result package is complete.", nil, "")},
-			{role: assistant.AttemptRoleScheduler, result: schedulerPhaseResult([]assistant.ScheduleEntry{
-				{ScheduledFor: "2026-04-03T13:00:00Z", Prompt: "Call Saint Mary Hospital at +1-555-0100."},
-			})},
 			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered final report.", "Hospital outreach scheduled.")},
 		},
 	})
@@ -394,10 +391,22 @@ func TestScheduledRunsAPIListShowAndCancel(t *testing.T) {
 	}
 
 	record := waitForRunStatus(t, handler, created.Run.ID, assistant.RunStatusCompleted)
-	if len(record.ScheduledRuns) != 1 {
-		t.Fatalf("len(record.ScheduledRuns) = %d, want 1", len(record.ScheduledRuns))
+	if len(record.ScheduledRuns) != 0 {
+		t.Fatalf("len(record.ScheduledRuns) = %d, want 0 before explicit schedule creation", len(record.ScheduledRuns))
 	}
-	scheduledRunID := record.ScheduledRuns[0].ID
+
+	createScheduledResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs/"+created.Run.ID+"/scheduled", map[string]any{
+		"scheduled_for": "2026-04-03T13:00:00Z",
+		"prompt":        "Call Saint Mary Hospital at +1-555-0100.",
+	})
+	if createScheduledResponse.Code != http.StatusCreated {
+		t.Fatalf("POST /runs/:id/scheduled status = %d, want %d", createScheduledResponse.Code, http.StatusCreated)
+	}
+	var createdScheduled assistant.ScheduledRun
+	if err := json.Unmarshal(createScheduledResponse.Body.Bytes(), &createdScheduled); err != nil {
+		t.Fatalf("decode scheduled create response: %v", err)
+	}
+	scheduledRunID := createdScheduled.ID
 
 	listResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/scheduled?chat_id="+created.Run.ChatID+"&status=pending", nil)
 	if listResponse.Code != http.StatusOK {

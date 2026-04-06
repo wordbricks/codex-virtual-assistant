@@ -186,7 +186,7 @@ func (e *RunEngine) continueRun(ctx context.Context, runID string, role assistan
 			if record.Run.Status == assistant.RunStatusWaiting || isTerminalStatus(record.Run.Status) {
 				return nil
 			}
-			role = assistant.AttemptRoleScheduler
+			role = assistant.AttemptRoleReporter
 			resumeInput = nil
 		case assistant.AttemptRoleProjectSelector:
 			if err := e.executeProjectSelector(ctx, &record, resumeInput); err != nil {
@@ -260,7 +260,7 @@ func (e *RunEngine) continueRun(ctx context.Context, runID string, role assistan
 			case DirectiveFail:
 				return nil
 			case DirectiveComplete:
-				role = assistant.AttemptRoleScheduler
+				role = assistant.AttemptRoleReporter
 				resumeInput = nil
 			case DirectiveContinue:
 				role = assistant.AttemptRoleReporter
@@ -271,19 +271,6 @@ func (e *RunEngine) continueRun(ctx context.Context, runID string, role assistan
 			default:
 				return fmt.Errorf("wtl: unsupported directive %q", directive)
 			}
-		case assistant.AttemptRoleScheduler:
-			if err := e.executeScheduler(ctx, &record, resumeInput); err != nil {
-				return err
-			}
-			record, err = e.repo.GetRunRecord(ctx, runID)
-			if err != nil {
-				return err
-			}
-			if record.Run.Status == assistant.RunStatusWaiting || isTerminalStatus(record.Run.Status) {
-				return nil
-			}
-			role = assistant.AttemptRoleReporter
-			resumeInput = nil
 		case assistant.AttemptRoleReporter:
 			directive, err := e.executeReporter(ctx, &record, resumeInput)
 			if err != nil {
@@ -433,7 +420,7 @@ func (e *RunEngine) executeAnswer(ctx context.Context, record *store.RunRecord, 
 	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
 		return err
 	}
-	return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseScheduling, firstNonEmpty(summary, "Answer completed. Preparing any deferred scheduled work before final reporting."))
+	return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, firstNonEmpty(summary, "Answer completed. Delivering the final report."))
 }
 
 func (e *RunEngine) executeProjectSelector(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) error {
@@ -719,7 +706,7 @@ func (e *RunEngine) executeEvaluator(ctx context.Context, record *store.RunRecor
 	}
 	switch e.policy.DecideEvaluation(updatedRecord.Run, updatedRecord.Attempts, evaluation) {
 	case gan.EvaluationDecisionComplete:
-		if err := e.publishEvent(ctx, updatedRecord.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseScheduling, firstNonEmpty(evaluation.Summary, "Evaluation passed. Preparing any deferred scheduled work before final reporting.")); err != nil {
+		if err := e.publishEvent(ctx, updatedRecord.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, firstNonEmpty(evaluation.Summary, "Evaluation passed. Delivering the final report.")); err != nil {
 			return "", err
 		}
 		return DirectiveComplete, nil

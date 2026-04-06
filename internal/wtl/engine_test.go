@@ -389,7 +389,7 @@ func TestRunEnginePreservesWorkflowOrderAfterGate(t *testing.T) {
 	}
 }
 
-func TestRunEngineCreatesScheduledRunsDuringSchedulingPhase(t *testing.T) {
+func TestRunEngineSkipsSchedulerPhaseAndReportsAfterEvaluation(t *testing.T) {
 	t.Parallel()
 
 	repo, dataDir := openEngineTestRepository(t)
@@ -405,10 +405,6 @@ func TestRunEngineCreatesScheduledRunsDuringSchedulingPhase(t *testing.T) {
 			{role: assistant.AttemptRoleContractor, response: PhaseResponse{Summary: "Contract agreed.", Output: contractJSON("agreed", []string{"Hospital shortlist"}, []string{"Identify hospitals and schedule follow-up calls"}, "")}},
 			{role: assistant.AttemptRoleGenerator, response: PhaseResponse{Summary: "Generator produced output."}},
 			{role: assistant.AttemptRoleEvaluator, response: PhaseResponse{Summary: "Evaluator passed.", Output: evaluatorJSON(true, 95, "Workflow is complete.", nil, "")}},
-			{role: assistant.AttemptRoleScheduler, response: PhaseResponse{Summary: "Scheduler finalized prompts.", Output: schedulerJSON([]assistant.ScheduleEntry{
-				{ScheduledFor: "2026-04-03T13:00:00Z", Prompt: "Call Saint Mary Hospital at +1-555-0100."},
-				{ScheduledFor: "2026-04-03T13:30:00Z", Prompt: "Call General Hospital at +1-555-0101."},
-			})}},
 			{role: assistant.AttemptRoleReporter, response: PhaseResponse{Summary: "Delivered final report.", Output: reportJSON("Delivered final report.", "Scheduled hospital outreach.")}},
 		},
 	}
@@ -423,14 +419,16 @@ func TestRunEngineCreatesScheduledRunsDuringSchedulingPhase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRunRecord() error = %v", err)
 	}
-	if len(record.ScheduledRuns) != 2 {
-		t.Fatalf("len(record.ScheduledRuns) = %d, want 2", len(record.ScheduledRuns))
+	if len(record.ScheduledRuns) != 0 {
+		t.Fatalf("len(record.ScheduledRuns) = %d, want 0 without explicit schedule creation", len(record.ScheduledRuns))
 	}
-	if record.Attempts[len(record.Attempts)-2].Role != assistant.AttemptRoleScheduler {
-		t.Fatalf("attempt roles = %#v, want scheduler before reporter", record.Attempts)
+	if record.Attempts[len(record.Attempts)-1].Role != assistant.AttemptRoleReporter {
+		t.Fatalf("attempt roles = %#v, want reporter as final attempt", record.Attempts)
 	}
-	if record.ScheduledRuns[0].Status != assistant.ScheduledRunStatusPending {
-		t.Fatalf("ScheduledRuns[0].Status = %q, want pending", record.ScheduledRuns[0].Status)
+	for _, attempt := range record.Attempts {
+		if attempt.Role == assistant.AttemptRoleScheduler {
+			t.Fatalf("attempt roles = %#v, want no scheduler attempt", record.Attempts)
+		}
 	}
 }
 

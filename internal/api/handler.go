@@ -49,6 +49,12 @@ type runActionRequest struct {
 	Input map[string]string `json:"input"`
 }
 
+type createScheduledRunRequest struct {
+	ScheduledFor          string `json:"scheduled_for"`
+	Prompt                string `json:"prompt"`
+	MaxGenerationAttempts int    `json:"max_generation_attempts"`
+}
+
 type createRunResponse struct {
 	Run       assistant.Run `json:"run"`
 	ChatURL   string        `json:"chat_url"`
@@ -191,6 +197,22 @@ func (a *RunAPI) handleRunByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"scheduled_runs": scheduledRuns})
+	case action == "scheduled" && r.Method == http.MethodPost:
+		var request createScheduledRunRequest
+		if err := decodeJSONBody(r.Body, &request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		scheduledRun, err := a.runs.CreateScheduledRun(r.Context(), runID, request.ScheduledFor, request.Prompt, request.MaxGenerationAttempts)
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, store.ErrNotFound) {
+				status = http.StatusNotFound
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		writeJSON(w, http.StatusCreated, scheduledRun)
 	case action == "events" && r.Method == http.MethodGet:
 		if err := a.streamRunEvents(w, r, runID); err != nil && !errors.Is(err, io.EOF) {
 			return

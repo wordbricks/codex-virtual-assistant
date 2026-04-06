@@ -619,6 +619,12 @@ func appendContractContext(builder *strings.Builder, spec assistant.TaskSpec) {
 	}
 	fmt.Fprintf(builder, "Done definition: %s\n", strings.Join(spec.DoneDefinition, "; "))
 	fmt.Fprintf(builder, "Evidence required: %s\n", strings.Join(spec.EvidenceRequired, "; "))
+	if spec.SchedulePlan != nil && len(spec.SchedulePlan.Entries) > 0 {
+		fmt.Fprintf(builder, "Planned schedule entries:\n")
+		for _, entry := range spec.SchedulePlan.Entries {
+			fmt.Fprintf(builder, "- At %s: %s\n", strings.TrimSpace(entry.ScheduledFor), strings.TrimSpace(entry.Prompt))
+		}
+	}
 }
 
 func appendParentContext(builder *strings.Builder, parent *ParentRunContext) {

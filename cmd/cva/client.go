@@ -126,6 +126,23 @@ func (c *Client) GetScheduledRun(ctx context.Context, scheduledRunID string) (*a
 	return &resp, nil
 }
 
+func (c *Client) CreateScheduledRun(ctx context.Context, runID, scheduledFor, prompt string, maxAttempts int) (*assistant.ScheduledRun, error) {
+	body := struct {
+		ScheduledFor          string `json:"scheduled_for"`
+		Prompt                string `json:"prompt"`
+		MaxGenerationAttempts int    `json:"max_generation_attempts,omitempty"`
+	}{
+		ScheduledFor:          scheduledFor,
+		Prompt:                prompt,
+		MaxGenerationAttempts: maxAttempts,
+	}
+	var resp assistant.ScheduledRun
+	if err := c.post(ctx, "/api/v1/runs/"+runID+"/scheduled", body, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 func (c *Client) CancelScheduledRun(ctx context.Context, scheduledRunID string) (*assistant.ScheduledRun, error) {
 	var resp assistant.ScheduledRun
 	if err := c.post(ctx, "/api/v1/scheduled/"+scheduledRunID+"/cancel", nil, &resp); err != nil {

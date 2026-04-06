@@ -187,8 +187,8 @@ func TestCodexRuntimeUsesStoredContextToolsForScheduler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute(scheduler) error = %v", err)
 	}
-	if len(executor.request.Tools) == 0 || executor.request.Tools[0] != "stored-plan" {
-		t.Fatalf("scheduler tools = %#v, want stored schedule context tools", executor.request.Tools)
+	if len(executor.request.Tools) == 0 || executor.request.Tools[0] != "schedule-management" {
+		t.Fatalf("scheduler tools = %#v, want schedule-management tool", executor.request.Tools)
 	}
 }
 
