@@ -427,6 +427,21 @@ func TestScheduledRunsAPIListShowAndCancel(t *testing.T) {
 		t.Fatalf("GET /scheduled/:id status = %d, want %d", showResponse.Code, http.StatusOK)
 	}
 
+	updateResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/scheduled/"+scheduledRunID+"/update", map[string]any{
+		"scheduled_for": "2026-04-03T14:00:00Z",
+		"prompt":        "Call General Hospital at +1-555-0101.",
+	})
+	if updateResponse.Code != http.StatusOK {
+		t.Fatalf("POST /scheduled/:id/update status = %d, want %d", updateResponse.Code, http.StatusOK)
+	}
+	var updated assistant.ScheduledRun
+	if err := json.Unmarshal(updateResponse.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("decode update response: %v", err)
+	}
+	if updated.UserRequestRaw != "Call General Hospital at +1-555-0101." {
+		t.Fatalf("updated prompt = %q, want updated scheduled prompt", updated.UserRequestRaw)
+	}
+
 	cancelResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/scheduled/"+scheduledRunID+"/cancel", map[string]any{})
 	if cancelResponse.Code != http.StatusOK {
 		t.Fatalf("POST /scheduled/:id/cancel status = %d, want %d", cancelResponse.Code, http.StatusOK)

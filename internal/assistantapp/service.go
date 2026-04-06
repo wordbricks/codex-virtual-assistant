@@ -170,6 +170,35 @@ func (s *RunService) CreateScheduledRun(ctx context.Context, parentRunID, schedu
 	return s.repo.GetScheduledRun(ctx, scheduledRun.ID)
 }
 
+func (s *RunService) UpdateScheduledRun(ctx context.Context, scheduledRunID, scheduledForRaw, prompt string, maxGenerationAttempts int) (assistant.ScheduledRun, error) {
+	scheduledRun, err := s.repo.GetScheduledRun(ctx, scheduledRunID)
+	if err != nil {
+		return assistant.ScheduledRun{}, err
+	}
+	if scheduledRun.Status != assistant.ScheduledRunStatusPending {
+		return assistant.ScheduledRun{}, fmt.Errorf("%w: %s is %s", ErrScheduledRunNotPending, scheduledRunID, scheduledRun.Status)
+	}
+
+	if strings.TrimSpace(prompt) != "" {
+		scheduledRun.UserRequestRaw = strings.TrimSpace(prompt)
+	}
+	if strings.TrimSpace(scheduledForRaw) != "" {
+		scheduledFor, err := assistant.ParseScheduledFor(strings.TrimSpace(scheduledForRaw), s.now().UTC())
+		if err != nil {
+			return assistant.ScheduledRun{}, err
+		}
+		scheduledRun.ScheduledFor = scheduledFor
+	}
+	if maxGenerationAttempts > 0 {
+		scheduledRun.MaxGenerationAttempts = maxGenerationAttempts
+	}
+
+	if err := s.repo.UpdateScheduledRun(ctx, scheduledRun); err != nil {
+		return assistant.ScheduledRun{}, err
+	}
+	return s.repo.GetScheduledRun(ctx, scheduledRunID)
+}
+
 func (s *RunService) CancelScheduledRun(ctx context.Context, scheduledRunID string) (assistant.ScheduledRun, error) {
 	scheduledRun, err := s.repo.GetScheduledRun(ctx, scheduledRunID)
 	if err != nil {

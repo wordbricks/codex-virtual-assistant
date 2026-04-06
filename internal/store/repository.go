@@ -713,6 +713,21 @@ WHERE id = %s;
 	return r.exec(ctx, script)
 }
 
+func (r *SQLiteRepository) UpdateScheduledRun(ctx context.Context, scheduledRun assistant.ScheduledRun) error {
+	if err := scheduledRun.Validate(); err != nil {
+		return err
+	}
+	script := fmt.Sprintf(`
+UPDATE scheduled_runs
+SET user_request_raw = %s,
+	max_generation_attempts = %d,
+	scheduled_for = %s,
+	created_at = %s
+WHERE id = %s;
+`, sqlText(scheduledRun.UserRequestRaw), scheduledRun.MaxGenerationAttempts, sqlTime(scheduledRun.ScheduledFor), sqlTime(scheduledRun.CreatedAt), sqlText(scheduledRun.ID))
+	return r.exec(ctx, script)
+}
+
 func (r *SQLiteRepository) listScheduledRunsWithQuery(ctx context.Context, query string) ([]assistant.ScheduledRun, error) {
 	rows, err := queryRows[scheduledRunRow](ctx, r, query)
 	if err != nil {

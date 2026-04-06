@@ -55,6 +55,12 @@ type createScheduledRunRequest struct {
 	MaxGenerationAttempts int    `json:"max_generation_attempts"`
 }
 
+type updateScheduledRunRequest struct {
+	ScheduledFor          string `json:"scheduled_for"`
+	Prompt                string `json:"prompt"`
+	MaxGenerationAttempts int    `json:"max_generation_attempts"`
+}
+
 type createRunResponse struct {
 	Run       assistant.Run `json:"run"`
 	ChatURL   string        `json:"chat_url"`
@@ -284,6 +290,22 @@ func (a *RunAPI) handleScheduledRunByID(w http.ResponseWriter, r *http.Request) 
 		scheduledRun, err := a.runs.GetScheduledRun(r.Context(), scheduledRunID)
 		if err != nil {
 			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, scheduledRun)
+	case action == "update" && r.Method == http.MethodPost:
+		var request updateScheduledRunRequest
+		if err := decodeJSONBody(r.Body, &request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		scheduledRun, err := a.runs.UpdateScheduledRun(r.Context(), scheduledRunID, request.ScheduledFor, request.Prompt, request.MaxGenerationAttempts)
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, store.ErrNotFound) {
+				status = http.StatusNotFound
+			}
+			http.Error(w, err.Error(), status)
 			return
 		}
 		writeJSON(w, http.StatusOK, scheduledRun)
