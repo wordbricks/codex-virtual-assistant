@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
+	"github.com/siisee11/CodexVirtualAssistant/internal/wiki"
 )
 
 const (
@@ -72,6 +74,9 @@ func (m *Manager) EnsureProject(project assistant.ProjectContext) (assistant.Pro
 	project.Name = firstNonEmpty(project.Name, titleForSlug(slug))
 	project.Description = firstNonEmpty(project.Description, defaultDescriptionForSlug(slug))
 	project.WorkspaceDir = dir
+	if slug != DefaultProjectSlug {
+		project.WikiDir = filepath.Join(dir, "wiki")
+	}
 	project.BrowserProfileDir = filepath.Join(dir, browserProfileDirName)
 	if project.BrowserCDPPort <= 0 {
 		project.BrowserCDPPort = defaultBrowserCDPPort
@@ -91,6 +96,11 @@ func (m *Manager) EnsureProject(project assistant.ProjectContext) (assistant.Pro
 		}
 	} else if err != nil {
 		return assistant.ProjectContext{}, fmt.Errorf("stat project file %s: %w", projectFile, err)
+	}
+	if slug != DefaultProjectSlug {
+		if err := wiki.NewService(m.projectsDir, time.Now).EnsureProjectScaffold(project); err != nil {
+			return assistant.ProjectContext{}, fmt.Errorf("ensure wiki scaffold for %s: %w", slug, err)
+		}
 	}
 
 	return project, nil

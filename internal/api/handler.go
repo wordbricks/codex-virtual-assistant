@@ -17,6 +17,7 @@ import (
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistantapp"
 	"github.com/siisee11/CodexVirtualAssistant/internal/config"
 	"github.com/siisee11/CodexVirtualAssistant/internal/store"
+	"github.com/siisee11/CodexVirtualAssistant/internal/wiki"
 	"github.com/siisee11/CodexVirtualAssistant/web"
 )
 
@@ -36,6 +37,7 @@ type RunAPI struct {
 	cfg    config.Config
 	runs   *assistantapp.RunService
 	events *EventBroker
+	wiki   *wiki.Service
 	static fs.FS
 }
 
@@ -68,7 +70,7 @@ type createRunResponse struct {
 	EventsURL string        `json:"events_url"`
 }
 
-func NewHandler(cfg config.Config, runs *assistantapp.RunService, events *EventBroker) (http.Handler, error) {
+func NewHandler(cfg config.Config, runs *assistantapp.RunService, events *EventBroker, wikiService *wiki.Service) (http.Handler, error) {
 	staticFS, err := web.StaticFS()
 	if err != nil {
 		return nil, err
@@ -78,6 +80,7 @@ func NewHandler(cfg config.Config, runs *assistantapp.RunService, events *EventB
 		cfg:    cfg,
 		runs:   runs,
 		events: events,
+		wiki:   wikiService,
 		static: staticFS,
 	}
 
@@ -90,6 +93,8 @@ func NewHandler(cfg config.Config, runs *assistantapp.RunService, events *EventB
 	mux.HandleFunc("/api/v1/runs/", api.handleRunByID)
 	mux.HandleFunc("/api/v1/scheduled", api.handleScheduledRuns)
 	mux.HandleFunc("/api/v1/scheduled/", api.handleScheduledRunByID)
+	mux.HandleFunc("/api/v1/projects", api.handleProjects)
+	mux.HandleFunc("/api/v1/projects/", api.handleProjectBySlug)
 	mux.Handle("/artifacts/", http.StripPrefix("/artifacts/", http.FileServer(http.Dir(cfg.ArtifactDir))))
 	mux.Handle("/assets/", http.StripPrefix("/", http.FileServer(http.FS(staticFS))))
 	mux.HandleFunc("/", api.serveIndex)
@@ -321,6 +326,67 @@ func (a *RunAPI) handleScheduledRunByID(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+func (a *RunAPI) handleProjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.wiki == nil {
+		http.Error(w, "project wiki service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	projects, err := a.wiki.ListProjects()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"projects": projects})
+}
+
+func (a *RunAPI) handleProjectBySlug(w http.ResponseWriter, r *http.Request) {
+	slug, action, ok := parseProjectPath(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if a.wiki == nil {
+		http.Error(w, "project wiki service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch {
+	case action == "wiki/index" && r.Method == http.MethodGet:
+		page, err := a.wiki.ReadIndex(slug)
+		if err != nil {
+			writeWikiError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, page)
+	case action == "wiki/page" && r.Method == http.MethodGet:
+		pagePath := strings.TrimSpace(r.URL.Query().Get("path"))
+		page, err := a.wiki.ReadPage(slug, pagePath)
+		if err != nil {
+			writeWikiError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, page)
+	case action == "wiki/lint" && r.Method == http.MethodPost:
+		projectCtx := assistant.ProjectContext{
+			Slug:         slug,
+			WorkspaceDir: filepath.Join(a.cfg.EffectiveProjectsDir(), slug),
+			WikiDir:      filepath.Join(a.cfg.EffectiveProjectsDir(), slug, "wiki"),
+		}
+		report, err := a.wiki.LintProject(projectCtx)
+		if err != nil {
+			writeWikiError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, report)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func (a *RunAPI) enrichArtifactURLs(record *store.RunRecord) {
 	for idx := range record.Artifacts {
 		record.Artifacts[idx].URL = a.artifactURL(record.Artifacts[idx].Path)
@@ -466,6 +532,20 @@ func parseScheduledPath(path string) (scheduledRunID, action string, ok bool) {
 	return scheduledRunID, action, true
 }
 
+func parseProjectPath(path string) (slug, action string, ok bool) {
+	const prefix = "/api/v1/projects/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(path, prefix), "/"), "/")
+	if len(parts) < 2 || parts[0] == "" {
+		return "", "", false
+	}
+	slug = parts[0]
+	action = strings.Join(parts[1:], "/")
+	return slug, action, true
+}
+
 func decodeJSONBody(body io.ReadCloser, target any) error {
 	defer body.Close()
 	if body == nil {
@@ -495,6 +575,21 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	} else if errors.Is(err, assistantapp.ErrScheduledRunNotPending) {
 		status = http.StatusConflict
+	}
+	http.Error(w, err.Error(), status)
+}
+
+func writeWikiError(w http.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		status = http.StatusNotFound
+	case errors.Is(err, wiki.ErrWikiDisabled):
+		status = http.StatusBadRequest
+	default:
+		if strings.Contains(strings.ToLower(err.Error()), "invalid page path") || strings.Contains(strings.ToLower(err.Error()), "project slug is required") {
+			status = http.StatusBadRequest
+		}
 	}
 	http.Error(w, err.Error(), status)
 }

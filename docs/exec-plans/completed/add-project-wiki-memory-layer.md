@@ -38,15 +38,15 @@ This should follow a strict separation of concerns:
 
 ## Milestones
 
-- [ ] Milestone 1: Define project wiki scaffold and lifecycle contracts
-- [ ] Milestone 2: Add wiki-aware read path for project selection, planning, and answer flows
-- [ ] Milestone 3: Add wiki ingest after all completed runs
-- [ ] Milestone 4: Add wiki lint and maintenance workflows
-- [ ] Milestone 5: Expose basic API and operator visibility for project wiki state
+- [x] Milestone 1: Define project wiki scaffold and lifecycle contracts
+- [x] Milestone 2: Add wiki-aware read path for project selection, planning, and answer flows
+- [x] Milestone 3: Add wiki ingest after all completed runs
+- [x] Milestone 4: Add wiki lint and maintenance workflows
+- [x] Milestone 5: Expose basic API and operator visibility for project wiki state
 
 ## Current progress
 
-- Not started
+- Completed on 2026-04-08.
 
 ## Key decisions
 

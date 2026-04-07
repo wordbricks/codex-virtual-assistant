@@ -15,6 +15,7 @@ import (
 	"github.com/siisee11/CodexVirtualAssistant/internal/policy/gan"
 	"github.com/siisee11/CodexVirtualAssistant/internal/project"
 	"github.com/siisee11/CodexVirtualAssistant/internal/store"
+	"github.com/siisee11/CodexVirtualAssistant/internal/wiki"
 )
 
 func TestRunEngineRetriesGeneratorUntilEvaluationPasses(t *testing.T) {
@@ -51,7 +52,7 @@ func TestRunEngineRetriesGeneratorUntilEvaluationPasses(t *testing.T) {
 	}
 	observer := &capturingObserver{}
 	projectManager := newEngineTestProjectManager(t, dataDir)
-	engine := NewRunEngine(repo, runtime, observer, gan.New(gan.Config{MaxGenerationAttempts: 2}), projectManager, fakeMessenger(), fixedClock(now))
+	engine := NewRunEngine(repo, runtime, observer, gan.New(gan.Config{MaxGenerationAttempts: 2}), projectManager, newEngineTestWikiService(dataDir), fakeMessenger(), fixedClock(now))
 
 	run := assistant.NewRun("Compare competitor pricing and summarize it.", now, 2)
 	if err := engine.Start(context.Background(), run); err != nil {
@@ -120,7 +121,7 @@ func TestRunEngineWaitsAndResumes(t *testing.T) {
 			},
 		},
 	}
-	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 2}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 2}), newEngineTestProjectManager(t, dataDir), newEngineTestWikiService(dataDir), fakeMessenger(), fixedClock(now))
 
 	run := assistant.NewRun("Compare competitor pricing.", now, 2)
 	if err := engine.Start(context.Background(), run); err != nil {
@@ -180,7 +181,7 @@ func TestRunEngineFailsWhenContractKeepsRevising(t *testing.T) {
 			},
 		},
 	}
-	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 2}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 2}), newEngineTestProjectManager(t, dataDir), newEngineTestWikiService(dataDir), fakeMessenger(), fixedClock(now))
 
 	run := assistant.NewRun("Compare competitor pricing and summarize it.", now, 2)
 	if err := engine.Start(context.Background(), run); !errors.Is(err, ErrInvalidRunState) {
@@ -224,7 +225,7 @@ func TestRunEngineCancelStopsWaitingRun(t *testing.T) {
 			},
 		},
 	}
-	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), newEngineTestWikiService(dataDir), fakeMessenger(), fixedClock(now))
 
 	run := assistant.NewRun("Open the dashboard and inspect the numbers.", now, 1)
 	if err := engine.Start(context.Background(), run); err != nil {
@@ -264,7 +265,7 @@ func TestRunEngineGateRoutesToAnswerAndCompletes(t *testing.T) {
 			},
 		},
 	}
-	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), newEngineTestWikiService(dataDir), fakeMessenger(), fixedClock(now))
 
 	run := assistant.NewRun("What were the top 3 cheapest competitors from the previous run?", now, 1)
 	if err := engine.Start(context.Background(), run); err != nil {
@@ -311,7 +312,7 @@ func TestRunEngineRetriesAnswerAfterTransientExecutorClosure(t *testing.T) {
 			},
 		},
 	}
-	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), newEngineTestWikiService(dataDir), fakeMessenger(), fixedClock(now))
 
 	run := assistant.NewRun("hi", now, 1)
 	if err := engine.Start(context.Background(), run); err != nil {
@@ -352,7 +353,7 @@ func TestRunEnginePreservesWorkflowOrderAfterGate(t *testing.T) {
 			{role: assistant.AttemptRoleReporter, response: PhaseResponse{Summary: "Delivered final report.", Output: reportJSON("Delivered final report.", "Workflow order is correct.")}},
 		},
 	}
-	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), newEngineTestWikiService(dataDir), fakeMessenger(), fixedClock(now))
 
 	run := assistant.NewRun("Validate workflow ordering after gate.", now, 1)
 	if err := engine.Start(context.Background(), run); err != nil {
@@ -389,7 +390,7 @@ func TestRunEnginePreservesWorkflowOrderAfterGate(t *testing.T) {
 	}
 }
 
-func TestRunEngineSkipsSchedulerPhaseAndReportsAfterEvaluation(t *testing.T) {
+func TestRunEngineCreatesScheduledRunsBeforeReporting(t *testing.T) {
 	t.Parallel()
 
 	repo, dataDir := openEngineTestRepository(t)
@@ -405,10 +406,14 @@ func TestRunEngineSkipsSchedulerPhaseAndReportsAfterEvaluation(t *testing.T) {
 			{role: assistant.AttemptRoleContractor, response: PhaseResponse{Summary: "Contract agreed.", Output: contractJSON("agreed", []string{"Hospital shortlist"}, []string{"Identify hospitals and schedule follow-up calls"}, "")}},
 			{role: assistant.AttemptRoleGenerator, response: PhaseResponse{Summary: "Generator produced output."}},
 			{role: assistant.AttemptRoleEvaluator, response: PhaseResponse{Summary: "Evaluator passed.", Output: evaluatorJSON(true, 95, "Workflow is complete.", nil, "")}},
+			{role: assistant.AttemptRoleScheduler, response: PhaseResponse{Summary: "Scheduler finalized follow-up calls.", Output: schedulerJSON([]assistant.ScheduleEntry{
+				{ScheduledFor: "2026-04-03T13:00:00Z", Prompt: "Call the first shortlisted hospital."},
+				{ScheduledFor: "2026-04-03T13:30:00Z", Prompt: "Call the second shortlisted hospital."},
+			})}},
 			{role: assistant.AttemptRoleReporter, response: PhaseResponse{Summary: "Delivered final report.", Output: reportJSON("Delivered final report.", "Scheduled hospital outreach.")}},
 		},
 	}
-	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), newEngineTestWikiService(dataDir), fakeMessenger(), fixedClock(now))
 
 	run := assistant.NewRun("Research hospitals and then call them later.", now, 1)
 	if err := engine.Start(context.Background(), run); err != nil {
@@ -419,16 +424,14 @@ func TestRunEngineSkipsSchedulerPhaseAndReportsAfterEvaluation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRunRecord() error = %v", err)
 	}
-	if len(record.ScheduledRuns) != 0 {
-		t.Fatalf("len(record.ScheduledRuns) = %d, want 0 without explicit schedule creation", len(record.ScheduledRuns))
+	if len(record.ScheduledRuns) != 2 {
+		t.Fatalf("len(record.ScheduledRuns) = %d, want 2", len(record.ScheduledRuns))
 	}
 	if record.Attempts[len(record.Attempts)-1].Role != assistant.AttemptRoleReporter {
 		t.Fatalf("attempt roles = %#v, want reporter as final attempt", record.Attempts)
 	}
-	for _, attempt := range record.Attempts {
-		if attempt.Role == assistant.AttemptRoleScheduler {
-			t.Fatalf("attempt roles = %#v, want no scheduler attempt", record.Attempts)
-		}
+	if record.Attempts[len(record.Attempts)-2].Role != assistant.AttemptRoleScheduler {
+		t.Fatalf("attempt roles = %#v, want scheduler before reporter", record.Attempts)
 	}
 }
 
@@ -454,7 +457,7 @@ func TestRunEngineReportCanEnterWaiting(t *testing.T) {
 			},
 		},
 	}
-	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), newEngineTestWikiService(dataDir), fakeMessenger(), fixedClock(now))
 
 	run := assistant.NewRun("Answer a quick follow-up.", now, 1)
 	if err := engine.Start(context.Background(), run); err != nil {
@@ -491,7 +494,7 @@ func TestRunEngineReportFailurePreventsCompletion(t *testing.T) {
 			},
 		},
 	}
-	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), fakeMessenger(), fixedClock(now))
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), newEngineTestWikiService(dataDir), fakeMessenger(), fixedClock(now))
 
 	run := assistant.NewRun("Answer a quick follow-up.", now, 1)
 	err := engine.Start(context.Background(), run)
@@ -613,6 +616,10 @@ func newEngineTestProjectManager(t *testing.T, dataDir string) *project.Manager 
 		t.Fatalf("EnsureBaseScaffold() error = %v", err)
 	}
 	return manager
+}
+
+func newEngineTestWikiService(dataDir string) *wiki.Service {
+	return wiki.NewService(filepath.Join(dataDir, "projects"), time.Now)
 }
 
 func fixedClock(base time.Time) func() time.Time {

@@ -14,6 +14,7 @@ import (
 	"github.com/siisee11/CodexVirtualAssistant/internal/project"
 	"github.com/siisee11/CodexVirtualAssistant/internal/scheduler"
 	"github.com/siisee11/CodexVirtualAssistant/internal/store"
+	"github.com/siisee11/CodexVirtualAssistant/internal/wiki"
 	"github.com/siisee11/CodexVirtualAssistant/internal/wtl"
 )
 
@@ -57,6 +58,7 @@ func NewWithExecutorAndMessenger(cfg config.Config, executor wtl.CodexPhaseExecu
 	if err := projectManager.EnsureBaseScaffold(); err != nil {
 		return nil, err
 	}
+	wikiService := wiki.NewService(cfg.EffectiveProjectsDir(), time.Now)
 
 	policy := gan.New(gan.Config{MaxGenerationAttempts: cfg.MaxGenerationAttempts})
 	events := api.NewEventBroker()
@@ -65,11 +67,11 @@ func NewWithExecutorAndMessenger(cfg config.Config, executor wtl.CodexPhaseExecu
 		return nil, errors.New("codex executor is required")
 	}
 	runtime := wtl.NewCodexRuntime(executor, cfg.DefaultModel, time.Now)
-	engine := wtl.NewRunEngine(repo, runtime, events, policy, projectManager, messenger, time.Now)
+	engine := wtl.NewRunEngine(repo, runtime, events, policy, projectManager, wikiService, messenger, time.Now)
 	runs := assistantapp.NewRunService(context.Background(), repo, engine, policy, time.Now)
 	backgroundScheduler := scheduler.New(repo, runs, events, cfg.SchedulerInterval, time.Now)
 
-	handler, err := api.NewHandler(cfg, runs, events)
+	handler, err := api.NewHandler(cfg, runs, events, wikiService)
 	if err != nil {
 		return nil, err
 	}

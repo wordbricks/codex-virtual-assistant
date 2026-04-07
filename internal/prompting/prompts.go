@@ -18,6 +18,7 @@ type PlannerInput struct {
 	UserRequestRaw        string
 	MaxGenerationAttempts int
 	Project               assistant.ProjectContext
+	Wiki                  assistant.WikiContext
 }
 
 type ContractInput struct {
@@ -27,6 +28,8 @@ type ContractInput struct {
 type ParentRunContext struct {
 	RunID          string
 	UserRequestRaw string
+	Project        assistant.ProjectContext
+	Wiki           assistant.WikiContext
 	Summary        string
 	Artifacts      []assistant.Artifact
 	Evidence       []assistant.Evidence
@@ -161,6 +164,7 @@ func BuildProjectSelectorPrompt(input ProjectSelectorInput) Bundle {
 		System: strings.TrimSpace(`
 You are the project selector for a WTL GAN-policy based assistant.
 Before deciding, inspect the existing project descriptions by reading files that match projects/*/PROJECT.md in the current working directory.
+When a project already has a wiki, also inspect projects/*/wiki/overview.md and projects/*/wiki/index.md before deciding.
 Choose the existing project that best matches the user's request.
 If no existing project is a good fit, create a new concise project identity in your response.
 If the request is just a simple question, one-off instruction, or low-context task, use the reserved project slug "no_project".
@@ -207,7 +211,7 @@ Each schedule_plan entry must contain scheduled_for and prompt.
 Prefer "agent-browser" for browser work and keep deliverables and done_definition concrete and evaluator-verifiable.`),
 		User: strings.TrimSpace(fmt.Sprintf(
 			"%s\n\nUser request:\n%s\n\nDefault max generation attempts: %d\n\nProduce a normalized TaskSpec JSON object.",
-			projectPlannerContext(input.Project),
+			projectPlannerContext(input.Project, input.Wiki),
 			strings.TrimSpace(input.UserRequestRaw),
 			defaultAttempts,
 		)),
@@ -273,6 +277,7 @@ Choose "answer" only when no new side-effecting execution is required.`),
 func BuildAnswerPrompt(input AnswerInput) Bundle {
 	builder := &strings.Builder{}
 	fmt.Fprintf(builder, "Original user request: %s\n", strings.TrimSpace(input.Run.UserRequestRaw))
+	appendWikiContext(builder, input.Run.Project, input.ParentContext)
 	appendParentContext(builder, input.ParentContext)
 	if strings.TrimSpace(input.Run.TaskSpec.Goal) != "" {
 		fmt.Fprintf(builder, "Current run goal: %s\n", strings.TrimSpace(input.Run.TaskSpec.Goal))
@@ -280,7 +285,7 @@ func BuildAnswerPrompt(input AnswerInput) Bundle {
 	return Bundle{
 		System: strings.TrimSpace(`
 You are the answer phase for a WTL GAN-policy based assistant.
-This phase is read-oriented: prioritize existing run context, stored artifacts, and stored evidence over fresh execution.
+This phase is read-oriented: prioritize project wiki context, existing run context, stored artifacts, and stored evidence over fresh execution.
 Return one strict JSON object and nothing else.
 Do not wrap the JSON in markdown fences.
 The JSON object must contain exactly these keys:
@@ -292,7 +297,7 @@ The JSON object must contain exactly these keys:
 - wait_prompt
 - wait_risk_summary
 When you can answer now, set needs_user_input=false and leave wait_* fields empty strings.
-When required information is missing, set needs_user_input=true and fill wait_* for a clarification or authentication request.`),
+When required information is missing, the wiki is stale, or the question clearly needs new execution work, set needs_user_input=true and fill wait_* with a confirmation or clarification request that explains workflow execution is needed.`),
 		User: strings.TrimSpace(builder.String()),
 	}
 }
@@ -581,17 +586,25 @@ func DecodeSchedulerOutput(raw []byte) ([]assistant.ScheduleEntry, error) {
 	return output.Entries, nil
 }
 
-func projectPlannerContext(project assistant.ProjectContext) string {
+func projectPlannerContext(project assistant.ProjectContext, wiki assistant.WikiContext) string {
+	builder := &strings.Builder{}
 	if strings.TrimSpace(project.Slug) == "" {
-		return "Project context:\n- No project selected yet."
+		fmt.Fprintf(builder, "Project context:\n- No project selected yet.")
+		return builder.String()
 	}
-	return fmt.Sprintf(
+	fmt.Fprintf(
+		builder,
 		"Project context:\n- Slug: %s\n- Name: %s\n- Purpose: %s\n- Workspace: %s",
 		project.Slug,
 		firstNonEmpty(project.Name, project.Slug),
 		project.Description,
 		project.WorkspaceDir,
 	)
+	if strings.TrimSpace(project.WikiDir) != "" {
+		fmt.Fprintf(builder, "\n- Wiki: %s", project.WikiDir)
+	}
+	appendWikiSummary(builder, wiki)
+	return builder.String()
 }
 
 func firstNonEmpty(values ...string) string {
@@ -637,6 +650,12 @@ func appendParentContext(builder *strings.Builder, parent *ParentRunContext) {
 	if request := strings.TrimSpace(parent.UserRequestRaw); request != "" {
 		fmt.Fprintf(builder, "Parent user request: %s\n", request)
 	}
+	if strings.TrimSpace(parent.Project.Slug) != "" {
+		fmt.Fprintf(builder, "Parent project: %s\n", strings.TrimSpace(parent.Project.Slug))
+	}
+	if parent.Wiki.Enabled {
+		fmt.Fprintf(builder, "Parent project wiki is available.\n")
+	}
 	if summary := strings.TrimSpace(parent.Summary); summary != "" {
 		fmt.Fprintf(builder, "Parent summary: %s\n", summary)
 	}
@@ -668,6 +687,46 @@ func appendParentContext(builder *strings.Builder, parent *ParentRunContext) {
 	for idx := len(evidence) - 1; idx >= 0 && idx >= len(evidence)-8; idx-- {
 		item := evidence[idx]
 		fmt.Fprintf(builder, "- [%s] %s\n", item.Kind, firstNonEmpty(item.Summary, item.Detail))
+	}
+}
+
+func appendWikiContext(builder *strings.Builder, project assistant.ProjectContext, parent *ParentRunContext) {
+	if strings.TrimSpace(project.Slug) != "" && project.Slug != "no_project" {
+		fmt.Fprintf(builder, "Current project: %s\n", project.Slug)
+	}
+	if parent != nil && parent.Wiki.Enabled {
+		fmt.Fprintf(builder, "Parent wiki context follows.\n")
+		appendWikiSummary(builder, parent.Wiki)
+		return
+	}
+	fmt.Fprintf(builder, "Project wiki context: none.\n")
+}
+
+func appendWikiSummary(builder *strings.Builder, wiki assistant.WikiContext) {
+	if !wiki.Enabled {
+		return
+	}
+	fmt.Fprintf(builder, "\nProject wiki context:\n")
+	if summary := strings.TrimSpace(wiki.OverviewSummary); summary != "" {
+		fmt.Fprintf(builder, "- Overview: %s\n", summary)
+	}
+	if summary := strings.TrimSpace(wiki.IndexSummary); summary != "" {
+		fmt.Fprintf(builder, "- Index: %s\n", summary)
+	}
+	if summary := strings.TrimSpace(wiki.OpenQuestionsSummary); summary != "" {
+		fmt.Fprintf(builder, "- Open questions: %s\n", summary)
+	}
+	if len(wiki.RecentLogEntries) > 0 {
+		fmt.Fprintf(builder, "- Recent log entries:\n")
+		for _, entry := range wiki.RecentLogEntries {
+			fmt.Fprintf(builder, "  - %s\n", entry)
+		}
+	}
+	if len(wiki.RelevantPages) > 0 {
+		fmt.Fprintf(builder, "- Relevant pages:\n")
+		for _, page := range wiki.RelevantPages {
+			fmt.Fprintf(builder, "  - [%s] %s (%s)\n", firstNonEmpty(page.PageType, "page"), page.Title, page.Path)
+		}
 	}
 }
 

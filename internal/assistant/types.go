@@ -18,6 +18,7 @@ const (
 	RunStatusGenerating       RunStatus = "generating"
 	RunStatusEvaluating       RunStatus = "evaluating"
 	RunStatusScheduling       RunStatus = "scheduling"
+	RunStatusWikiIngesting    RunStatus = "wiki_ingesting"
 	RunStatusReporting        RunStatus = "reporting"
 	RunStatusWaiting          RunStatus = "waiting"
 	RunStatusCompleted        RunStatus = "completed"
@@ -38,6 +39,7 @@ const (
 	RunPhaseGenerating       RunPhase = "generating"
 	RunPhaseEvaluating       RunPhase = "evaluating"
 	RunPhaseScheduling       RunPhase = "scheduling"
+	RunPhaseWikiIngesting    RunPhase = "wiki_ingesting"
 	RunPhaseReporting        RunPhase = "reporting"
 	RunPhaseWaiting          RunPhase = "waiting"
 	RunPhaseCompleted        RunPhase = "completed"
@@ -56,6 +58,7 @@ const (
 	AttemptRoleGenerator       AttemptRole = "generator"
 	AttemptRoleEvaluator       AttemptRole = "evaluator"
 	AttemptRoleScheduler       AttemptRole = "scheduler"
+	AttemptRoleWikiIngest      AttemptRole = "wiki_ingest"
 	AttemptRoleReporter        AttemptRole = "reporter"
 )
 
@@ -89,8 +92,29 @@ type ProjectContext struct {
 	Name              string `json:"name"`
 	Description       string `json:"description"`
 	WorkspaceDir      string `json:"workspace_dir"`
+	WikiDir           string `json:"wiki_dir,omitempty"`
 	BrowserProfileDir string `json:"browser_profile_dir,omitempty"`
 	BrowserCDPPort    int    `json:"browser_cdp_port,omitempty"`
+}
+
+type WikiPageMeta struct {
+	Path       string   `json:"path"`
+	Title      string   `json:"title"`
+	PageType   string   `json:"page_type"`
+	UpdatedAt  string   `json:"updated_at,omitempty"`
+	Status     string   `json:"status,omitempty"`
+	Confidence string   `json:"confidence,omitempty"`
+	SourceRefs []string `json:"source_refs,omitempty"`
+	Related    []string `json:"related,omitempty"`
+}
+
+type WikiContext struct {
+	Enabled              bool           `json:"enabled"`
+	OverviewSummary      string         `json:"overview_summary,omitempty"`
+	IndexSummary         string         `json:"index_summary,omitempty"`
+	OpenQuestionsSummary string         `json:"open_questions_summary,omitempty"`
+	RecentLogEntries     []string       `json:"recent_log_entries,omitempty"`
+	RelevantPages        []WikiPageMeta `json:"relevant_pages,omitempty"`
 }
 
 type ArtifactKind string
@@ -410,6 +434,7 @@ func AllRunStatuses() []RunStatus {
 		RunStatusGenerating,
 		RunStatusEvaluating,
 		RunStatusScheduling,
+		RunStatusWikiIngesting,
 		RunStatusReporting,
 		RunStatusWaiting,
 		RunStatusCompleted,
@@ -430,6 +455,7 @@ func AllRunPhases() []RunPhase {
 		RunPhaseGenerating,
 		RunPhaseEvaluating,
 		RunPhaseScheduling,
+		RunPhaseWikiIngesting,
 		RunPhaseReporting,
 		RunPhaseWaiting,
 		RunPhaseCompleted,

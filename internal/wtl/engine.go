@@ -12,6 +12,7 @@ import (
 	"github.com/siisee11/CodexVirtualAssistant/internal/policy/gan"
 	"github.com/siisee11/CodexVirtualAssistant/internal/prompting"
 	"github.com/siisee11/CodexVirtualAssistant/internal/store"
+	"github.com/siisee11/CodexVirtualAssistant/internal/wiki"
 )
 
 var ErrInvalidRunState = errors.New("wtl: invalid run state")
@@ -38,17 +39,23 @@ type ProjectManager interface {
 	EnsureProject(assistant.ProjectContext) (assistant.ProjectContext, error)
 }
 
+type WikiManager interface {
+	LoadContext(assistant.ProjectContext) (assistant.WikiContext, error)
+	IngestRun(store.RunRecord) (wiki.IngestResult, error)
+}
+
 type RunEngine struct {
 	repo      Repository
 	runtime   Runtime
 	observer  Observer
 	policy    gan.Policy
 	projects  ProjectManager
+	wiki      WikiManager
 	messenger agentmessage.Service
 	now       func() time.Time
 }
 
-func NewRunEngine(repo Repository, runtime Runtime, observer Observer, policy gan.Policy, projects ProjectManager, messenger agentmessage.Service, now func() time.Time) *RunEngine {
+func NewRunEngine(repo Repository, runtime Runtime, observer Observer, policy gan.Policy, projects ProjectManager, wikiManager WikiManager, messenger agentmessage.Service, now func() time.Time) *RunEngine {
 	if observer == nil {
 		observer = noopObserver{}
 	}
@@ -61,6 +68,7 @@ func NewRunEngine(repo Repository, runtime Runtime, observer Observer, policy ga
 		observer:  observer,
 		policy:    policy,
 		projects:  projects,
+		wiki:      wikiManager,
 		messenger: messenger,
 		now:       now,
 	}
@@ -186,7 +194,7 @@ func (e *RunEngine) continueRun(ctx context.Context, runID string, role assistan
 			if record.Run.Status == assistant.RunStatusWaiting || isTerminalStatus(record.Run.Status) {
 				return nil
 			}
-			role = assistant.AttemptRoleReporter
+			role = assistant.AttemptRoleScheduler
 			resumeInput = nil
 		case assistant.AttemptRoleProjectSelector:
 			if err := e.executeProjectSelector(ctx, &record, resumeInput); err != nil {
@@ -260,10 +268,10 @@ func (e *RunEngine) continueRun(ctx context.Context, runID string, role assistan
 			case DirectiveFail:
 				return nil
 			case DirectiveComplete:
-				role = assistant.AttemptRoleReporter
+				role = assistant.AttemptRoleScheduler
 				resumeInput = nil
 			case DirectiveContinue:
-				role = assistant.AttemptRoleReporter
+				role = assistant.AttemptRoleScheduler
 				resumeInput = nil
 			case DirectiveRetry:
 				role = assistant.AttemptRoleGenerator
@@ -271,6 +279,32 @@ func (e *RunEngine) continueRun(ctx context.Context, runID string, role assistan
 			default:
 				return fmt.Errorf("wtl: unsupported directive %q", directive)
 			}
+		case assistant.AttemptRoleScheduler:
+			if err := e.executeScheduler(ctx, &record, resumeInput); err != nil {
+				return err
+			}
+			record, err = e.repo.GetRunRecord(ctx, runID)
+			if err != nil {
+				return err
+			}
+			if record.Run.Status == assistant.RunStatusWaiting || isTerminalStatus(record.Run.Status) {
+				return nil
+			}
+			role = assistant.AttemptRoleWikiIngest
+			resumeInput = nil
+		case assistant.AttemptRoleWikiIngest:
+			if err := e.executeWikiIngest(ctx, &record); err != nil {
+				return err
+			}
+			record, err = e.repo.GetRunRecord(ctx, runID)
+			if err != nil {
+				return err
+			}
+			if record.Run.Status == assistant.RunStatusWaiting || isTerminalStatus(record.Run.Status) {
+				return nil
+			}
+			role = assistant.AttemptRoleReporter
+			resumeInput = nil
 		case assistant.AttemptRoleReporter:
 			directive, err := e.executeReporter(ctx, &record, resumeInput)
 			if err != nil {
@@ -360,6 +394,13 @@ func (e *RunEngine) executeAnswer(ctx context.Context, record *store.RunRecord, 
 	if err != nil {
 		return e.failRun(ctx, record.Run, fmt.Sprintf("Answer phase could not load parent run context: %v", err), err)
 	}
+	if strings.TrimSpace(record.Run.Project.Slug) == "" && parentContext != nil && strings.TrimSpace(parentContext.Project.Slug) != "" {
+		record.Run.Project = parentContext.Project
+		record.Run.UpdatedAt = e.now().UTC()
+		if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+			return err
+		}
+	}
 	prompt := prompting.BuildAnswerPrompt(prompting.AnswerInput{
 		Run:           record.Run,
 		ParentContext: parentContext,
@@ -420,7 +461,7 @@ func (e *RunEngine) executeAnswer(ctx context.Context, record *store.RunRecord, 
 	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
 		return err
 	}
-	return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, firstNonEmpty(summary, "Answer completed. Delivering the final report."))
+	return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseScheduling, firstNonEmpty(summary, "Answer completed. Finalizing scheduled work and wiki memory."))
 }
 
 func (e *RunEngine) executeProjectSelector(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) error {
@@ -480,6 +521,8 @@ func (e *RunEngine) parentContextForRun(ctx context.Context, run assistant.Run) 
 	return &prompting.ParentRunContext{
 		RunID:          record.Run.ID,
 		UserRequestRaw: record.Run.UserRequestRaw,
+		Project:        record.Run.Project,
+		Wiki:           e.loadWikiContext(record.Run.Project),
 		Summary:        parentRunSummary(record),
 		Artifacts:      append([]assistant.Artifact{}, record.Artifacts...),
 		Evidence:       append([]assistant.Evidence{}, record.Evidence...),
@@ -522,6 +565,7 @@ func (e *RunEngine) executePlanner(ctx context.Context, record *store.RunRecord,
 		UserRequestRaw:        record.Run.UserRequestRaw,
 		MaxGenerationAttempts: record.Run.MaxGenerationAttempts,
 		Project:               record.Run.Project,
+		Wiki:                  e.loadWikiContext(record.Run.Project),
 	})
 
 	attempt, response, err := e.executeAttempt(ctx, record.Run, record.Attempts, assistant.AttemptRolePlanner, prompt, "", resumeInput, record.Run.Project.WorkspaceDir)
@@ -706,7 +750,7 @@ func (e *RunEngine) executeEvaluator(ctx context.Context, record *store.RunRecor
 	}
 	switch e.policy.DecideEvaluation(updatedRecord.Run, updatedRecord.Attempts, evaluation) {
 	case gan.EvaluationDecisionComplete:
-		if err := e.publishEvent(ctx, updatedRecord.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, firstNonEmpty(evaluation.Summary, "Evaluation passed. Delivering the final report.")); err != nil {
+		if err := e.publishEvent(ctx, updatedRecord.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseScheduling, firstNonEmpty(evaluation.Summary, "Evaluation passed. Finalizing scheduled work and wiki memory.")); err != nil {
 			return "", err
 		}
 		return DirectiveComplete, nil
@@ -736,7 +780,7 @@ func (e *RunEngine) executeScheduler(ctx context.Context, record *store.RunRecor
 	}
 
 	if record.Run.TaskSpec.SchedulePlan == nil || len(record.Run.TaskSpec.SchedulePlan.Entries) == 0 {
-		return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, "No deferred work was scheduled. Delivering the final report.")
+		return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseWikiIngesting, "No deferred work was scheduled. Updating project wiki memory.")
 	}
 
 	prompt := prompting.BuildSchedulerPrompt(prompting.SchedulerInput{
@@ -791,7 +835,46 @@ func (e *RunEngine) executeScheduler(ctx context.Context, record *store.RunRecor
 	}); err != nil {
 		return err
 	}
-	return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, fmt.Sprintf("Created %d scheduled run(s). Delivering the final report.", len(createdIDs)))
+	return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseWikiIngesting, fmt.Sprintf("Created %d scheduled run(s). Updating project wiki memory.", len(createdIDs)))
+}
+
+func (e *RunEngine) executeWikiIngest(ctx context.Context, record *store.RunRecord) error {
+	if e.wiki == nil || strings.TrimSpace(record.Run.Project.Slug) == "" {
+		return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, "Wiki ingest skipped. Delivering the final report.")
+	}
+
+	now := e.now().UTC()
+	record.Run.Status = assistant.RunStatusWikiIngesting
+	record.Run.Phase = assistant.RunPhaseWikiIngesting
+	record.Run.WaitingFor = nil
+	record.Run.UpdatedAt = now
+	if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+		return err
+	}
+	if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseWikiIngesting, "Updating project wiki memory from the run results."); err != nil {
+		return err
+	}
+
+	latestRecord, err := e.repo.GetRunRecord(ctx, record.Run.ID)
+	if err != nil {
+		return err
+	}
+	result, ingestErr := e.wiki.IngestRun(latestRecord)
+	if ingestErr != nil {
+		if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypeReasoning, assistant.RunPhaseWikiIngesting, fmt.Sprintf("Project wiki ingest failed: %v", ingestErr)); err != nil {
+			return err
+		}
+		return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, "Project wiki ingest failed. Continuing to the final report.")
+	}
+
+	if len(result.ChangedPages) > 0 {
+		if err := e.publishEventWithData(ctx, record.Run.ID, assistant.EventTypeReasoning, assistant.RunPhaseWikiIngesting, firstNonEmpty(result.Summary, "Project wiki memory updated."), map[string]any{
+			"changed_pages": result.ChangedPages,
+		}); err != nil {
+			return err
+		}
+	}
+	return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, "Project wiki memory updated. Delivering the final report.")
 }
 
 func (e *RunEngine) executeReporter(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) (Directive, error) {
@@ -1020,6 +1103,7 @@ func (e *RunEngine) completeRun(ctx context.Context, run assistant.Run, summary 
 }
 
 func (e *RunEngine) exhaustRun(ctx context.Context, run assistant.Run, summary string) error {
+	e.tryIngestTerminalRun(ctx, run.ID)
 	now := e.now().UTC()
 	run.Status = assistant.RunStatusExhausted
 	run.Phase = assistant.RunPhaseFailed
@@ -1032,6 +1116,7 @@ func (e *RunEngine) exhaustRun(ctx context.Context, run assistant.Run, summary s
 }
 
 func (e *RunEngine) failRun(ctx context.Context, run assistant.Run, summary string, cause error) error {
+	e.tryIngestTerminalRun(ctx, run.ID)
 	now := e.now().UTC()
 	run.Status = assistant.RunStatusFailed
 	run.Phase = assistant.RunPhaseFailed
@@ -1044,6 +1129,28 @@ func (e *RunEngine) failRun(ctx context.Context, run assistant.Run, summary stri
 		return eventErr
 	}
 	return cause
+}
+
+func (e *RunEngine) loadWikiContext(project assistant.ProjectContext) assistant.WikiContext {
+	if e.wiki == nil || strings.TrimSpace(project.Slug) == "" {
+		return assistant.WikiContext{}
+	}
+	context, err := e.wiki.LoadContext(project)
+	if err != nil {
+		return assistant.WikiContext{}
+	}
+	return context
+}
+
+func (e *RunEngine) tryIngestTerminalRun(ctx context.Context, runID string) {
+	if e.wiki == nil || strings.TrimSpace(runID) == "" {
+		return
+	}
+	record, err := e.repo.GetRunRecord(ctx, runID)
+	if err != nil || strings.TrimSpace(record.Run.Project.Slug) == "" {
+		return
+	}
+	_, _ = e.wiki.IngestRun(record)
 }
 
 func (e *RunEngine) publishEvent(ctx context.Context, runID string, eventType assistant.EventType, phase assistant.RunPhase, summary string) error {

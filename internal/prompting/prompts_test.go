@@ -14,6 +14,18 @@ func TestBuildPlannerPromptDeclaresStrictJSONContract(t *testing.T) {
 	bundle := BuildPlannerPrompt(PlannerInput{
 		UserRequestRaw:        "Research five competitors and build a comparison table.",
 		MaxGenerationAttempts: 4,
+		Project: assistant.ProjectContext{
+			Slug:         "competitor-pricing",
+			Name:         "Competitor Pricing",
+			Description:  "Track competitor pricing research.",
+			WorkspaceDir: "/tmp/projects/competitor-pricing",
+			WikiDir:      "/tmp/projects/competitor-pricing/wiki",
+		},
+		Wiki: assistant.WikiContext{
+			Enabled:         true,
+			OverviewSummary: "We already track SaaS competitor pricing and past comparisons.",
+			IndexSummary:    "topics/pricing.md and reports/run-1.md are relevant.",
+		},
 	})
 
 	if !strings.Contains(bundle.System, "strict JSON object") {
@@ -28,6 +40,9 @@ func TestBuildPlannerPromptDeclaresStrictJSONContract(t *testing.T) {
 	if !strings.Contains(bundle.User, "Default max generation attempts: 4") {
 		t.Fatalf("User prompt = %q, want attempt count", bundle.User)
 	}
+	if !strings.Contains(bundle.User, "Project wiki context") || !strings.Contains(bundle.User, "Overview: We already track SaaS competitor pricing") {
+		t.Fatalf("User prompt = %q, want wiki context summary", bundle.User)
+	}
 }
 
 func TestBuildProjectSelectorPromptRequiresProjectInspection(t *testing.T) {
@@ -39,6 +54,9 @@ func TestBuildProjectSelectorPromptRequiresProjectInspection(t *testing.T) {
 
 	if !strings.Contains(bundle.System, "projects/*/PROJECT.md") {
 		t.Fatalf("System prompt = %q, want PROJECT.md inspection guidance", bundle.System)
+	}
+	if !strings.Contains(bundle.System, "projects/*/wiki/overview.md") || !strings.Contains(bundle.System, "projects/*/wiki/index.md") {
+		t.Fatalf("System prompt = %q, want wiki inspection guidance", bundle.System)
 	}
 	if !strings.Contains(bundle.System, "\"no_project\"") {
 		t.Fatalf("System prompt = %q, want no_project guidance", bundle.System)
@@ -82,6 +100,11 @@ func TestBuildAnswerPromptDeclaresReadOrientedContract(t *testing.T) {
 		},
 		ParentContext: &ParentRunContext{
 			RunID:   "run_parent_321",
+			Project: assistant.ProjectContext{Slug: "competitor-pricing"},
+			Wiki: assistant.WikiContext{
+				Enabled:         true,
+				OverviewSummary: "The wiki already tracks pricing tiers and comparisons.",
+			},
 			Summary: "Saved pricing table and evidence from five competitor pages.",
 			Artifacts: []assistant.Artifact{
 				{ID: "artifact_1", Kind: assistant.ArtifactKindTable, Title: "Pricing table", MIMEType: "text/markdown"},
@@ -100,6 +123,9 @@ func TestBuildAnswerPromptDeclaresReadOrientedContract(t *testing.T) {
 	}
 	if !strings.Contains(bundle.User, "Parent artifacts") || !strings.Contains(bundle.User, "Parent evidence highlights") {
 		t.Fatalf("User prompt = %q, want parent context details", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "Parent wiki context follows") || !strings.Contains(bundle.User, "The wiki already tracks pricing tiers") {
+		t.Fatalf("User prompt = %q, want wiki context details", bundle.User)
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/siisee11/CodexVirtualAssistant/internal/policy/gan"
 	"github.com/siisee11/CodexVirtualAssistant/internal/project"
 	"github.com/siisee11/CodexVirtualAssistant/internal/store"
+	"github.com/siisee11/CodexVirtualAssistant/internal/wiki"
 	"github.com/siisee11/CodexVirtualAssistant/internal/wtl"
 )
 
@@ -374,6 +375,9 @@ func TestScheduledRunsAPIListShowAndCancel(t *testing.T) {
 			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Hospital shortlist"})},
 			{role: assistant.AttemptRoleGenerator, result: generatorPhaseResult("Prepared hospital shortlist")},
 			{role: assistant.AttemptRoleEvaluator, result: evaluatorPhaseResult(true, 92, "The result package is complete.", nil, "")},
+			{role: assistant.AttemptRoleScheduler, result: schedulerPhaseResult([]assistant.ScheduleEntry{
+				{ScheduledFor: "2026-04-03T13:00:00Z", Prompt: "Call the first shortlisted hospital."},
+			})},
 			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered final report.", "Hospital outreach scheduled.")},
 		},
 	})
@@ -391,8 +395,8 @@ func TestScheduledRunsAPIListShowAndCancel(t *testing.T) {
 	}
 
 	record := waitForRunStatus(t, handler, created.Run.ID, assistant.RunStatusCompleted)
-	if len(record.ScheduledRuns) != 0 {
-		t.Fatalf("len(record.ScheduledRuns) = %d, want 0 before explicit schedule creation", len(record.ScheduledRuns))
+	if len(record.ScheduledRuns) != 1 {
+		t.Fatalf("len(record.ScheduledRuns) = %d, want 1 auto-created scheduled run", len(record.ScheduledRuns))
 	}
 
 	createScheduledResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs/"+created.Run.ID+"/scheduled", map[string]any{
@@ -418,8 +422,8 @@ func TestScheduledRunsAPIListShowAndCancel(t *testing.T) {
 	if err := json.Unmarshal(listResponse.Body.Bytes(), &listed); err != nil {
 		t.Fatalf("decode list response: %v", err)
 	}
-	if len(listed.ScheduledRuns) != 1 || listed.ScheduledRuns[0].ID != scheduledRunID {
-		t.Fatalf("listed = %#v, want scheduled run %s", listed, scheduledRunID)
+	if len(listed.ScheduledRuns) != 2 {
+		t.Fatalf("listed = %#v, want 2 scheduled runs after manual creation", listed)
 	}
 
 	showResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/scheduled/"+scheduledRunID, nil)
@@ -450,6 +454,59 @@ func TestScheduledRunsAPIListShowAndCancel(t *testing.T) {
 	byParentResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/runs/"+created.Run.ID+"/scheduled", nil)
 	if byParentResponse.Code != http.StatusOK {
 		t.Fatalf("GET /runs/:id/scheduled status = %d, want %d", byParentResponse.Code, http.StatusOK)
+	}
+}
+
+func TestProjectsAPIListsWikiAndSupportsIndexAndLint(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestAPIHandler(t, &sequenceExecutor{
+		steps: []executorStep{
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request requires workflow execution.")},
+			{role: assistant.AttemptRoleProjectSelector, result: projectSelectorPhaseResult("docs-bot", "Docs Bot", "Maintain documentation workflows.")},
+			{role: assistant.AttemptRolePlanner, result: plannerPhaseResult("Summarize docs work", []string{"Docs summary"})},
+			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Docs summary"})},
+			{role: assistant.AttemptRoleGenerator, result: generatorPhaseResult("Prepared docs summary")},
+			{role: assistant.AttemptRoleEvaluator, result: evaluatorPhaseResult(true, 93, "The docs summary is complete.", nil, "")},
+			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered final report.", "Docs summary delivered.")},
+		},
+	})
+
+	createResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "Summarize the docs migration work.",
+	})
+	if createResponse.Code != http.StatusAccepted {
+		t.Fatalf("POST /runs status = %d, want %d", createResponse.Code, http.StatusAccepted)
+	}
+
+	var created createRunResponse
+	if err := json.Unmarshal(createResponse.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	waitForRunStatus(t, handler, created.Run.ID, assistant.RunStatusCompleted)
+
+	listResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/projects", nil)
+	if listResponse.Code != http.StatusOK {
+		t.Fatalf("GET /projects status = %d, want %d", listResponse.Code, http.StatusOK)
+	}
+	if !strings.Contains(listResponse.Body.String(), "docs-bot") {
+		t.Fatalf("projects response = %q, want docs-bot", listResponse.Body.String())
+	}
+
+	indexResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/projects/docs-bot/wiki/index", nil)
+	if indexResponse.Code != http.StatusOK {
+		t.Fatalf("GET /projects/:slug/wiki/index status = %d, want %d", indexResponse.Code, http.StatusOK)
+	}
+	if !strings.Contains(indexResponse.Body.String(), "Wiki Index") {
+		t.Fatalf("index response = %q, want wiki index content", indexResponse.Body.String())
+	}
+
+	lintResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/projects/docs-bot/wiki/lint", map[string]any{})
+	if lintResponse.Code != http.StatusOK {
+		t.Fatalf("POST /projects/:slug/wiki/lint status = %d, want %d", lintResponse.Code, http.StatusOK)
+	}
+	if !strings.Contains(lintResponse.Body.String(), "wiki-health-") {
+		t.Fatalf("lint response = %q, want lint report path", lintResponse.Body.String())
 	}
 }
 
@@ -499,13 +556,14 @@ func newTestAPIHandler(t *testing.T, executor *sequenceExecutor) http.Handler {
 	if err := projectManager.EnsureBaseScaffold(); err != nil {
 		t.Fatalf("EnsureBaseScaffold() error = %v", err)
 	}
+	wikiService := wiki.NewService(cfg.EffectiveProjectsDir(), time.Now)
 	policy := gan.New(gan.Config{MaxGenerationAttempts: cfg.MaxGenerationAttempts})
 	events := NewEventBroker()
 	events.SetSnapshotLoader(repo)
 	runtime := wtl.NewCodexRuntime(executor, cfg.DefaultModel, time.Now)
-	engine := wtl.NewRunEngine(repo, runtime, events, policy, projectManager, apiTestMessenger(), time.Now)
+	engine := wtl.NewRunEngine(repo, runtime, events, policy, projectManager, wikiService, apiTestMessenger(), time.Now)
 	runs := assistantapp.NewRunService(context.Background(), repo, engine, policy, time.Now)
-	handler, err := NewHandler(cfg, runs, events)
+	handler, err := NewHandler(cfg, runs, events, wikiService)
 	if err != nil {
 		t.Fatalf("NewHandler() error = %v", err)
 	}
