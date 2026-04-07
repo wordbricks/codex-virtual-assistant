@@ -115,8 +115,11 @@ func TestBuildGeneratorPromptPrefersExplicitStatePersistence(t *testing.T) {
 	if !strings.Contains(bundle.System, "project-specific browser profile and CDP port are available") || !strings.Contains(bundle.System, "--session-name") {
 		t.Fatalf("System prompt = %q, want project-profile-first guidance and session-name warning", bundle.System)
 	}
-	if !strings.Contains(bundle.System, "agent-browser connect http://localhost:<port>") {
-		t.Fatalf("System prompt = %q, want explicit project CDP connect guidance", bundle.System)
+	if !strings.Contains(bundle.System, "agent-browser --cdp <port> open about:blank") {
+		t.Fatalf("System prompt = %q, want explicit project CDP command guidance", bundle.System)
+	}
+	if strings.Contains(bundle.System, "agent-browser connect http://localhost:<port>") {
+		t.Fatalf("System prompt = %q, should not encourage agent-browser connect for project CDP reuse", bundle.System)
 	}
 	if !strings.Contains(bundle.System, "Reuse the same project profile across runs so login state persists") {
 		t.Fatalf("System prompt = %q, want profile persistence guidance", bundle.System)

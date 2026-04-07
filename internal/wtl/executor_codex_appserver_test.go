@@ -183,14 +183,17 @@ func TestPhasePromptForCodexIncludesProjectBrowserProfileGuidance(t *testing.T) 
 	if !strings.Contains(prompt, "curl -sS http://localhost:9223/json/version") {
 		t.Fatalf("prompt = %q, want CDP health check guidance", prompt)
 	}
-	if !strings.Contains(prompt, "open -na \"Google Chrome\"") || !strings.Contains(prompt, "agent-browser connect http://localhost:9223") {
-		t.Fatalf("prompt = %q, want launch fallback and connect guidance", prompt)
+	if !strings.Contains(prompt, "open -na \"Google Chrome\"") || !strings.Contains(prompt, "agent-browser --cdp 9223 open about:blank") {
+		t.Fatalf("prompt = %q, want launch fallback and direct --cdp guidance", prompt)
 	}
 	if !strings.Contains(prompt, "do not launch a new Chrome window") {
 		t.Fatalf("prompt = %q, want existing session reuse guidance", prompt)
 	}
-	if !strings.Contains(prompt, "If agent-browser connect http://localhost:9223 fails or times out") {
+	if !strings.Contains(prompt, "If an agent-browser command that uses --cdp 9223 fails or times out") {
 		t.Fatalf("prompt = %q, want stale session recovery guidance", prompt)
+	}
+	if strings.Contains(prompt, "agent-browser connect http://localhost:9223") {
+		t.Fatalf("prompt = %q, should not encourage direct agent-browser connect for project reuse", prompt)
 	}
 	if !strings.Contains(prompt, "agent-browser close once") {
 		t.Fatalf("prompt = %q, want close-once recovery guidance", prompt)
