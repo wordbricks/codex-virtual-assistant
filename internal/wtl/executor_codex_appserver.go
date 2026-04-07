@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,8 @@ import (
 )
 
 var urlPattern = regexp.MustCompile(`https?://[^\s"'<>]+`)
+
+var lookupAgentBrowserExecutablePath = detectAgentBrowserExecutablePath
 
 type AppServerPhaseExecutorConfig struct {
 	BinaryPath         string
@@ -100,6 +103,7 @@ type appServerTurnSession struct {
 	runID       string
 	attemptID   string
 	attemptRole assistant.AttemptRole
+	project     assistant.ProjectContext
 	liveEmit    func(assistant.RunEvent)
 
 	stderr bytes.Buffer
@@ -238,14 +242,16 @@ func (s *appServerTurnSession) start(ctx context.Context, cwd string) error {
 }
 
 func (s *appServerTurnSession) run(ctx context.Context, request CodexPhaseRequest) (CodexPhaseResult, error) {
+	s.runID = request.RunID
+	s.attemptID = request.AttemptID
+	s.attemptRole = request.Role
+	s.project = request.Project
+	s.liveEmit = request.LiveEmit
+
 	if err := s.start(ctx, request.WorkingDir); err != nil {
 		return CodexPhaseResult{}, err
 	}
 	s.prepareArtifactCapture(request)
-	s.runID = request.RunID
-	s.attemptID = request.AttemptID
-	s.attemptRole = request.Role
-	s.liveEmit = request.LiveEmit
 
 	params := map[string]any{
 		"threadId":       s.threadID,
@@ -289,7 +295,53 @@ func (s *appServerTurnSession) appServerEnv() []string {
 	if s.config.AgentBrowserHeaded {
 		env = upsertEnv(env, "AGENT_BROWSER_HEADED", "true")
 	}
+	if sessionName := strings.TrimSpace(firstNonEmpty(s.attemptID, s.runID)); sessionName != "" {
+		env = upsertEnv(env, "AGENT_BROWSER_SESSION", sessionName)
+	}
+	if profileDir := strings.TrimSpace(s.project.BrowserProfileDir); profileDir != "" {
+		env = upsertEnv(env, "AGENT_BROWSER_PROFILE", profileDir)
+		if executablePath := strings.TrimSpace(lookupAgentBrowserExecutablePath()); executablePath != "" {
+			env = upsertEnv(env, "AGENT_BROWSER_EXECUTABLE_PATH", executablePath)
+		}
+	}
 	return env
+}
+
+func detectAgentBrowserExecutablePath() string {
+	candidates := []string{}
+	switch runtime.GOOS {
+	case "darwin":
+		candidates = append(candidates,
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+		)
+	case "linux":
+		candidates = append(candidates,
+			"/usr/bin/google-chrome",
+			"/usr/bin/google-chrome-stable",
+			"/usr/bin/chromium",
+			"/usr/bin/chromium-browser",
+		)
+	case "windows":
+		candidates = append(candidates,
+			`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+		)
+	}
+
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+
+	commands := []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"}
+	for _, command := range commands {
+		if path, err := exec.LookPath(command); err == nil {
+			return path
+		}
+	}
+	return ""
 }
 
 func upsertEnv(env []string, key string, value string) []string {
@@ -1335,8 +1387,10 @@ func phasePromptForCodex(request CodexPhaseRequest) string {
 			parts = append(parts,
 				fmt.Sprintf("Project browser profile directory: %s", profileDir),
 				fmt.Sprintf("Project browser CDP endpoint: http://localhost:%d", port),
-				fmt.Sprintf("Prefer launching Chrome for this project with a dedicated profile, for example on macOS: open -na \"Google Chrome\" --args --user-data-dir=%q --remote-debugging-port=%d --no-first-run --no-default-browser-check --new-window about:blank", profileDir, port),
-				fmt.Sprintf("After Chrome is running, prefer agent-browser connect http://localhost:%d before opening target URLs.", port),
+				fmt.Sprintf("Before opening any new Chrome window for this project, first health-check the project CDP endpoint with curl -sS http://localhost:%d/json/version.", port),
+				fmt.Sprintf("If that health check succeeds, do not launch a new Chrome window and do not call agent-browser close first; prefer agent-browser connect http://localhost:%d immediately and reuse the existing project Chrome session.", port),
+				fmt.Sprintf("Only if the health check fails should you launch Chrome for this project with a dedicated profile, for example on macOS: open -na \"Google Chrome\" --args --user-data-dir=%q --remote-debugging-port=%d --no-first-run --no-default-browser-check --new-window about:blank", profileDir, port),
+				fmt.Sprintf("If agent-browser connect http://localhost:%d fails or times out after the CDP health check succeeded, treat that as a stale agent-browser session problem: then try agent-browser close once, reconnect, and avoid launching another Chrome window unless the CDP health check stops responding.", port),
 				"Reuse the same project browser profile across runs so site login state persists in the profile directory.",
 				"Persist auth with explicit state files instead.",
 				"Use explicit auth state files only as a secondary export/import mechanism, and do not rely on --session-name for auth persistence.",

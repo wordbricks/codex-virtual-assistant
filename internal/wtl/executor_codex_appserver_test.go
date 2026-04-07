@@ -180,8 +180,20 @@ func TestPhasePromptForCodexIncludesProjectBrowserProfileGuidance(t *testing.T) 
 	if !strings.Contains(prompt, "Project browser CDP endpoint: http://localhost:9223") {
 		t.Fatalf("prompt = %q, want project browser CDP endpoint guidance", prompt)
 	}
+	if !strings.Contains(prompt, "curl -sS http://localhost:9223/json/version") {
+		t.Fatalf("prompt = %q, want CDP health check guidance", prompt)
+	}
 	if !strings.Contains(prompt, "open -na \"Google Chrome\"") || !strings.Contains(prompt, "agent-browser connect http://localhost:9223") {
-		t.Fatalf("prompt = %q, want dedicated profile launch and connect guidance", prompt)
+		t.Fatalf("prompt = %q, want launch fallback and connect guidance", prompt)
+	}
+	if !strings.Contains(prompt, "do not launch a new Chrome window") {
+		t.Fatalf("prompt = %q, want existing session reuse guidance", prompt)
+	}
+	if !strings.Contains(prompt, "If agent-browser connect http://localhost:9223 fails or times out") {
+		t.Fatalf("prompt = %q, want stale session recovery guidance", prompt)
+	}
+	if !strings.Contains(prompt, "agent-browser close once") {
+		t.Fatalf("prompt = %q, want close-once recovery guidance", prompt)
 	}
 	if !strings.Contains(prompt, "Reuse the same project browser profile across runs") || !strings.Contains(prompt, "--session-name") {
 		t.Fatalf("prompt = %q, want project profile reuse guidance and session-name warning", prompt)
@@ -225,6 +237,41 @@ func TestAppServerEnvForcesAgentBrowserHeaded(t *testing.T) {
 	joined := strings.Join(env, "\n")
 	if !strings.Contains(joined, "AGENT_BROWSER_HEADED=true") {
 		t.Fatalf("env = %q, want AGENT_BROWSER_HEADED=true", joined)
+	}
+}
+
+func TestAppServerEnvUsesProjectBrowserSettings(t *testing.T) {
+	t.Parallel()
+
+	originalLookup := lookupAgentBrowserExecutablePath
+	lookupAgentBrowserExecutablePath = func() string {
+		return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+	}
+	defer func() {
+		lookupAgentBrowserExecutablePath = originalLookup
+	}()
+
+	session := newAppServerTurnSession(AppServerPhaseExecutorConfig{
+		AgentBrowserHeaded: true,
+	}, func() time.Time {
+		return time.Date(2026, time.April, 5, 4, 0, 0, 0, time.UTC)
+	})
+	session.runID = "run_123"
+	session.attemptID = "attempt_456"
+	session.project = assistant.ProjectContext{
+		BrowserProfileDir: "/tmp/cva/projects/x-growth/.browser-profile",
+	}
+
+	env := session.appServerEnv()
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "AGENT_BROWSER_SESSION=attempt_456") {
+		t.Fatalf("env = %q, want AGENT_BROWSER_SESSION=attempt_456", joined)
+	}
+	if !strings.Contains(joined, "AGENT_BROWSER_PROFILE=/tmp/cva/projects/x-growth/.browser-profile") {
+		t.Fatalf("env = %q, want AGENT_BROWSER_PROFILE for project browser", joined)
+	}
+	if !strings.Contains(joined, "AGENT_BROWSER_EXECUTABLE_PATH=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome") {
+		t.Fatalf("env = %q, want AGENT_BROWSER_EXECUTABLE_PATH for system Chrome", joined)
 	}
 }
 
