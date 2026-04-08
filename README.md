@@ -5,7 +5,6 @@ Codex Virtual Assistant is a WTL GAN-policy based web personal virtual assistant
 This repository now includes the first runnable product foundation outside `specs/`:
 
 - `cmd/cva` provides the main CLI, including `cva start` for the local HTTP server.
-- `cmd/assistantd` remains as a compatibility server entrypoint.
 - `internal/assistant` defines shared run, task, attempt, evaluation, artifact, evidence, and wait-state types, plus `TaskSpec` normalization defaults.
 - `internal/assistantapp` owns background run creation, status lookup, resume/input, and cancel orchestration over the engine and store.
 - `internal/prompting` defines the planner and evaluator JSON contracts plus strict output decoding.
@@ -60,12 +59,6 @@ To force the Codex app server to run with `danger-full-access`, start the server
 
 ```bash
 go run ./cmd/cva start --yolo
-```
-
-Legacy compatibility entrypoint:
-
-```bash
-go run ./cmd/assistantd --yolo
 ```
 
 The server now uses `codex app-server` as the default execution runtime for planner/generator/evaluator phases. Make sure the `codex` CLI is installed, authenticated, and able to run `codex app-server` on your machine before you start a run from the UI.
@@ -139,7 +132,7 @@ Local state locations:
 Useful local verification commands:
 
 ```bash
-GOCACHE=/tmp/cva-go-build go test ./cmd/cva ./cmd/assistantd ./internal/... ./web
+GOCACHE=/tmp/cva-go-build go test ./cmd/cva ./internal/... ./web
 node --check web/static/app.js
 ```
 

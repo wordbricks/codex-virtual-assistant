@@ -218,7 +218,7 @@
 권장 구조는 다음과 같다.
 
 - `web`: 사용자 UI
-- `cmd/assistantd`: 서버 엔트리포인트
+- `cmd/cva`: CLI 및 서버 엔트리포인트
 - `internal/assistant`: 애플리케이션 레이어
 - `internal/wtl`: WTL engine/policy/runtime 구현
 - `internal/store`: SQLite 영속화

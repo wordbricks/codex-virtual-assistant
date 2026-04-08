@@ -12,8 +12,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
 	"github.com/siisee11/CodexVirtualAssistant/internal/app"
+	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
 	"github.com/siisee11/CodexVirtualAssistant/internal/config"
 )
 
