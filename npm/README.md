@@ -12,6 +12,7 @@ After installation:
 
 ```bash
 cva version
+cva upgrade
 cva start
 ```
 

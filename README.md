@@ -79,6 +79,12 @@ Start the local server:
 cva start
 ```
 
+Start it as a background daemon:
+
+```bash
+cva start --daemon
+```
+
 Start with full Codex filesystem access:
 
 ```bash
@@ -87,10 +93,17 @@ cva start --yolo
 
 Then open `http://127.0.0.1:8080`.
 
+Daemon logs are written to `workspace/logs/cva.log` by default, and the PID file is stored at `workspace/cva.pid`.
+
 Basic CLI usage:
 
 ```bash
 cva version
+cva upgrade
+cva start --daemon
+cva logs
+cva logs --follow
+cva stop
 cva run "Summarize today's work"
 cva status <run_id>
 cva watch <run_id>
@@ -115,6 +128,14 @@ go run ./cmd/cva start
 ```
 
 Then open `http://127.0.0.1:8080`.
+
+To run the server in the background during development:
+
+```bash
+go run ./cmd/cva start --daemon
+go run ./cmd/cva logs --follow
+go run ./cmd/cva stop
+```
 
 To force the Codex app server to run with `danger-full-access`, start the server with:
 

@@ -1,4 +1,4 @@
-.PHONY: help dev dev-yolo release-version release-verify release-assets release-tag release-gh release-npm release-manual release
+.PHONY: help dev dev-yolo dev-bg dev-bg-yolo dev-stop dev-logs release-version release-verify release-assets release-tag release-gh release-npm release-manual release
 
 SHELL := /bin/zsh
 
@@ -13,6 +13,10 @@ help:
 	@echo "Development targets:"
 	@echo "  make dev                             # run local server via go run"
 	@echo "  make dev-yolo                        # run local server with --yolo"
+	@echo "  make dev-bg                          # start local server as a daemon"
+	@echo "  make dev-bg-yolo                     # start local server daemon with --yolo"
+	@echo "  make dev-stop                        # stop the local server daemon"
+	@echo "  make dev-logs                        # show daemon log output"
 	@echo ""
 	@echo "Release targets:"
 	@echo "  make release-version VERSION=0.1.0   # sync npm/package.json version"
@@ -29,6 +33,18 @@ dev:
 
 dev-yolo:
 	go run ./cmd/cva start --yolo
+
+dev-bg:
+	go run ./cmd/cva start --daemon
+
+dev-bg-yolo:
+	go run ./cmd/cva start --daemon --yolo
+
+dev-stop:
+	go run ./cmd/cva stop
+
+dev-logs:
+	go run ./cmd/cva logs
 
 release-version:
 	@if [[ -z "$(VERSION)" ]]; then echo "VERSION is required, for example: make $@ VERSION=0.1.0"; exit 1; fi

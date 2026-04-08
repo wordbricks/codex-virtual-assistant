@@ -60,6 +60,12 @@ func main() {
 		err = cmdStart(ctx, cmdArgs)
 	case "version", "--version", "-v":
 		err = cmdVersion(jsonMode)
+	case "upgrade":
+		err = cmdUpgrade(ctx, cmdArgs, jsonMode)
+	case "logs":
+		err = cmdLogs(ctx, cmdArgs)
+	case "stop":
+		err = cmdStop(cmdArgs)
 	case "run":
 		client := NewClient(addr)
 		err = cmdRun(ctx, client, cmdArgs, jsonMode)
@@ -108,23 +114,32 @@ func cmdVersion(jsonMode bool) error {
 }
 
 func cmdStart(ctx context.Context, args []string) error {
-	yolo := false
-	for _, arg := range args {
-		switch arg {
-		case "--yolo":
-			yolo = true
-		default:
-			return fmt.Errorf("usage: cva start [--yolo]")
-		}
+	opts, err := parseStartArgs(args)
+	if err != nil {
+		return err
 	}
 
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	if yolo {
+	logFile, pidFile, err := resolveDaemonFiles(cfg, opts.logFile, opts.pidFile)
+	if err != nil {
+		return err
+	}
+
+	if opts.yolo {
 		cfg.CodexSandboxMode = "danger-full-access"
 		log.Printf("cva start with --yolo; Codex sandbox forced to %s", cfg.CodexSandboxMode)
+	}
+	if opts.daemon && !isDaemonChild() {
+		return startDaemonProcess(logFile, pidFile)
+	}
+	if isDaemonChild() {
+		if err := writePIDFile(pidFile, os.Getpid()); err != nil {
+			return fmt.Errorf("write pid file: %w", err)
+		}
+		defer removePIDFileIfOwned(pidFile, os.Getpid())
 	}
 
 	application, err := app.New(cfg)
@@ -479,8 +494,13 @@ Usage:
   cva [--addr URL] [--json] <command> [args...]
 
 Commands:
-  start [--yolo]                        Start the local CVA server
+  start [--yolo] [--daemon] [--log-file PATH] [--pid-file PATH]
+                                         Start the local CVA server
   version                                Print CLI version information
+  upgrade                                Download and install the latest CLI release
+  logs [--follow] [--lines N] [--log-file PATH]
+                                         Show daemon log output
+  stop [--pid-file PATH]                 Stop the local CVA daemon
   run [--follow-up <run_id>] "request"   Create a new run and stream events
   status <run_id>                        Show run details
   list                                   List all chats
