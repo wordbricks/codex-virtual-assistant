@@ -24,6 +24,7 @@ jobs:
       - run: node --check npm/bin/cva.js
       - run: node --check npm/lib/install.js
       - run: node --check npm/lib/platform.js
+      - run: node --test npm/lib/install.test.js
       - run: npm pack --dry-run
         working-directory: npm
 

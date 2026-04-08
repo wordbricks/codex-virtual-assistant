@@ -16,7 +16,7 @@ async function downloadFile(url, destination) {
     const request = https.get(url, (response) => {
       if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
         response.resume();
-        downloadFile(response.headers.location, destination).then(resolve).catch(reject);
+        resolve(downloadFile(response.headers.location, destination));
         return;
       }
       if (response.statusCode !== 200) {
@@ -27,13 +27,14 @@ async function downloadFile(url, destination) {
 
       const output = fs.createWriteStream(tempFile, { mode: 0o755 });
       pipeline(response, output)
-        .then(resolve)
+        .then(() => {
+          fs.renameSync(tempFile, destination);
+          resolve();
+        })
         .catch(reject);
     });
     request.on("error", reject);
   });
-
-  fs.renameSync(tempFile, destination);
 }
 
 async function ensureBinary(options = {}) {
@@ -74,5 +75,6 @@ if (require.main === module) {
 }
 
 module.exports = {
+  downloadFile,
   ensureBinary
 };

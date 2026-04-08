@@ -29,6 +29,7 @@ release-verify:
 	node --check $(NPM_DIR)/bin/cva.js
 	node --check $(NPM_DIR)/lib/install.js
 	node --check $(NPM_DIR)/lib/platform.js
+	node --test $(NPM_DIR)/lib/install.test.js
 	cd $(NPM_DIR) && npm pack --dry-run
 
 release-assets:
