@@ -58,6 +58,8 @@ func main() {
 	switch cmd {
 	case "start":
 		err = cmdStart(ctx, cmdArgs)
+	case "version", "--version", "-v":
+		err = cmdVersion(jsonMode)
 	case "run":
 		client := NewClient(addr)
 		err = cmdRun(ctx, client, cmdArgs, jsonMode)
@@ -94,6 +96,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func cmdVersion(jsonMode bool) error {
+	info := currentVersionInfo()
+	if jsonMode {
+		return printJSON(info)
+	}
+	fmt.Print(formatVersionText(info))
+	return nil
 }
 
 func cmdStart(ctx context.Context, args []string) error {
@@ -469,6 +480,7 @@ Usage:
 
 Commands:
   start [--yolo]                        Start the local CVA server
+  version                                Print CLI version information
   run [--follow-up <run_id>] "request"   Create a new run and stream events
   status <run_id>                        Show run details
   list                                   List all chats

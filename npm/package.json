@@ -1,0 +1,42 @@
+{
+  "name": "@wordbricks/cva",
+  "version": "0.1.1",
+  "description": "Codex Virtual Assistant CLI wrapper that installs the native cva binary.",
+  "homepage": "https://github.com/wordbricks/codex-virtual-assistant",
+  "bugs": {
+    "url": "https://github.com/wordbricks/codex-virtual-assistant/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wordbricks/codex-virtual-assistant.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "cva": "bin/cva.js"
+  },
+  "scripts": {
+    "postinstall": "node ./lib/install.js"
+  },
+  "files": [
+    "README.md",
+    "bin",
+    "lib"
+  ],
+  "keywords": [
+    "agent",
+    "assistant",
+    "cli",
+    "codex",
+    "cva"
+  ],
+  "cva": {
+    "owner": "wordbricks",
+    "repo": "codex-virtual-assistant",
+    "assetPrefix": "cva"
+  }
+}

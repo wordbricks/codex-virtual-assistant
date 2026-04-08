@@ -47,6 +47,67 @@ Clone this repository, install prerequisites, build it, and run it locally.
    - http://127.0.0.1:8080
 ```
 
+You can also install the CLI from npm:
+
+```bash
+npm install -g @wordbricks/cva
+cva version
+```
+
+The npm package name is scoped because the unscoped `cva` package is already taken on npm. The installed command is still `cva`, and installation downloads the native binary for the current platform from GitHub Releases.
+
+## Install and Use
+
+Install from npm:
+
+```bash
+npm install -g @wordbricks/cva
+```
+
+Or build from source:
+
+```bash
+git clone git@github.com:wordbricks/codex-virtual-assistant.git
+cd codex-virtual-assistant
+go build -o dist/cva ./cmd/cva
+./dist/cva version
+```
+
+Start the local server:
+
+```bash
+cva start
+```
+
+Start with full Codex filesystem access:
+
+```bash
+cva start --yolo
+```
+
+Then open `http://127.0.0.1:8080`.
+
+Basic CLI usage:
+
+```bash
+cva version
+cva run "Summarize today's work"
+cva status <run_id>
+cva watch <run_id>
+cva list
+cva chat <chat_id>
+cva cancel <run_id>
+cva resume <run_id> key=value
+```
+
+For scheduled work:
+
+```bash
+cva schedule list
+cva schedule show <scheduled_run_id>
+cva schedule cancel <scheduled_run_id>
+```
+
 ## Run locally
 
 ```bash
@@ -134,6 +195,38 @@ Useful local verification commands:
 ```bash
 GOCACHE=/tmp/cva-go-build go test ./cmd/cva ./internal/... ./web
 node --check web/static/app.js
+```
+
+## npm release
+
+The repository now includes an npm wrapper package in [`npm/`](/Users/dev/git/codex-virtual-assistant/npm) for `@wordbricks/cva`.
+
+Release flow:
+
+1. Configure npm Trusted Publishing for this GitHub repository once.
+2. Push a semver tag like `v0.1.0`.
+3. The GitHub Actions workflow at [release.yml](/Users/dev/git/codex-virtual-assistant/.github/workflows/release.yml) will:
+   - run verification
+   - build native `cva` binaries for supported platforms
+   - upload them to the GitHub release for that tag
+   - publish `@wordbricks/cva` to npm with provenance
+
+The npm package installs the `cva` command and downloads the matching native binary asset from the GitHub release for the package version.
+
+For the first manual CLI-driven publish:
+
+```bash
+npm login
+make release VERSION=0.1.0
+```
+
+If you want the individual steps instead:
+
+```bash
+make release-manual VERSION=0.1.0
+make release-tag VERSION=0.1.0
+make release-gh VERSION=0.1.0
+make release-npm
 ```
 
 ## HTTP API

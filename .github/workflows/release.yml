@@ -1,0 +1,111 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node --check npm/bin/cva.js
+      - run: node --check npm/lib/install.js
+      - run: node --check npm/lib/platform.js
+      - run: npm pack --dry-run
+        working-directory: npm
+
+  build-binaries:
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            asset_name: cva-linux-x64
+          - goos: linux
+            goarch: arm64
+            asset_name: cva-linux-arm64
+          - goos: darwin
+            goarch: amd64
+            asset_name: cva-darwin-x64
+          - goos: darwin
+            goarch: arm64
+            asset_name: cva-darwin-arm64
+          - goos: windows
+            goarch: amd64
+            asset_name: cva-win32-x64.exe
+          - goos: windows
+            goarch: arm64
+            asset_name: cva-win32-arm64.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+          VERSION: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          mkdir -p dist
+          SHORT_COMMIT="$(printf '%.7s' "$COMMIT")"
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          VERSION_NO_V="${VERSION#v}"
+          go build \
+            -trimpath \
+            -ldflags="-s -w -X main.version=${VERSION_NO_V} -X main.commit=${SHORT_COMMIT} -X main.buildDate=${BUILD_DATE}" \
+            -o "dist/${{ matrix.asset_name }}" \
+            ./cmd/cva
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}
+
+  create-release:
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          find dist -maxdepth 2 -type f -exec cp {} release/ \;
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+
+  publish-npm:
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - name: Set npm package version
+        working-directory: npm
+        run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version
+      - name: Publish npm package
+        working-directory: npm
+        run: npm publish --access public --provenance
