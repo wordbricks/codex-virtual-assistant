@@ -1,4 +1,4 @@
-.PHONY: help release-version release-verify release-assets release-tag release-gh release-npm release-manual release
+.PHONY: help dev dev-yolo release-version release-verify release-assets release-tag release-gh release-npm release-manual release
 
 SHELL := /bin/zsh
 
@@ -10,6 +10,10 @@ BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 GO_LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.buildDate=$(BUILD_DATE)
 
 help:
+	@echo "Development targets:"
+	@echo "  make dev                             # run local server via go run"
+	@echo "  make dev-yolo                        # run local server with --yolo"
+	@echo ""
 	@echo "Release targets:"
 	@echo "  make release-version VERSION=0.1.0   # sync npm/package.json version"
 	@echo "  make release-verify                  # go/node/npm dry-run checks"
@@ -19,6 +23,12 @@ help:
 	@echo "  make release-npm                     # publish npm package from npm/"
 	@echo "  make release-manual VERSION=0.1.0    # run version sync, verify, and asset build"
 	@echo "  make release VERSION=0.1.0           # full manual release flow after npm login"
+
+dev:
+	go run ./cmd/cva start
+
+dev-yolo:
+	go run ./cmd/cva start --yolo
 
 release-version:
 	@if [[ -z "$(VERSION)" ]]; then echo "VERSION is required, for example: make $@ VERSION=0.1.0"; exit 1; fi
