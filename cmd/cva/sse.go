@@ -9,8 +9,11 @@ import (
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
 )
 
+const maxSSELineSize = 1024 * 1024
+
 func streamSSE(r io.Reader, fn func(assistant.RunEvent) bool) error {
 	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxSSELineSize)
 	var dataLines []string
 
 	for scanner.Scan() {

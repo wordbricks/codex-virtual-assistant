@@ -563,7 +563,21 @@ func writeSSEEvent(w io.Writer, event assistant.RunEvent) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(w, "event: run_event\ndata: %s\n\n", payload)
+	if _, err := fmt.Fprint(w, "event: run_event\n"); err != nil {
+		return err
+	}
+	const chunkSize = 16 * 1024
+	for len(payload) > 0 {
+		n := len(payload)
+		if n > chunkSize {
+			n = chunkSize
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n", payload[:n]); err != nil {
+			return err
+		}
+		payload = payload[n:]
+	}
+	_, err = fmt.Fprint(w, "\n")
 	return err
 }
 
