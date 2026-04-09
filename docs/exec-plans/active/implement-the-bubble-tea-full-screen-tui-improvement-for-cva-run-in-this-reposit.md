@@ -23,7 +23,7 @@ Key constraints:
 - [x] Milestone 2: Introduce Bubble Tea app model/layout with three persistent regions (header, scrollable activity viewport, composer).
 - [x] Milestone 3: Wire existing HTTP run creation + SSE event stream into TUI state messages without creating a separate execution engine.
 - [x] Milestone 4: Implement phase/status header behavior and viewport ingestion/scroll-follow behavior for live events.
-- [ ] Milestone 5: Implement composer behaviors and state transitions (initial prompt, waiting/completed behavior) and integrate submit flow.
+- [x] Milestone 5: Implement composer behaviors and state transitions (initial prompt, waiting/completed behavior) and integrate submit flow.
 - [ ] Milestone 6: Add/update tests for mode selection and core TUI state transitions; verify non-TTY and `--json` behavior remains unchanged.
 
 ## Current progress
@@ -65,6 +65,19 @@ Key constraints:
     - `f` toggles follow mode explicitly.
   - Updated activity panel help text to show current follow state and controls.
   - Changed activity ingestion to preserve user scroll position while follow mode is off; only auto-scrolls to bottom when follow mode is on.
+- Milestone 5 completed:
+  - Introduced explicit composer modes in `cmd/cva/run_tui.go`:
+    - `read-only` while an active run is streaming (initial prompt already submitted),
+    - `waiting input` when the run enters waiting state,
+    - `follow-up` after terminal phases.
+  - Added submit integration on `Enter`:
+    - waiting mode submits `ResumeRun` with parsed input (`key=value` map when provided; otherwise free text under `response`),
+    - follow-up mode creates a new run with `CreateRun(..., parentRunID=currentRunID)` and switches the UI to the new run context.
+  - Moved stream lifecycle ownership into the TUI model:
+    - `streamRunTUI` now launches the Bubble Tea program with client + initial run,
+    - model opens/reopens SSE streams itself via existing `Client.StreamEvents` and existing `streamSSE` parser bridge,
+    - per-stream IDs and cancel functions prevent stale stream messages from taking over after resume/follow-up transitions.
+  - Updated composer panel messaging so state/help text clearly explains when input is accepted and what submit will do.
 
 ## Key decisions
 
@@ -76,13 +89,15 @@ Key constraints:
 - For Milestone 2, prioritize a stable full-screen layout shell first; keep live event ingestion and run lifecycle updates for Milestone 3+ to avoid conflating UI structure with transport wiring.
 - For Milestone 3, keep the transport bridge simple and push all semantic rendering enhancements (phase transition emphasis, auto-follow controls, truncation policy) to later milestones.
 - For Milestone 4, derive header/waiting state from event stream signals already available (phase + waiting events) instead of adding protocol fields.
+- For Milestone 5, support submit actions only where semantics are clear:
+  - waiting => resume current run,
+  - terminal => start follow-up run.
+  Keep active-stream composer read-only until a waiting/terminal transition occurs.
 
 ## Remaining issues / open questions
 
-- Determine whether composer should accept follow-up prompts immediately after terminal completion in v1 or remain focused on initial/wait states.
 - Confirm whether any additional explicit CLI flag (`--plain` / `--no-tui`) is needed now or deferred.
-- Composer submit behavior is currently placeholder text/input only and must be wired to real submit/resume flow in Milestone 5.
-- Milestone 5 needs submit semantics and run-state-specific composer behavior (initial prompt/waiting/completed) while keeping current run transport path intact.
+- Milestone 6 remains: add/update focused tests for TUI state behavior (composer modes/submission transitions + stream state handling) while preserving non-TTY/`--json` behavior guarantees.
 
 ## Links to related documents
 
