@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -59,6 +60,11 @@ type runTUIModel struct {
 	streamMsgs    <-chan tea.Msg
 	streamClosed  bool
 	streamErr     error
+	followLogs    bool
+
+	lastPhaseSummary string
+	lastPhaseAt      time.Time
+	waitingSummary   string
 }
 
 func runRunTUI(ctx context.Context, run assistant.Run, streamMsgs <-chan tea.Msg) error {
@@ -80,13 +86,16 @@ func newRunTUIModel(ctx context.Context, run assistant.Run, streamMsgs <-chan te
 	composer.Focus()
 
 	model := runTUIModel{
-		ctx:        ctx,
-		run:        run,
-		status:     run.Status,
-		phase:      run.Phase,
-		viewport:   viewport.New(0, 0),
-		composer:   composer,
-		streamMsgs: streamMsgs,
+		ctx:              ctx,
+		run:              run,
+		status:           run.Status,
+		phase:            run.Phase,
+		viewport:         viewport.New(0, 0),
+		composer:         composer,
+		streamMsgs:       streamMsgs,
+		followLogs:       true,
+		lastPhaseSummary: "Run created from the user request.",
+		lastPhaseAt:      run.CreatedAt,
 		activityLines: []string{
 			fmt.Sprintf("Run created: %s", run.ID),
 			fmt.Sprintf("Chat: %s", run.ChatID),
@@ -140,15 +149,29 @@ func (m runTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "pgup":
 			m.viewport.HalfViewUp()
+			m.followLogs = false
 			return m, nil
 		case "pgdown":
 			m.viewport.HalfViewDown()
+			m.followLogs = false
 			return m, nil
 		case "home":
 			m.viewport.GotoTop()
+			m.followLogs = false
 			return m, nil
 		case "end":
 			m.viewport.GotoBottom()
+			m.followLogs = true
+			return m, nil
+		case "up", "k":
+			m.followLogs = false
+		case "down", "j":
+			m.followLogs = false
+		case "f":
+			m.followLogs = !m.followLogs
+			if m.followLogs {
+				m.viewport.GotoBottom()
+			}
 			return m, nil
 		}
 	}
@@ -199,9 +222,19 @@ func (m runTUIModel) renderHeader() string {
 	title := tuiSectionTitleStyle.Render("cva run")
 	ids := fmt.Sprintf("Run: %s   Chat: %s", m.run.ID, m.run.ChatID)
 	status := fmt.Sprintf("Status: %s   Phase: %s   Attempts: %d", m.status, m.phase, m.run.AttemptCount)
+	phaseDetail := fmt.Sprintf("Phase detail: %s", m.phaseDetail())
+	waitingDetail := ""
+	if m.waitingSummary != "" {
+		waitingDetail = fmt.Sprintf("Waiting: %s", m.waitingSummary)
+	}
 	request := fmt.Sprintf("Request: %s", truncateForTUI(singleLine(m.run.UserRequestRaw), max(8, m.width-16)))
 
-	body := strings.Join([]string{title, ids, status, request}, "\n")
+	lines := []string{title, ids, status, phaseDetail}
+	if waitingDetail != "" {
+		lines = append(lines, waitingDetail)
+	}
+	lines = append(lines, request)
+	body := strings.Join(lines, "\n")
 	return tuiHeaderStyle.
 		Width(max(1, m.width)).
 		Render(body)
@@ -217,7 +250,11 @@ func (m runTUIModel) renderActivity() string {
 	} else {
 		parts = append(parts, tuiMutedStyle.Render("Stream state: live"))
 	}
-	parts = append(parts, tuiMutedStyle.Render("Scroll: PgUp/PgDn/Home/End"))
+	followState := "on"
+	if !m.followLogs {
+		followState = "off"
+	}
+	parts = append(parts, tuiMutedStyle.Render(fmt.Sprintf("Scroll: PgUp/PgDn/Home/End   Follow: %s (f to toggle)", followState)))
 	parts = append(parts, m.viewport.View())
 	body := strings.Join(parts, "\n")
 	return tuiActivityStyle.
@@ -290,18 +327,48 @@ func streamRunEventsForTUI(ctx context.Context, stream io.ReadCloser) <-chan tea
 func (m *runTUIModel) handleRunEvent(ev assistant.RunEvent) {
 	m.addActivityLine(formatEvent(ev))
 	if ev.Phase != "" {
+		if ev.Phase != m.phase {
+			m.lastPhaseSummary = firstNonEmptyTUI(ev.Summary, fmt.Sprintf("Phase changed to %s.", ev.Phase))
+			m.lastPhaseAt = ev.CreatedAt
+		}
 		m.phase = ev.Phase
-		m.status = runStatusForPhase(ev.Phase)
+		m.status = runStatusForPhase(ev.Phase, m.status)
+	}
+	if ev.Type == assistant.EventTypeWaiting {
+		m.status = assistant.RunStatusWaiting
+		m.phase = assistant.RunPhaseWaiting
+		m.waitingSummary = firstNonEmptyTUI(ev.Summary, "Run is waiting for user input.")
+		m.lastPhaseSummary = m.waitingSummary
+		m.lastPhaseAt = ev.CreatedAt
+	}
+	if ev.Type == assistant.EventTypePhaseChanged {
+		if ev.Phase == assistant.RunPhaseCompleted ||
+			ev.Phase == assistant.RunPhaseFailed ||
+			ev.Phase == assistant.RunPhaseCancelled {
+			m.followLogs = true
+		}
+		if ev.Phase != assistant.RunPhaseWaiting {
+			m.waitingSummary = ""
+		}
 	}
 }
 
 func (m *runTUIModel) addActivityLine(line string) {
+	prevY := m.viewport.YOffset
 	m.activityLines = append(m.activityLines, line)
 	m.viewport.SetContent(strings.Join(m.activityLines, "\n"))
-	m.viewport.GotoBottom()
+	if m.followLogs {
+		m.viewport.GotoBottom()
+		return
+	}
+	maxOffset := max(0, m.viewport.TotalLineCount()-m.viewport.Height)
+	if prevY > maxOffset {
+		prevY = maxOffset
+	}
+	m.viewport.YOffset = prevY
 }
 
-func runStatusForPhase(phase assistant.RunPhase) assistant.RunStatus {
+func runStatusForPhase(phase assistant.RunPhase, fallback assistant.RunStatus) assistant.RunStatus {
 	switch phase {
 	case assistant.RunPhaseQueued:
 		return assistant.RunStatusQueued
@@ -334,8 +401,16 @@ func runStatusForPhase(phase assistant.RunPhase) assistant.RunStatus {
 	case assistant.RunPhaseCancelled:
 		return assistant.RunStatusCancelled
 	default:
-		return assistant.RunStatusQueued
+		return fallback
 	}
+}
+
+func (m runTUIModel) phaseDetail() string {
+	summary := firstNonEmptyTUI(m.lastPhaseSummary, "Waiting for updates.")
+	if m.lastPhaseAt.IsZero() {
+		return summary
+	}
+	return fmt.Sprintf("%s (%s)", summary, m.lastPhaseAt.Local().Format("15:04:05"))
 }
 
 func truncateForTUI(value string, maxLen int) string {
@@ -357,4 +432,13 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func firstNonEmptyTUI(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

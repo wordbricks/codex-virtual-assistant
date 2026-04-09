@@ -22,7 +22,7 @@ Key constraints:
 - [x] Milestone 1: Confirm `cva run` mode-selection boundaries and add explicit gating for interactive TUI vs plain/json streaming.
 - [x] Milestone 2: Introduce Bubble Tea app model/layout with three persistent regions (header, scrollable activity viewport, composer).
 - [x] Milestone 3: Wire existing HTTP run creation + SSE event stream into TUI state messages without creating a separate execution engine.
-- [ ] Milestone 4: Implement phase/status header behavior and viewport ingestion/scroll-follow behavior for live events.
+- [x] Milestone 4: Implement phase/status header behavior and viewport ingestion/scroll-follow behavior for live events.
 - [ ] Milestone 5: Implement composer behaviors and state transitions (initial prompt, waiting/completed behavior) and integrate submit flow.
 - [ ] Milestone 6: Add/update tests for mode selection and core TUI state transitions; verify non-TTY and `--json` behavior remains unchanged.
 
@@ -53,6 +53,18 @@ Key constraints:
     - emits update messages to the Bubble Tea model,
     - emits error/closed messages and respects context cancellation.
   - Model now ingests live run events into activity lines and updates phase/status state from incoming event phase data.
+- Milestone 4 completed:
+  - Enhanced persistent header behavior in `cmd/cva/run_tui.go`:
+    - tracks and renders last phase transition summary with timestamp,
+    - renders waiting summary when waiting events are observed,
+    - updates status/phase continuously from incoming stream events.
+  - Implemented viewport follow-mode behavior for live ingestion:
+    - added `followLogs` state (default on),
+    - scrolling up/home/pgup turns follow off,
+    - `end` reenables follow and jumps to bottom,
+    - `f` toggles follow mode explicitly.
+  - Updated activity panel help text to show current follow state and controls.
+  - Changed activity ingestion to preserve user scroll position while follow mode is off; only auto-scrolls to bottom when follow mode is on.
 
 ## Key decisions
 
@@ -63,13 +75,14 @@ Key constraints:
 - Land a no-regression TUI hook in Milestone 1 (`streamRunTUI`) that currently delegates to plain streaming so Milestone 2 can focus on UI construction without changing mode boundaries again.
 - For Milestone 2, prioritize a stable full-screen layout shell first; keep live event ingestion and run lifecycle updates for Milestone 3+ to avoid conflating UI structure with transport wiring.
 - For Milestone 3, keep the transport bridge simple and push all semantic rendering enhancements (phase transition emphasis, auto-follow controls, truncation policy) to later milestones.
+- For Milestone 4, derive header/waiting state from event stream signals already available (phase + waiting events) instead of adding protocol fields.
 
 ## Remaining issues / open questions
 
 - Determine whether composer should accept follow-up prompts immediately after terminal completion in v1 or remain focused on initial/wait states.
 - Confirm whether any additional explicit CLI flag (`--plain` / `--no-tui`) is needed now or deferred.
-- Milestone 4 needs richer phase/status header behavior and more nuanced viewport follow/scroll behavior for long streams.
 - Composer submit behavior is currently placeholder text/input only and must be wired to real submit/resume flow in Milestone 5.
+- Milestone 5 needs submit semantics and run-state-specific composer behavior (initial prompt/waiting/completed) while keeping current run transport path intact.
 
 ## Links to related documents
 
