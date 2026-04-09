@@ -215,8 +215,7 @@ func streamRunPlain(ctx context.Context, c *Client, run assistant.Run) error {
 }
 
 func streamRunTUI(ctx context.Context, c *Client, run assistant.Run) error {
-	// Milestone 2 will replace this with Bubble Tea rendering.
-	return streamRunPlain(ctx, c, run)
+	return runRunTUI(ctx, run)
 }
 
 func cmdStatus(ctx context.Context, c *Client, args []string, jsonMode bool) error {
