@@ -19,6 +19,14 @@ import (
 
 const defaultAddr = "http://127.0.0.1:8080"
 
+type runOutputMode string
+
+const (
+	runOutputModeJSON  runOutputMode = "json"
+	runOutputModeTUI   runOutputMode = "tui"
+	runOutputModePlain runOutputMode = "plain"
+)
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -179,27 +187,36 @@ func cmdRun(ctx context.Context, c *Client, args []string, jsonMode bool) error 
 		return err
 	}
 
-	if jsonMode {
+	mode := selectRunOutputMode(jsonMode, isTTY(os.Stdin), isTTY(os.Stdout))
+	switch mode {
+	case runOutputModeJSON:
 		return printJSON(resp)
+	case runOutputModeTUI:
+		return streamRunTUI(ctx, c, resp.Run)
+	default:
+		return streamRunPlain(ctx, c, resp.Run)
 	}
+}
 
-	fmt.Println(formatRunSummary(resp.Run))
-	fmt.Printf("Streaming events for %s ...\n\n", resp.Run.ID)
+func streamRunPlain(ctx context.Context, c *Client, run assistant.Run) error {
+	fmt.Println(formatRunSummary(run))
+	fmt.Printf("Streaming events for %s ...\n\n", run.ID)
 
-	stream, err := c.StreamEvents(ctx, resp.Run.ID)
+	stream, err := c.StreamEvents(ctx, run.ID)
 	if err != nil {
 		return err
 	}
 	defer stream.Close()
 
 	return streamSSE(stream, func(ev assistant.RunEvent) bool {
-		if jsonMode {
-			printJSON(ev)
-		} else {
-			fmt.Println(formatEvent(ev))
-		}
+		fmt.Println(formatEvent(ev))
 		return !isTerminalPhase(ev.Phase)
 	})
+}
+
+func streamRunTUI(ctx context.Context, c *Client, run assistant.Run) error {
+	// Milestone 2 will replace this with Bubble Tea rendering.
+	return streamRunPlain(ctx, c, run)
 }
 
 func cmdStatus(ctx context.Context, c *Client, args []string, jsonMode bool) error {
@@ -464,6 +481,27 @@ func isTerminalPhase(p assistant.RunPhase) bool {
 		return true
 	}
 	return false
+}
+
+func selectRunOutputMode(jsonMode bool, stdinIsTTY, stdoutIsTTY bool) runOutputMode {
+	if jsonMode {
+		return runOutputModeJSON
+	}
+	if stdinIsTTY && stdoutIsTTY {
+		return runOutputModeTUI
+	}
+	return runOutputModePlain
+}
+
+func isTTY(file *os.File) bool {
+	if file == nil {
+		return false
+	}
+	stat, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return (stat.Mode() & os.ModeCharDevice) != 0
 }
 
 func parsePositiveInt(raw string) (int, error) {
