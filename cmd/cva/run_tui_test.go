@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
 )
 
@@ -252,5 +254,57 @@ func TestSubmitComposerCmdFollowUpCreatesChildRun(t *testing.T) {
 	}
 	if done.streamMsgs == nil {
 		t.Fatalf("streamMsgs is nil, want non-nil")
+	}
+}
+
+func TestRunTUIViewFitsWindowWithoutClipping(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		width  int
+		height int
+	}{
+		{name: "standard terminal", width: 80, height: 24},
+		{name: "narrow terminal", width: 60, height: 18},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			run := assistant.Run{
+				ID:             "run_with_a_reasonably_long_identifier",
+				ChatID:         "chat_with_a_reasonably_long_identifier",
+				UserRequestRaw: strings.Repeat("long request text ", 8),
+				Status:         assistant.RunStatusCompleted,
+				Phase:          assistant.RunPhaseCompleted,
+				CreatedAt:      time.Unix(0, 0).UTC(),
+			}
+			m := newRunTUIModel(context.Background(), nil, run)
+			m.handleRunEvent(assistant.RunEvent{
+				ID:        "event_done",
+				RunID:     run.ID,
+				Type:      assistant.EventTypePhaseChanged,
+				Phase:     assistant.RunPhaseCompleted,
+				Summary:   "Delivered a very long summary that should wrap instead of clipping across the activity pane.",
+				CreatedAt: time.Unix(5, 0).UTC(),
+			})
+			m.addActivityLine(strings.Repeat("tool output segment ", 12))
+			m.addActivityLine(`tool done {"payload":{"root":{"main":{"type":"Card","props":{"title":"CVA CLI"}}}}}`)
+
+			updated, _ := m.Update(tea.WindowSizeMsg{Width: tc.width, Height: tc.height})
+			view := updated.(runTUIModel).View()
+
+			if got := lipgloss.Width(view); got > tc.width {
+				t.Fatalf("view width = %d, want <= %d\n%s", got, tc.width, view)
+			}
+			if got := lipgloss.Height(view); got > tc.height {
+				t.Fatalf("view height = %d, want <= %d\n%s", got, tc.height, view)
+			}
+			for _, line := range strings.Split(view, "\n") {
+				if got := lipgloss.Width(line); got > tc.width {
+					t.Fatalf("line width = %d, want <= %d\n%s", got, tc.width, line)
+				}
+			}
+		})
 	}
 }

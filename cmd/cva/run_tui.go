@@ -148,7 +148,7 @@ func newRunTUIModel(ctx context.Context, client runTUIClient, run assistant.Run)
 			"Press q or Ctrl+C to quit.",
 		},
 	}
-	model.viewport.SetContent(strings.Join(model.activityLines, "\n"))
+	model.refreshViewportContent()
 	model.viewport.GotoBottom()
 
 	return model
@@ -331,45 +331,53 @@ func (m *runTUIModel) syncLayout() {
 		return
 	}
 
-	composerInputWidth := max(10, m.width-6)
+	composerInputWidth := max(10, m.sectionInnerWidth(tuiComposerStyle))
 	m.composer.SetWidth(composerInputWidth)
-	m.composer.SetHeight(3)
+	if m.compactLayout() {
+		m.composer.SetHeight(1)
+	} else {
+		m.composer.SetHeight(3)
+	}
 
 	headerHeight := lipgloss.Height(m.renderHeader())
 	composerHeight := lipgloss.Height(m.renderComposer())
-	activityOuterHeight := m.height - headerHeight - composerHeight
-	if activityOuterHeight < 3 {
-		activityOuterHeight = 3
-	}
+	activityOuterHeight := max(3, m.height-headerHeight-composerHeight)
+	activityInnerHeight := max(1, activityOuterHeight-tuiActivityStyle.GetVerticalFrameSize())
 
-	m.viewport.Width = max(1, m.width-4)
-	m.viewport.Height = max(1, activityOuterHeight-2)
-	m.viewport.SetContent(strings.Join(m.activityLines, "\n"))
+	m.viewport.Width = m.sectionInnerWidth(tuiActivityStyle)
+	metaHeight := lipgloss.Height(m.renderActivityMeta())
+	m.viewport.Height = max(1, activityInnerHeight-metaHeight)
+	m.refreshViewportContent()
 }
 
 func (m runTUIModel) renderHeader() string {
+	innerWidth := m.sectionInnerWidth(tuiHeaderStyle)
 	title := tuiSectionTitleStyle.Render("cva run")
-	ids := fmt.Sprintf("Run: %s   Chat: %s", m.run.ID, m.run.ChatID)
-	status := fmt.Sprintf("Status: %s   Phase: %s   Attempts: %d", m.status, m.phase, m.run.AttemptCount)
-	phaseDetail := fmt.Sprintf("Phase detail: %s", m.phaseDetail())
+	ids := truncateForTUI(fmt.Sprintf("Run: %s   Chat: %s", m.run.ID, m.run.ChatID), innerWidth)
+	status := truncateForTUI(fmt.Sprintf("Status: %s   Phase: %s   Attempts: %d", m.status, m.phase, m.run.AttemptCount), innerWidth)
+	phaseDetail := truncateForTUI(fmt.Sprintf("Phase detail: %s", m.phaseDetail()), innerWidth)
 	waitingDetail := ""
 	if m.waitingSummary != "" {
-		waitingDetail = fmt.Sprintf("Waiting: %s", m.waitingSummary)
+		waitingDetail = truncateForTUI(fmt.Sprintf("Waiting: %s", m.waitingSummary), innerWidth)
 	}
-	request := fmt.Sprintf("Request: %s", truncateForTUI(singleLine(m.run.UserRequestRaw), max(8, m.width-16)))
+	request := fmt.Sprintf("Request: %s", truncateForTUI(singleLine(m.run.UserRequestRaw), innerWidth-len("Request: ")))
 
-	lines := []string{title, ids, status, phaseDetail}
+	lines := []string{title, status, phaseDetail}
+	if !m.compactLayout() {
+		lines = append(lines, ids)
+	}
 	if waitingDetail != "" {
 		lines = append(lines, waitingDetail)
+	} else {
+		lines = append(lines, truncateForTUI(request, innerWidth))
 	}
-	lines = append(lines, request)
-	body := strings.Join(lines, "\n")
-	return tuiHeaderStyle.
-		Width(max(1, m.width)).
-		Render(body)
+	body := lipgloss.NewStyle().
+		Width(innerWidth).
+		Render(strings.Join(lines, "\n"))
+	return tuiHeaderStyle.Render(body)
 }
 
-func (m runTUIModel) renderActivity() string {
+func (m runTUIModel) renderActivityMeta() string {
 	label := tuiSectionTitleStyle.Render("Activity")
 	parts := []string{label}
 	if m.streamErr != nil {
@@ -384,29 +392,38 @@ func (m runTUIModel) renderActivity() string {
 		followState = "off"
 	}
 	parts = append(parts, tuiMutedStyle.Render(fmt.Sprintf("Scroll: PgUp/PgDn/Home/End   Follow: %s (f to toggle)", followState)))
-	parts = append(parts, m.viewport.View())
-	body := strings.Join(parts, "\n")
+	return lipgloss.NewStyle().
+		Width(m.sectionInnerWidth(tuiActivityStyle)).
+		Render(strings.Join(parts, "\n"))
+}
+
+func (m runTUIModel) renderActivity() string {
+	body := lipgloss.JoinVertical(lipgloss.Left, m.renderActivityMeta(), m.viewport.View())
 	return tuiActivityStyle.
-		Width(max(1, m.width)).
-		Height(max(3, m.height-lipgloss.Height(m.renderHeader())-lipgloss.Height(m.renderComposer()))).
+		Height(max(1, m.activityOuterHeight()-tuiActivityStyle.GetVerticalFrameSize())).
 		Render(body)
 }
 
 func (m runTUIModel) renderComposer() string {
 	mode := m.currentComposerMode()
+	innerWidth := m.sectionInnerWidth(tuiComposerStyle)
 	label := tuiSectionTitleStyle.Render("Composer")
-	status := tuiMutedStyle.Render(m.composerModeLabel(mode))
-	help := tuiMutedStyle.Render(m.composerModeHelp(mode))
+	status := tuiMutedStyle.Render(truncateForTUI(m.composerModeLabel(mode), innerWidth))
+	help := tuiMutedStyle.Render(truncateForTUI(m.composerModeHelp(mode), innerWidth))
 
 	inputView := m.composer.View()
 	if mode == composerModeLocked || mode == composerModeSubmitting {
-		inputView = tuiMutedStyle.Render(m.composerModePrompt(mode))
+		inputView = tuiMutedStyle.Render(truncateForTUI(m.composerModePrompt(mode), innerWidth))
 	}
 
-	body := strings.Join([]string{label, status, inputView, help}, "\n")
-	return tuiComposerStyle.
-		Width(max(1, m.width)).
-		Render(body)
+	lines := []string{label, status, inputView}
+	if !m.compactLayout() {
+		lines = append(lines, help)
+	}
+	body := lipgloss.NewStyle().
+		Width(innerWidth).
+		Render(strings.Join(lines, "\n"))
+	return tuiComposerStyle.Render(body)
 }
 
 func waitForTUIContextDone(ctx context.Context) tea.Cmd {
@@ -580,7 +597,7 @@ func (m *runTUIModel) handleRunEvent(ev assistant.RunEvent) {
 func (m *runTUIModel) addActivityLine(line string) {
 	prevY := m.viewport.YOffset
 	m.activityLines = append(m.activityLines, line)
-	m.viewport.SetContent(strings.Join(m.activityLines, "\n"))
+	m.refreshViewportContent()
 	if m.followLogs {
 		m.viewport.GotoBottom()
 		return
@@ -590,6 +607,28 @@ func (m *runTUIModel) addActivityLine(line string) {
 		prevY = maxOffset
 	}
 	m.viewport.YOffset = prevY
+}
+
+func (m *runTUIModel) refreshViewportContent() {
+	content := strings.Join(m.activityLines, "\n")
+	if m.viewport.Width > 0 {
+		content = lipgloss.NewStyle().
+			Width(m.viewport.Width).
+			Render(content)
+	}
+	m.viewport.SetContent(content)
+}
+
+func (m runTUIModel) sectionInnerWidth(style lipgloss.Style) int {
+	return max(1, m.width-style.GetHorizontalFrameSize())
+}
+
+func (m runTUIModel) activityOuterHeight() int {
+	return max(3, m.height-lipgloss.Height(m.renderHeader())-lipgloss.Height(m.renderComposer()))
+}
+
+func (m runTUIModel) compactLayout() bool {
+	return m.height > 0 && m.height <= 20
 }
 
 func (m runTUIModel) currentComposerMode() composerMode {
@@ -688,7 +727,10 @@ func (m runTUIModel) phaseDetail() string {
 }
 
 func truncateForTUI(value string, maxLen int) string {
-	if maxLen <= 0 || len(value) <= maxLen {
+	if maxLen <= 0 {
+		return ""
+	}
+	if len(value) <= maxLen {
 		return value
 	}
 	if maxLen <= 3 {
