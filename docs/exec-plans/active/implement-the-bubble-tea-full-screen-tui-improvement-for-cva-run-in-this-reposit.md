@@ -24,7 +24,7 @@ Key constraints:
 - [x] Milestone 3: Wire existing HTTP run creation + SSE event stream into TUI state messages without creating a separate execution engine.
 - [x] Milestone 4: Implement phase/status header behavior and viewport ingestion/scroll-follow behavior for live events.
 - [x] Milestone 5: Implement composer behaviors and state transitions (initial prompt, waiting/completed behavior) and integrate submit flow.
-- [ ] Milestone 6: Add/update tests for mode selection and core TUI state transitions; verify non-TTY and `--json` behavior remains unchanged.
+- [x] Milestone 6: Add/update tests for mode selection and core TUI state transitions; verify non-TTY and `--json` behavior remains unchanged.
 
 ## Current progress
 
@@ -78,6 +78,18 @@ Key constraints:
     - model opens/reopens SSE streams itself via existing `Client.StreamEvents` and existing `streamSSE` parser bridge,
     - per-stream IDs and cancel functions prevent stale stream messages from taking over after resume/follow-up transitions.
   - Updated composer panel messaging so state/help text clearly explains when input is accepted and what submit will do.
+- Milestone 6 completed:
+  - Added `cmd/cva/run_tui_test.go` with focused unit coverage for core TUI behavior:
+    - composer mode selection across active/waiting/terminal/submitting states,
+    - waiting and follow-up submit flows via `submitComposerCmd` using a fake client,
+    - resume input parsing behavior (`key=value` vs free-text fallback),
+    - run-event-driven state transitions (waiting and terminal updates).
+  - Existing `cmd/cva/run_mode_test.go` continues covering output mode selection and terminal detection guard behavior.
+  - Verified behavior compatibility and regressions:
+    - `go test ./cmd/cva`,
+    - `go test ./...`.
+
+All milestones in this execution plan are now complete.
 
 ## Key decisions
 
@@ -93,11 +105,11 @@ Key constraints:
   - waiting => resume current run,
   - terminal => start follow-up run.
   Keep active-stream composer read-only until a waiting/terminal transition occurs.
+- For Milestone 6, keep tests focused on deterministic state and command behavior (unit-level model transitions and submit flow decisions) rather than full terminal rendering integration.
 
 ## Remaining issues / open questions
 
-- Confirm whether any additional explicit CLI flag (`--plain` / `--no-tui`) is needed now or deferred.
-- Milestone 6 remains: add/update focused tests for TUI state behavior (composer modes/submission transitions + stream state handling) while preserving non-TTY/`--json` behavior guarantees.
+- Optional follow-up (outside current scope): decide whether to add an explicit CLI override flag (`--plain` / `--no-tui`) for TTY users.
 
 ## Links to related documents
 
