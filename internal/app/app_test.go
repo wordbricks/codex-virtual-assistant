@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -350,6 +351,8 @@ func waitForRunStatus(t *testing.T, handler http.Handler, runID string, want ass
 	t.Helper()
 
 	deadline := time.Now().Add(20 * time.Second)
+	lastStableKey := ""
+	stableSince := time.Time{}
 	for time.Now().Before(deadline) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+runID, nil)
 		res := httptest.NewRecorder()
@@ -360,7 +363,25 @@ func waitForRunStatus(t *testing.T, handler http.Handler, runID string, want ass
 				t.Fatalf("decode run record: %v", err)
 			}
 			if record.Run.Status == want {
-				return record
+				if !requiresSettledTerminalState(want) {
+					return record
+				}
+				if !hasPhaseEvent(record.Events, terminalPhaseForStatus(want)) {
+					lastStableKey = ""
+					stableSince = time.Time{}
+					time.Sleep(20 * time.Millisecond)
+					continue
+				}
+				stableKey := record.Run.UpdatedAt.Format(time.RFC3339Nano) + "|" + string(record.Run.Phase) + "|" + strconv.Itoa(len(record.Events))
+				if stableKey != lastStableKey {
+					lastStableKey = stableKey
+					stableSince = time.Now()
+					time.Sleep(20 * time.Millisecond)
+					continue
+				}
+				if time.Since(stableSince) >= 100*time.Millisecond {
+					return record
+				}
 			}
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -368,6 +389,38 @@ func waitForRunStatus(t *testing.T, handler http.Handler, runID string, want ass
 
 	t.Fatalf("run %s did not reach status %q", runID, want)
 	return store.RunRecord{}
+}
+
+func requiresSettledTerminalState(status assistant.RunStatus) bool {
+	switch status {
+	case assistant.RunStatusCompleted, assistant.RunStatusFailed, assistant.RunStatusExhausted, assistant.RunStatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func terminalPhaseForStatus(status assistant.RunStatus) assistant.RunPhase {
+	switch status {
+	case assistant.RunStatusCompleted:
+		return assistant.RunPhaseCompleted
+	case assistant.RunStatusCancelled, assistant.RunStatusFailed, assistant.RunStatusExhausted:
+		return assistant.RunPhaseFailed
+	default:
+		return ""
+	}
+}
+
+func hasPhaseEvent(events []assistant.RunEvent, phase assistant.RunPhase) bool {
+	if phase == "" {
+		return false
+	}
+	for _, event := range events {
+		if event.Phase == phase {
+			return true
+		}
+	}
+	return false
 }
 
 type capturingMessenger struct {

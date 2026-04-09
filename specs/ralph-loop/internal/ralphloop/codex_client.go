@@ -375,6 +375,13 @@ func (client *appServerClient) Close() error {
 }
 
 func (client *appServerClient) request(ctx context.Context, method string, params map[string]any) (map[string]any, error) {
+	requestCtx := ctx
+	var cancel context.CancelFunc
+	if _, ok := requestCtx.Deadline(); !ok {
+		requestCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
+
 	id := client.nextRequestID()
 	responseCh := make(chan jsonRPCEnvelope, 1)
 	client.pendingMu.Lock()
@@ -393,8 +400,8 @@ func (client *appServerClient) request(ctx context.Context, method string, param
 	}
 
 	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	case <-requestCtx.Done():
+		return nil, requestCtx.Err()
 	case envelope := <-responseCh:
 		if envelope.Error != nil {
 			return nil, fmt.Errorf("%s: %s", method, envelope.Error.Message)
