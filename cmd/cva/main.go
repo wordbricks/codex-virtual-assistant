@@ -141,7 +141,7 @@ func cmdStart(ctx context.Context, args []string) error {
 		log.Printf("cva start with --yolo; Codex sandbox forced to %s", cfg.CodexSandboxMode)
 	}
 	if opts.daemon && !isDaemonChild() {
-		return startDaemonProcess(logFile, pidFile)
+		return startDaemonProcess(logFile, pidFile, cfg.HTTPAddr)
 	}
 	if isDaemonChild() {
 		if err := writePIDFile(pidFile, os.Getpid()); err != nil {
@@ -261,23 +261,57 @@ func cmdChat(ctx context.Context, c *Client, args []string, jsonMode bool) error
 }
 
 func cmdWatch(ctx context.Context, c *Client, args []string, jsonMode bool) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: cva watch <run_id>")
+	if len(args) > 1 {
+		return fmt.Errorf("usage: cva watch [<run_id>]")
 	}
-	stream, err := c.StreamEvents(ctx, args[0])
-	if err != nil {
-		return err
-	}
-	defer stream.Close()
 
-	return streamSSE(stream, func(ev assistant.RunEvent) bool {
-		if jsonMode {
-			printJSON(ev)
-		} else {
-			fmt.Println(formatEvent(ev))
+	if len(args) == 0 {
+		items, err := loadWatchRunItems(ctx, c)
+		if err != nil {
+			return err
 		}
-		return !isTerminalPhase(ev.Phase)
-	})
+		switch selectWatchOutputMode(jsonMode, isTTY(os.Stdin), isTTY(os.Stdout)) {
+		case watchOutputModeJSON:
+			return printJSON(items)
+		case watchOutputModeTUI:
+			selected, err := pickWatchRun(ctx, items)
+			if err != nil || selected == nil {
+				return err
+			}
+			record, err := c.GetRun(ctx, selected.Run.ID)
+			if err != nil {
+				return err
+			}
+			return streamRunTUI(ctx, c, record.Run)
+		default:
+			fmt.Print(formatWatchList(items))
+			return nil
+		}
+	}
+
+	switch selectWatchOutputMode(jsonMode, isTTY(os.Stdin), isTTY(os.Stdout)) {
+	case watchOutputModeTUI:
+		record, err := c.GetRun(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		return streamRunTUI(ctx, c, record.Run)
+	default:
+		stream, err := c.StreamEvents(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		defer stream.Close()
+
+		return streamSSE(stream, func(ev assistant.RunEvent) bool {
+			if jsonMode {
+				printJSON(ev)
+			} else {
+				fmt.Println(formatEvent(ev))
+			}
+			return !isTerminalPhase(ev.Phase)
+		})
+	}
 }
 
 func cmdCancel(ctx context.Context, c *Client, args []string, jsonMode bool) error {
@@ -542,7 +576,7 @@ Commands:
   status <run_id>                        Show run details
   list                                   List all chats
   chat <chat_id>                         Show chat details
-  watch <run_id>                         Stream live events for a run
+  watch [<run_id>]                       Reopen a run TUI or browse recent runs
   cancel <run_id>                        Cancel a running task
   resume <run_id> [key=value ...]        Resume a waiting run with input
   schedule create --run ID --at WHEN "prompt"                   Create a scheduled run

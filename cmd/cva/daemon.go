@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -138,7 +140,7 @@ func isDaemonChild() bool {
 	return os.Getenv(daemonChildEnv) == "1"
 }
 
-func startDaemonProcess(logFile, pidFile string) error {
+func startDaemonProcess(logFile, pidFile, httpAddr string) error {
 	if err := os.MkdirAll(filepath.Dir(logFile), 0o755); err != nil {
 		return fmt.Errorf("create log dir: %w", err)
 	}
@@ -176,8 +178,37 @@ func startDaemonProcess(logFile, pidFile string) error {
 		return fmt.Errorf("write pid file: %w", err)
 	}
 
-	fmt.Printf("cva daemon started\npid: %d\nlog: %s\npid file: %s\n", cmd.Process.Pid, logFile, pidFile)
+	webURL := webURLForHTTPAddr(httpAddr)
+	fmt.Printf("cva daemon started\npid: %d\nweb: %s\nlog: %s\npid file: %s\n", cmd.Process.Pid, webURL, logFile, pidFile)
 	return nil
+}
+
+func webURLForHTTPAddr(addr string) string {
+	trimmed := strings.TrimSpace(addr)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.Contains(trimmed, "://") {
+		parsed, err := url.Parse(trimmed)
+		if err != nil || parsed.Host == "" {
+			return trimmed
+		}
+		parsed.Host = displayHostPort(parsed.Host)
+		return parsed.String()
+	}
+	return "http://" + displayHostPort(trimmed)
+}
+
+func displayHostPort(hostport string) string {
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return hostport
+	}
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func writePIDFile(path string, pid int) error {

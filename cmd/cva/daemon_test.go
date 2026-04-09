@@ -53,3 +53,39 @@ func TestTailText(t *testing.T) {
 		t.Fatalf("tailText() = %q, want %q", got, want)
 	}
 }
+
+func TestWebURLForHTTPAddr(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		addr string
+		want string
+	}{
+		{
+			name: "default bind address",
+			addr: "127.0.0.1:8080",
+			want: "http://127.0.0.1:8080",
+		},
+		{
+			name: "wildcard bind address uses localhost",
+			addr: "0.0.0.0:9000",
+			want: "http://127.0.0.1:9000",
+		},
+		{
+			name: "scheme preserved",
+			addr: "https://0.0.0.0:9443/app",
+			want: "https://127.0.0.1:9443/app",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := webURLForHTTPAddr(tc.addr); got != tc.want {
+				t.Fatalf("webURLForHTTPAddr(%q) = %q, want %q", tc.addr, got, tc.want)
+			}
+		})
+	}
+}
