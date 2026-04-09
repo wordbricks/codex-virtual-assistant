@@ -215,7 +215,15 @@ func streamRunPlain(ctx context.Context, c *Client, run assistant.Run) error {
 }
 
 func streamRunTUI(ctx context.Context, c *Client, run assistant.Run) error {
-	return runRunTUI(ctx, run)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stream, err := c.StreamEvents(runCtx, run.ID)
+	if err != nil {
+		return err
+	}
+
+	return runRunTUI(runCtx, run, streamRunEventsForTUI(runCtx, stream))
 }
 
 func cmdStatus(ctx context.Context, c *Client, args []string, jsonMode bool) error {
