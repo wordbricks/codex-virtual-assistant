@@ -1,6 +1,8 @@
 package wtl
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -244,14 +246,17 @@ func TestAppServerEnvForcesAgentBrowserHeaded(t *testing.T) {
 }
 
 func TestAppServerEnvUsesProjectBrowserSettings(t *testing.T) {
-	t.Parallel()
-
 	originalLookup := lookupAgentBrowserExecutablePath
+	originalCLILookup := lookupAgentBrowserCLIPath
 	lookupAgentBrowserExecutablePath = func() string {
 		return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 	}
+	lookupAgentBrowserCLIPath = func() string {
+		return "/usr/local/bin/agent-browser"
+	}
 	defer func() {
 		lookupAgentBrowserExecutablePath = originalLookup
+		lookupAgentBrowserCLIPath = originalCLILookup
 	}()
 
 	session := newAppServerTurnSession(AppServerPhaseExecutorConfig{
@@ -275,6 +280,32 @@ func TestAppServerEnvUsesProjectBrowserSettings(t *testing.T) {
 	}
 	if !strings.Contains(joined, "AGENT_BROWSER_EXECUTABLE_PATH=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome") {
 		t.Fatalf("env = %q, want AGENT_BROWSER_EXECUTABLE_PATH for system Chrome", joined)
+	}
+	if !strings.Contains(joined, "PATH=") {
+		t.Fatalf("env = %q, want PATH override for agent-browser wrapper", joined)
+	}
+	if strings.TrimSpace(session.agentBrowserWrapperDir) == "" {
+		t.Fatal("agentBrowserWrapperDir = empty, want temporary wrapper directory")
+	}
+	scriptBytes, err := os.ReadFile(filepath.Join(session.agentBrowserWrapperDir, "agent-browser"))
+	if err != nil {
+		t.Fatalf("ReadFile(wrapper) error = %v", err)
+	}
+	script := string(scriptBytes)
+	if !strings.Contains(script, `if [[ "${1:-}" == "connect" ]]`) {
+		t.Fatalf("wrapper script = %q, want connect guard", script)
+	}
+	if !strings.Contains(script, "agent-browser connect is disabled for project CDP reuse") {
+		t.Fatalf("wrapper script = %q, want helpful connect error", script)
+	}
+	if !strings.Contains(script, "/usr/local/bin/agent-browser") {
+		t.Fatalf("wrapper script = %q, want exec to real agent-browser binary", script)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("session.Close() error = %v", err)
+	}
+	if _, err := os.Stat(session.agentBrowserWrapperDir); !os.IsNotExist(err) {
+		t.Fatalf("wrapper dir stat err = %v, want removed dir", err)
 	}
 }
 

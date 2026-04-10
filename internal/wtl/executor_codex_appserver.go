@@ -25,6 +25,7 @@ import (
 var urlPattern = regexp.MustCompile(`https?://[^\s"'<>]+`)
 
 var lookupAgentBrowserExecutablePath = detectAgentBrowserExecutablePath
+var lookupAgentBrowserCLIPath = detectAgentBrowserCLIPath
 
 type AppServerPhaseExecutorConfig struct {
 	BinaryPath         string
@@ -126,6 +127,8 @@ type appServerTurnSession struct {
 	runArtifactRelDir string
 	browserFramePaths []string
 	browserFrameRel   []string
+
+	agentBrowserWrapperDir string
 }
 
 type appServerRPCEnvelope struct {
@@ -204,7 +207,7 @@ func (s *appServerTurnSession) start(ctx context.Context, cwd string) error {
 		"clientInfo": map[string]any{
 			"name":    "codex_virtual_assistant",
 			"title":   "Codex Virtual Assistant",
-			"version": "0.1.0",
+			"version": "0.1.1",
 		},
 	}); err != nil {
 		return err
@@ -303,8 +306,54 @@ func (s *appServerTurnSession) appServerEnv() []string {
 		if executablePath := strings.TrimSpace(lookupAgentBrowserExecutablePath()); executablePath != "" {
 			env = upsertEnv(env, "AGENT_BROWSER_EXECUTABLE_PATH", executablePath)
 		}
+		if wrapperDir := strings.TrimSpace(s.ensureAgentBrowserWrapperDir()); wrapperDir != "" {
+			env = upsertEnv(env, "PATH", wrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		}
 	}
 	return env
+}
+
+func detectAgentBrowserCLIPath() string {
+	path, err := exec.LookPath("agent-browser")
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
+func (s *appServerTurnSession) ensureAgentBrowserWrapperDir() string {
+	if strings.TrimSpace(s.agentBrowserWrapperDir) != "" {
+		return s.agentBrowserWrapperDir
+	}
+	realBinary := strings.TrimSpace(lookupAgentBrowserCLIPath())
+	if realBinary == "" {
+		return ""
+	}
+	port := s.project.BrowserCDPPort
+	if port <= 0 {
+		port = 9223
+	}
+	dir, err := os.MkdirTemp("", "cva-agent-browser-wrapper-")
+	if err != nil {
+		return ""
+	}
+	scriptPath := filepath.Join(dir, "agent-browser")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "connect" ]]; then
+  echo "agent-browser connect is disabled for project CDP reuse. Use agent-browser --cdp %d <command> instead." >&2
+  exit 64
+fi
+
+exec %q "$@"
+`, port, realBinary)
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		_ = os.RemoveAll(dir)
+		return ""
+	}
+	s.agentBrowserWrapperDir = dir
+	return dir
 }
 
 func detectAgentBrowserExecutablePath() string {
@@ -463,6 +512,9 @@ func (s *appServerTurnSession) buildPhaseResult(request CodexPhaseRequest) Codex
 
 func (s *appServerTurnSession) Close() error {
 	s.shutdown(nil)
+	if strings.TrimSpace(s.agentBrowserWrapperDir) != "" {
+		_ = os.RemoveAll(s.agentBrowserWrapperDir)
+	}
 	if s.stdin != nil {
 		_ = s.stdin.Close()
 	}

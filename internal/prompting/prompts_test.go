@@ -64,6 +64,9 @@ func TestBuildProjectSelectorPromptRequiresProjectInspection(t *testing.T) {
 	if !strings.Contains(bundle.System, "project_slug") {
 		t.Fatalf("System prompt = %q, want selector schema keys", bundle.System)
 	}
+	if !strings.Contains(bundle.System, "enduring domain") || !strings.Contains(bundle.System, "final purpose") {
+		t.Fatalf("System prompt = %q, want domain-purpose-first routing guidance", bundle.System)
+	}
 }
 
 func TestBuildGatePromptDeclaresRouteContract(t *testing.T) {
