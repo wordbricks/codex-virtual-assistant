@@ -17,14 +17,6 @@ type watchRunLoader interface {
 	GetRun(ctx context.Context, runID string) (*store.RunRecord, error)
 }
 
-type watchOutputMode string
-
-const (
-	watchOutputModeJSON watchOutputMode = "json"
-	watchOutputModeTUI  watchOutputMode = "tui"
-	watchOutputModeText watchOutputMode = "text"
-)
-
 var (
 	watchListStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -51,16 +43,6 @@ type watchPickerModel struct {
 	height    int
 	ready     bool
 	confirmed bool
-}
-
-func selectWatchOutputMode(jsonMode bool, stdinIsTTY, stdoutIsTTY bool) watchOutputMode {
-	if jsonMode {
-		return watchOutputModeJSON
-	}
-	if stdinIsTTY && stdoutIsTTY {
-		return watchOutputModeTUI
-	}
-	return watchOutputModeText
 }
 
 func loadWatchRunItems(ctx context.Context, client watchRunLoader) ([]watchRunItem, error) {

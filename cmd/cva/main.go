@@ -238,11 +238,23 @@ func cmdList(ctx context.Context, c *Client, jsonMode bool) error {
 	if err != nil {
 		return err
 	}
-	if jsonMode {
+	switch selectBrowseOutputMode(jsonMode, isTTY(os.Stdin), isTTY(os.Stdout)) {
+	case browseOutputModeJSON:
 		return printJSON(chats)
+	case browseOutputModeTUI:
+		selected, err := pickChat(ctx, chats)
+		if err != nil || selected == nil {
+			return err
+		}
+		rec, err := c.GetChat(ctx, selected.ID)
+		if err != nil {
+			return err
+		}
+		return viewChatTUI(ctx, rec)
+	default:
+		fmt.Print(formatChatList(chats))
+		return nil
 	}
-	fmt.Print(formatChatList(chats))
-	return nil
 }
 
 func cmdChat(ctx context.Context, c *Client, args []string, jsonMode bool) error {
@@ -270,10 +282,10 @@ func cmdWatch(ctx context.Context, c *Client, args []string, jsonMode bool) erro
 		if err != nil {
 			return err
 		}
-		switch selectWatchOutputMode(jsonMode, isTTY(os.Stdin), isTTY(os.Stdout)) {
-		case watchOutputModeJSON:
+		switch selectBrowseOutputMode(jsonMode, isTTY(os.Stdin), isTTY(os.Stdout)) {
+		case browseOutputModeJSON:
 			return printJSON(items)
-		case watchOutputModeTUI:
+		case browseOutputModeTUI:
 			selected, err := pickWatchRun(ctx, items)
 			if err != nil || selected == nil {
 				return err
@@ -289,8 +301,8 @@ func cmdWatch(ctx context.Context, c *Client, args []string, jsonMode bool) erro
 		}
 	}
 
-	switch selectWatchOutputMode(jsonMode, isTTY(os.Stdin), isTTY(os.Stdout)) {
-	case watchOutputModeTUI:
+	switch selectBrowseOutputMode(jsonMode, isTTY(os.Stdin), isTTY(os.Stdout)) {
+	case browseOutputModeTUI:
 		record, err := c.GetRun(ctx, args[0])
 		if err != nil {
 			return err
