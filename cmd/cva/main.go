@@ -34,6 +34,7 @@ func main() {
 	args := os.Args[1:]
 	addr := defaultAddr
 	jsonMode := false
+	interactiveMode := false
 
 	// parse global flags
 	var filtered []string
@@ -46,6 +47,8 @@ func main() {
 			addr = strings.TrimPrefix(args[i], "--addr=")
 		case args[i] == "--json":
 			jsonMode = true
+		case args[i] == "--interactive", args[i] == "-i":
+			interactiveMode = true
 		default:
 			filtered = append(filtered, args[i])
 		}
@@ -76,19 +79,19 @@ func main() {
 		err = cmdStop(cmdArgs)
 	case "run":
 		client := NewClient(addr)
-		err = cmdRun(ctx, client, cmdArgs, jsonMode)
+		err = cmdRun(ctx, client, cmdArgs, jsonMode, interactiveMode)
 	case "status":
 		client := NewClient(addr)
 		err = cmdStatus(ctx, client, cmdArgs, jsonMode)
 	case "list":
 		client := NewClient(addr)
-		err = cmdList(ctx, client, jsonMode)
+		err = cmdList(ctx, client, jsonMode, interactiveMode)
 	case "chat":
 		client := NewClient(addr)
 		err = cmdChat(ctx, client, cmdArgs, jsonMode)
 	case "watch":
 		client := NewClient(addr)
-		err = cmdWatch(ctx, client, cmdArgs, jsonMode)
+		err = cmdWatch(ctx, client, cmdArgs, jsonMode, interactiveMode)
 	case "cancel":
 		client := NewClient(addr)
 		err = cmdCancel(ctx, client, cmdArgs, jsonMode)
@@ -97,7 +100,7 @@ func main() {
 		err = cmdResume(ctx, client, cmdArgs)
 	case "schedule":
 		client := NewClient(addr)
-		err = cmdSchedule(ctx, client, cmdArgs, jsonMode)
+		err = cmdSchedule(ctx, client, cmdArgs, jsonMode, interactiveMode)
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -162,7 +165,7 @@ func cmdStart(ctx context.Context, args []string) error {
 	return nil
 }
 
-func cmdRun(ctx context.Context, c *Client, args []string, jsonMode bool) error {
+func cmdRun(ctx context.Context, c *Client, args []string, jsonMode, interactiveMode bool) error {
 	var parentRunID string
 	var filtered []string
 	for i := 0; i < len(args); i++ {
@@ -187,7 +190,7 @@ func cmdRun(ctx context.Context, c *Client, args []string, jsonMode bool) error 
 		return err
 	}
 
-	mode := selectRunOutputMode(jsonMode, isTTY(os.Stdin), isTTY(os.Stdout))
+	mode := selectRunOutputMode(jsonMode, interactiveMode, isTTY(os.Stdin), isTTY(os.Stdout))
 	switch mode {
 	case runOutputModeJSON:
 		return printJSON(resp)
@@ -233,12 +236,12 @@ func cmdStatus(ctx context.Context, c *Client, args []string, jsonMode bool) err
 	return nil
 }
 
-func cmdList(ctx context.Context, c *Client, jsonMode bool) error {
+func cmdList(ctx context.Context, c *Client, jsonMode, interactiveMode bool) error {
 	chats, err := c.ListChats(ctx)
 	if err != nil {
 		return err
 	}
-	switch selectBrowseOutputMode(jsonMode, isTTY(os.Stdin), isTTY(os.Stdout)) {
+	switch selectBrowseOutputMode(jsonMode, interactiveMode, isTTY(os.Stdin), isTTY(os.Stdout)) {
 	case browseOutputModeJSON:
 		return printJSON(chats)
 	case browseOutputModeTUI:
@@ -272,7 +275,7 @@ func cmdChat(ctx context.Context, c *Client, args []string, jsonMode bool) error
 	return nil
 }
 
-func cmdWatch(ctx context.Context, c *Client, args []string, jsonMode bool) error {
+func cmdWatch(ctx context.Context, c *Client, args []string, jsonMode, interactiveMode bool) error {
 	if len(args) > 1 {
 		return fmt.Errorf("usage: cva watch [<run_id>]")
 	}
@@ -282,7 +285,7 @@ func cmdWatch(ctx context.Context, c *Client, args []string, jsonMode bool) erro
 		if err != nil {
 			return err
 		}
-		switch selectBrowseOutputMode(jsonMode, isTTY(os.Stdin), isTTY(os.Stdout)) {
+		switch selectBrowseOutputMode(jsonMode, interactiveMode, isTTY(os.Stdin), isTTY(os.Stdout)) {
 		case browseOutputModeJSON:
 			return printJSON(items)
 		case browseOutputModeTUI:
@@ -301,7 +304,7 @@ func cmdWatch(ctx context.Context, c *Client, args []string, jsonMode bool) erro
 		}
 	}
 
-	switch selectBrowseOutputMode(jsonMode, isTTY(os.Stdin), isTTY(os.Stdout)) {
+	switch selectBrowseOutputMode(jsonMode, interactiveMode, isTTY(os.Stdin), isTTY(os.Stdout)) {
 	case browseOutputModeTUI:
 		record, err := c.GetRun(ctx, args[0])
 		if err != nil {
@@ -361,7 +364,7 @@ func cmdResume(ctx context.Context, c *Client, args []string) error {
 	return nil
 }
 
-func cmdSchedule(ctx context.Context, c *Client, args []string, jsonMode bool) error {
+func cmdSchedule(ctx context.Context, c *Client, args []string, jsonMode, interactiveMode bool) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: cva schedule <create|update|list|show|cancel> ...")
 	}
@@ -464,7 +467,6 @@ func cmdSchedule(ctx context.Context, c *Client, args []string, jsonMode bool) e
 	case "list":
 		var chatID string
 		var status assistant.ScheduledRunStatus
-		var interactive bool
 		for i := 1; i < len(args); i++ {
 			switch {
 			case args[i] == "--chat" && i+1 < len(args):
@@ -477,8 +479,6 @@ func cmdSchedule(ctx context.Context, c *Client, args []string, jsonMode bool) e
 				i++
 			case strings.HasPrefix(args[i], "--status="):
 				status = assistant.ScheduledRunStatus(strings.TrimPrefix(args[i], "--status="))
-			case args[i] == "--interactive":
-				interactive = true
 			default:
 				return fmt.Errorf("unknown schedule list arg: %s", args[i])
 			}
@@ -490,7 +490,7 @@ func cmdSchedule(ctx context.Context, c *Client, args []string, jsonMode bool) e
 		if jsonMode {
 			return printJSON(scheduledRuns)
 		}
-		if interactive && isTTY(os.Stdin) && isTTY(os.Stdout) {
+		if interactiveMode && isTTY(os.Stdin) && isTTY(os.Stdout) {
 			selected, err := pickScheduledRun(ctx, scheduledRuns)
 			if err != nil || selected == nil {
 				return err
@@ -539,11 +539,11 @@ func isTerminalPhase(p assistant.RunPhase) bool {
 	return false
 }
 
-func selectRunOutputMode(jsonMode bool, stdinIsTTY, stdoutIsTTY bool) runOutputMode {
+func selectRunOutputMode(jsonMode, interactive, stdinIsTTY, stdoutIsTTY bool) runOutputMode {
 	if jsonMode {
 		return runOutputModeJSON
 	}
-	if stdinIsTTY && stdoutIsTTY {
+	if interactive && stdinIsTTY && stdoutIsTTY {
 		return runOutputModeTUI
 	}
 	return runOutputModePlain
@@ -585,7 +585,7 @@ func printUsage() {
 	fmt.Print(`cva - Codex Virtual Assistant CLI
 
 Usage:
-  cva [--addr URL] [--json] <command> [args...]
+  cva [--addr URL] [--json] [--interactive|-i] <command> [args...]
 
 Commands:
   start [--yolo] [--daemon] [--log-file PATH] [--pid-file PATH]
@@ -599,17 +599,19 @@ Commands:
   status <run_id>                        Show run details
   list                                   List all chats
   chat <chat_id>                         Show chat details
-  watch [<run_id>]                       Reopen a run TUI or browse recent runs
+  watch [<run_id>]                       Stream a run or browse recent runs
   cancel <run_id>                        Cancel a running task
   resume <run_id> [key=value ...]        Resume a waiting run with input
   schedule create --run ID --at WHEN "prompt"                   Create a scheduled run
   schedule update <scheduled_run_id> [--at WHEN] [--prompt P]   Update a pending scheduled run
-  schedule list [--chat ID] [--status S] [--interactive]        List scheduled runs
+  schedule list [--chat ID] [--status S]                        List scheduled runs
   schedule show <scheduled_run_id>                              Show a scheduled run
   schedule cancel <scheduled_run_id>                            Cancel a pending scheduled run
 
 Global Options:
   --addr URL    API server address (default: http://127.0.0.1:8080, env: CVA_ADDR)
   --json        Output raw JSON instead of formatted text
+  --interactive, -i
+                 Enable TUI for supported commands when stdin/stdout are TTYs
 `)
 }

@@ -8,11 +8,11 @@ const (
 	browseOutputModeText browseOutputMode = "text"
 )
 
-func selectBrowseOutputMode(jsonMode bool, stdinIsTTY, stdoutIsTTY bool) browseOutputMode {
+func selectBrowseOutputMode(jsonMode, interactive, stdinIsTTY, stdoutIsTTY bool) browseOutputMode {
 	if jsonMode {
 		return browseOutputModeJSON
 	}
-	if stdinIsTTY && stdoutIsTTY {
+	if interactive && stdinIsTTY && stdoutIsTTY {
 		return browseOutputModeTUI
 	}
 	return browseOutputModeText

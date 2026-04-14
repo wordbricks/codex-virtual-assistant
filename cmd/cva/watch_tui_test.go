@@ -27,23 +27,25 @@ func TestSelectWatchOutputMode(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		jsonMode  bool
-		stdinTTY  bool
-		stdoutTTY bool
-		want      browseOutputMode
+		name        string
+		jsonMode    bool
+		interactive bool
+		stdinTTY    bool
+		stdoutTTY   bool
+		want        browseOutputMode
 	}{
-		{name: "json wins", jsonMode: true, stdinTTY: true, stdoutTTY: true, want: browseOutputModeJSON},
-		{name: "interactive uses tui", stdinTTY: true, stdoutTTY: true, want: browseOutputModeTUI},
-		{name: "non tty uses text", stdoutTTY: true, want: browseOutputModeText},
+		{name: "json wins", jsonMode: true, interactive: true, stdinTTY: true, stdoutTTY: true, want: browseOutputModeJSON},
+		{name: "interactive flag with tty uses tui", interactive: true, stdinTTY: true, stdoutTTY: true, want: browseOutputModeTUI},
+		{name: "tty without interactive flag uses text", stdinTTY: true, stdoutTTY: true, want: browseOutputModeText},
+		{name: "interactive flag without tty uses text", interactive: true, stdoutTTY: true, want: browseOutputModeText},
 	}
 
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := selectBrowseOutputMode(tc.jsonMode, tc.stdinTTY, tc.stdoutTTY); got != tc.want {
-				t.Fatalf("selectBrowseOutputMode(%v, %v, %v) = %q, want %q", tc.jsonMode, tc.stdinTTY, tc.stdoutTTY, got, tc.want)
+			if got := selectBrowseOutputMode(tc.jsonMode, tc.interactive, tc.stdinTTY, tc.stdoutTTY); got != tc.want {
+				t.Fatalf("selectBrowseOutputMode(%v, %v, %v, %v) = %q, want %q", tc.jsonMode, tc.interactive, tc.stdinTTY, tc.stdoutTTY, got, tc.want)
 			}
 		})
 	}

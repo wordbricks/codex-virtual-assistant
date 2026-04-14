@@ -9,41 +9,53 @@ func TestSelectRunOutputMode(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		jsonMode   bool
-		stdinTTY   bool
-		stdoutTTY  bool
-		wantOutput runOutputMode
+		name        string
+		jsonMode    bool
+		interactive bool
+		stdinTTY    bool
+		stdoutTTY   bool
+		wantOutput  runOutputMode
 	}{
 		{
-			name:       "json wins over tty",
-			jsonMode:   true,
+			name:        "json wins over tty",
+			jsonMode:    true,
+			interactive: true,
+			stdinTTY:    true,
+			stdoutTTY:   true,
+			wantOutput:  runOutputModeJSON,
+		},
+		{
+			name:        "json wins over non tty",
+			jsonMode:    true,
+			interactive: true,
+			stdinTTY:    false,
+			stdoutTTY:   false,
+			wantOutput:  runOutputModeJSON,
+		},
+		{
+			name:        "interactive flag with tty uses tui",
+			interactive: true,
+			stdinTTY:    true,
+			stdoutTTY:   true,
+			wantOutput:  runOutputModeTUI,
+		},
+		{
+			name:       "tty without interactive flag uses plain",
 			stdinTTY:   true,
-			stdoutTTY:  true,
-			wantOutput: runOutputModeJSON,
-		},
-		{
-			name:       "json wins over non tty",
-			jsonMode:   true,
-			stdinTTY:   false,
-			stdoutTTY:  false,
-			wantOutput: runOutputModeJSON,
-		},
-		{
-			name:       "interactive tty uses tui",
-			stdinTTY:   true,
-			stdoutTTY:  true,
-			wantOutput: runOutputModeTUI,
-		},
-		{
-			name:       "stdin not tty uses plain",
 			stdoutTTY:  true,
 			wantOutput: runOutputModePlain,
 		},
 		{
-			name:       "stdout not tty uses plain",
-			stdinTTY:   true,
-			wantOutput: runOutputModePlain,
+			name:        "interactive flag without stdin tty uses plain",
+			interactive: true,
+			stdoutTTY:   true,
+			wantOutput:  runOutputModePlain,
+		},
+		{
+			name:        "interactive flag without stdout tty uses plain",
+			interactive: true,
+			stdinTTY:    true,
+			wantOutput:  runOutputModePlain,
 		},
 		{
 			name:       "non tty uses plain",
@@ -56,9 +68,9 @@ func TestSelectRunOutputMode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := selectRunOutputMode(tt.jsonMode, tt.stdinTTY, tt.stdoutTTY)
+			got := selectRunOutputMode(tt.jsonMode, tt.interactive, tt.stdinTTY, tt.stdoutTTY)
 			if got != tt.wantOutput {
-				t.Fatalf("selectRunOutputMode(%v, %v, %v) = %q, want %q", tt.jsonMode, tt.stdinTTY, tt.stdoutTTY, got, tt.wantOutput)
+				t.Fatalf("selectRunOutputMode(%v, %v, %v, %v) = %q, want %q", tt.jsonMode, tt.interactive, tt.stdinTTY, tt.stdoutTTY, got, tt.wantOutput)
 			}
 		})
 	}
