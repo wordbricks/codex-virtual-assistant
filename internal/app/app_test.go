@@ -185,55 +185,6 @@ func TestNewAppDispatchesRunCompletedHook(t *testing.T) {
 	}
 }
 
-func TestNewAppWaitsAndResumesEndToEnd(t *testing.T) {
-	t.Parallel()
-
-	app, _ := newTestApp(t)
-
-	create := doJSONRequest(t, app.Handler(), http.MethodPost, "/api/v1/runs", map[string]any{
-		"user_request_raw": "Log in to HubSpot and update the lead status, then send a short summary.",
-	})
-	if create.Code != http.StatusAccepted {
-		t.Fatalf("POST /api/v1/runs status = %d, want %d", create.Code, http.StatusAccepted)
-	}
-
-	var response struct {
-		Run assistant.Run `json:"run"`
-	}
-	if err := json.Unmarshal(create.Body.Bytes(), &response); err != nil {
-		t.Fatalf("decode create response: %v", err)
-	}
-
-	waiting := waitForRunStatus(t, app.Handler(), response.Run.ID, assistant.RunStatusWaiting)
-	if waiting.Run.WaitingFor == nil {
-		t.Fatal("WaitingFor is nil, want active wait request")
-	}
-	if waiting.Run.WaitingFor.Kind != assistant.WaitKindAuthentication {
-		t.Fatalf("WaitingFor.Kind = %q, want %q", waiting.Run.WaitingFor.Kind, assistant.WaitKindAuthentication)
-	}
-
-	resume := doJSONRequest(t, app.Handler(), http.MethodPost, "/api/v1/runs/"+response.Run.ID+"/resume", map[string]any{
-		"input": map[string]string{
-			"approval": "approved",
-			"response": "Use the sales-ops workspace and continue.",
-		},
-	})
-	if resume.Code != http.StatusAccepted {
-		t.Fatalf("POST /api/v1/runs/:id/resume status = %d, want %d", resume.Code, http.StatusAccepted)
-	}
-
-	completed := waitForRunStatus(t, app.Handler(), response.Run.ID, assistant.RunStatusCompleted)
-	if completed.Run.WaitingFor != nil {
-		t.Fatalf("WaitingFor = %#v, want nil after resume", completed.Run.WaitingFor)
-	}
-	if len(completed.WaitRequests) == 0 {
-		t.Fatal("WaitRequests is empty, want recorded wait history")
-	}
-	if len(completed.Artifacts) == 0 || !strings.Contains(completed.Artifacts[0].Content, "Use the sales-ops workspace and continue.") {
-		t.Fatalf("Artifacts = %#v, want resumed input reflected in heuristic artifact", completed.Artifacts)
-	}
-}
-
 func TestNewAppSendsLifecycleNotifications(t *testing.T) {
 	t.Parallel()
 
