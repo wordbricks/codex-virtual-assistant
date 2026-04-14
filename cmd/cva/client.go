@@ -126,13 +126,15 @@ func (c *Client) GetScheduledRun(ctx context.Context, scheduledRunID string) (*a
 	return &resp, nil
 }
 
-func (c *Client) CreateScheduledRun(ctx context.Context, runID, scheduledFor, prompt string, maxAttempts int) (*assistant.ScheduledRun, error) {
+func (c *Client) CreateScheduledRun(ctx context.Context, runID, scheduledFor, cronExpr, prompt string, maxAttempts int) (*assistant.ScheduledRun, error) {
 	body := struct {
 		ScheduledFor          string `json:"scheduled_for"`
+		CronExpr              string `json:"cron_expr,omitempty"`
 		Prompt                string `json:"prompt"`
 		MaxGenerationAttempts int    `json:"max_generation_attempts,omitempty"`
 	}{
 		ScheduledFor:          scheduledFor,
+		CronExpr:              cronExpr,
 		Prompt:                prompt,
 		MaxGenerationAttempts: maxAttempts,
 	}
@@ -143,13 +145,15 @@ func (c *Client) CreateScheduledRun(ctx context.Context, runID, scheduledFor, pr
 	return &resp, nil
 }
 
-func (c *Client) UpdateScheduledRun(ctx context.Context, scheduledRunID, scheduledFor, prompt string, maxAttempts int) (*assistant.ScheduledRun, error) {
+func (c *Client) UpdateScheduledRun(ctx context.Context, scheduledRunID, scheduledFor, cronExpr, prompt string, maxAttempts int) (*assistant.ScheduledRun, error) {
 	body := struct {
 		ScheduledFor          string `json:"scheduled_for,omitempty"`
+		CronExpr              string `json:"cron_expr,omitempty"`
 		Prompt                string `json:"prompt,omitempty"`
 		MaxGenerationAttempts int    `json:"max_generation_attempts,omitempty"`
 	}{
 		ScheduledFor:          scheduledFor,
+		CronExpr:              cronExpr,
 		Prompt:                prompt,
 		MaxGenerationAttempts: maxAttempts,
 	}

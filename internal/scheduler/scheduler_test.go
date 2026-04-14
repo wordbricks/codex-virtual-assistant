@@ -82,10 +82,50 @@ func TestSchedulerRunOnceMarksFailures(t *testing.T) {
 	}
 }
 
+func TestSchedulerRunOnceReschedulesRecurringRuns(t *testing.T) {
+	t.Parallel()
+
+	loc := time.FixedZone("PDT", -7*60*60)
+	now := time.Date(2026, time.April, 13, 0, 1, 0, 0, loc)
+	repo := &fakeRepository{
+		pending: []assistant.ScheduledRun{
+			{
+				ID:                    "scheduled_daily",
+				ChatID:                "chat_1",
+				ParentRunID:           "run_parent",
+				UserRequestRaw:        "Perform the daily workspace wiki management pass.",
+				MaxGenerationAttempts: 2,
+				CronExpr:              "0 0 * * *",
+				ScheduledFor:          now.Add(-time.Minute).UTC(),
+				Status:                assistant.ScheduledRunStatusPending,
+				CreatedAt:             now.Add(-24 * time.Hour).UTC(),
+			},
+		},
+	}
+	runs := &fakeRunCreator{run: assistant.Run{ID: "run_created"}}
+	publisher := &fakePublisher{}
+
+	s := New(repo, runs, publisher, time.Minute, func() time.Time { return now })
+	if err := s.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	if len(repo.saved) != 1 {
+		t.Fatalf("len(repo.saved) = %d, want 1 recurring reschedule", len(repo.saved))
+	}
+	if repo.saved[0].Status != assistant.ScheduledRunStatusPending {
+		t.Fatalf("repo.saved[0].Status = %q, want pending", repo.saved[0].Status)
+	}
+	if repo.saved[0].RunID != "run_created" {
+		t.Fatalf("repo.saved[0].RunID = %q, want run_created", repo.saved[0].RunID)
+	}
+}
+
 type fakeRepository struct {
 	pending       []assistant.ScheduledRun
 	triggered     []triggeredUpdate
 	statusUpdates []statusUpdate
+	saved         []assistant.ScheduledRun
 }
 
 type triggeredUpdate struct {
@@ -101,6 +141,11 @@ type statusUpdate struct {
 
 func (f *fakeRepository) ListPendingScheduledRuns(context.Context, time.Time) ([]assistant.ScheduledRun, error) {
 	return append([]assistant.ScheduledRun(nil), f.pending...), nil
+}
+
+func (f *fakeRepository) SaveScheduledRun(_ context.Context, scheduledRun assistant.ScheduledRun) error {
+	f.saved = append(f.saved, scheduledRun)
+	return nil
 }
 
 func (f *fakeRepository) UpdateScheduledRunTriggered(_ context.Context, scheduledRunID, runID string, _ time.Time) error {

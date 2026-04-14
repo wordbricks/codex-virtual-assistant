@@ -127,7 +127,7 @@ func (s *RunService) ListScheduledRunsByParent(ctx context.Context, parentRunID 
 	return s.repo.ListScheduledRunsByParent(ctx, parentRunID)
 }
 
-func (s *RunService) CreateScheduledRun(ctx context.Context, parentRunID, scheduledForRaw, prompt string, maxGenerationAttempts int) (assistant.ScheduledRun, error) {
+func (s *RunService) CreateScheduledRun(ctx context.Context, parentRunID, scheduledForRaw, cronExpr, prompt string, maxGenerationAttempts int) (assistant.ScheduledRun, error) {
 	parentRunID = strings.TrimSpace(parentRunID)
 	if parentRunID == "" {
 		return assistant.ScheduledRun{}, errors.New("assistant: parent run id is required")
@@ -142,7 +142,8 @@ func (s *RunService) CreateScheduledRun(ctx context.Context, parentRunID, schedu
 		return assistant.ScheduledRun{}, err
 	}
 
-	scheduledFor, err := assistant.ParseScheduledFor(strings.TrimSpace(scheduledForRaw), s.now().UTC())
+	cronExpr = strings.TrimSpace(cronExpr)
+	scheduledFor, err := resolveScheduledFor(s.now(), strings.TrimSpace(scheduledForRaw), cronExpr)
 	if err != nil {
 		return assistant.ScheduledRun{}, err
 	}
@@ -160,6 +161,7 @@ func (s *RunService) CreateScheduledRun(ctx context.Context, parentRunID, schedu
 		ParentRunID:           parentRun.ID,
 		UserRequestRaw:        prompt,
 		MaxGenerationAttempts: maxGenerationAttempts,
+		CronExpr:              cronExpr,
 		ScheduledFor:          scheduledFor,
 		Status:                assistant.ScheduledRunStatusPending,
 		CreatedAt:             now,
@@ -170,7 +172,7 @@ func (s *RunService) CreateScheduledRun(ctx context.Context, parentRunID, schedu
 	return s.repo.GetScheduledRun(ctx, scheduledRun.ID)
 }
 
-func (s *RunService) UpdateScheduledRun(ctx context.Context, scheduledRunID, scheduledForRaw, prompt string, maxGenerationAttempts int) (assistant.ScheduledRun, error) {
+func (s *RunService) UpdateScheduledRun(ctx context.Context, scheduledRunID, scheduledForRaw, cronExpr, prompt string, maxGenerationAttempts int) (assistant.ScheduledRun, error) {
 	scheduledRun, err := s.repo.GetScheduledRun(ctx, scheduledRunID)
 	if err != nil {
 		return assistant.ScheduledRun{}, err
@@ -182,11 +184,16 @@ func (s *RunService) UpdateScheduledRun(ctx context.Context, scheduledRunID, sch
 	if strings.TrimSpace(prompt) != "" {
 		scheduledRun.UserRequestRaw = strings.TrimSpace(prompt)
 	}
-	if strings.TrimSpace(scheduledForRaw) != "" {
-		scheduledFor, err := assistant.ParseScheduledFor(strings.TrimSpace(scheduledForRaw), s.now().UTC())
+	if strings.TrimSpace(scheduledForRaw) != "" || strings.TrimSpace(cronExpr) != "" {
+		nextCronExpr := scheduledRun.CronExpr
+		if strings.TrimSpace(cronExpr) != "" {
+			nextCronExpr = strings.TrimSpace(cronExpr)
+		}
+		scheduledFor, err := resolveScheduledFor(s.now(), strings.TrimSpace(scheduledForRaw), nextCronExpr)
 		if err != nil {
 			return assistant.ScheduledRun{}, err
 		}
+		scheduledRun.CronExpr = nextCronExpr
 		scheduledRun.ScheduledFor = scheduledFor
 	}
 	if maxGenerationAttempts > 0 {
@@ -197,6 +204,13 @@ func (s *RunService) UpdateScheduledRun(ctx context.Context, scheduledRunID, sch
 		return assistant.ScheduledRun{}, err
 	}
 	return s.repo.GetScheduledRun(ctx, scheduledRunID)
+}
+
+func resolveScheduledFor(now time.Time, scheduledForRaw, cronExpr string) (time.Time, error) {
+	if cronExpr != "" {
+		return assistant.NextCronOccurrence(cronExpr, now.In(time.Local))
+	}
+	return assistant.ParseScheduledFor(scheduledForRaw, now.UTC())
 }
 
 func (s *RunService) CancelScheduledRun(ctx context.Context, scheduledRunID string) (assistant.ScheduledRun, error) {

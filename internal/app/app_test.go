@@ -108,6 +108,55 @@ func TestNewServesOperatorWorkspaceShell(t *testing.T) {
 	}
 }
 
+func TestNewBootstrapsWorkspaceWikiManagementSchedule(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	cfg := config.Config{
+		HTTPAddr:              "127.0.0.1:0",
+		DataDir:               dataDir,
+		DatabasePath:          filepath.Join(dataDir, "assistant.db"),
+		ArtifactDir:           filepath.Join(dataDir, "artifacts"),
+		DefaultModel:          config.FixedModel,
+		MaxGenerationAttempts: 3,
+		CodexBin:              "codex",
+		CodexCwd:              dataDir,
+		CodexApprovalPolicy:   "never",
+		CodexSandboxMode:      "workspace-write",
+		CodexNetworkAccess:    true,
+	}
+
+	app, err := NewWithExecutor(cfg, wtl.NewHeuristicPhaseExecutor(time.Now))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	run, err := app.store.GetRun(context.Background(), workspaceWikiManagementRootRunID)
+	if err != nil {
+		t.Fatalf("GetRun(root) error = %v", err)
+	}
+	if run.ChatID != workspaceWikiManagementChatID {
+		t.Fatalf("run.ChatID = %q, want %q", run.ChatID, workspaceWikiManagementChatID)
+	}
+
+	scheduledRun, err := app.store.GetScheduledRun(context.Background(), workspaceWikiManagementSchedule)
+	if err != nil {
+		t.Fatalf("GetScheduledRun() error = %v", err)
+	}
+	if scheduledRun.ParentRunID != workspaceWikiManagementRootRunID {
+		t.Fatalf("scheduledRun.ParentRunID = %q, want %q", scheduledRun.ParentRunID, workspaceWikiManagementRootRunID)
+	}
+	if scheduledRun.CronExpr != workspaceWikiManagementCronExpr {
+		t.Fatalf("scheduledRun.CronExpr = %q, want %q", scheduledRun.CronExpr, workspaceWikiManagementCronExpr)
+	}
+	if scheduledRun.Status != assistant.ScheduledRunStatusPending {
+		t.Fatalf("scheduledRun.Status = %q, want pending", scheduledRun.Status)
+	}
+	if !strings.Contains(scheduledRun.UserRequestRaw, "cva workspace lint") {
+		t.Fatalf("scheduledRun.UserRequestRaw missing workspace lint instruction")
+	}
+}
+
 func TestNewAppCompletesRunEndToEnd(t *testing.T) {
 	t.Parallel()
 

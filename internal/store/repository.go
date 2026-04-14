@@ -251,6 +251,7 @@ INSERT INTO scheduled_runs (
 	parent_run_id,
 	user_request_raw,
 	max_generation_attempts,
+	cron_expr,
 	scheduled_for,
 	status,
 	run_id,
@@ -268,6 +269,7 @@ INSERT INTO scheduled_runs (
 	%s,
 	%s,
 	%s,
+	%s,
 	%s
 )
 ON CONFLICT(id) DO UPDATE SET
@@ -275,13 +277,14 @@ ON CONFLICT(id) DO UPDATE SET
 	parent_run_id = excluded.parent_run_id,
 	user_request_raw = excluded.user_request_raw,
 	max_generation_attempts = excluded.max_generation_attempts,
+	cron_expr = excluded.cron_expr,
 	scheduled_for = excluded.scheduled_for,
 	status = excluded.status,
 	run_id = excluded.run_id,
 	error_message = excluded.error_message,
 	created_at = excluded.created_at,
 	triggered_at = excluded.triggered_at;
-`, sqlText(scheduledRun.ID), sqlText(scheduledRun.ChatID), sqlText(scheduledRun.ParentRunID), sqlText(scheduledRun.UserRequestRaw), scheduledRun.MaxGenerationAttempts, sqlTime(scheduledRun.ScheduledFor), sqlText(string(scheduledRun.Status)), sqlNullableText(scheduledRun.RunID), sqlText(scheduledRun.ErrorMessage), sqlTime(scheduledRun.CreatedAt), sqlNullableTime(scheduledRun.TriggeredAt))
+`, sqlText(scheduledRun.ID), sqlText(scheduledRun.ChatID), sqlText(scheduledRun.ParentRunID), sqlText(scheduledRun.UserRequestRaw), scheduledRun.MaxGenerationAttempts, sqlText(strings.TrimSpace(scheduledRun.CronExpr)), sqlTime(scheduledRun.ScheduledFor), sqlText(string(scheduledRun.Status)), sqlNullableText(scheduledRun.RunID), sqlText(scheduledRun.ErrorMessage), sqlTime(scheduledRun.CreatedAt), sqlNullableTime(scheduledRun.TriggeredAt))
 
 	return r.exec(ctx, script)
 }
@@ -294,6 +297,7 @@ SELECT
 	parent_run_id,
 	user_request_raw,
 	max_generation_attempts,
+	COALESCE(cron_expr, '') AS cron_expr,
 	scheduled_for,
 	status,
 	COALESCE(run_id, '') AS run_id,
@@ -605,6 +609,7 @@ SELECT
 	parent_run_id,
 	user_request_raw,
 	max_generation_attempts,
+	COALESCE(cron_expr, '') AS cron_expr,
 	scheduled_for,
 	status,
 	COALESCE(run_id, '') AS run_id,
@@ -626,6 +631,7 @@ SELECT
 	parent_run_id,
 	user_request_raw,
 	max_generation_attempts,
+	COALESCE(cron_expr, '') AS cron_expr,
 	scheduled_for,
 	status,
 	COALESCE(run_id, '') AS run_id,
@@ -646,6 +652,7 @@ SELECT
 	parent_run_id,
 	user_request_raw,
 	max_generation_attempts,
+	COALESCE(cron_expr, '') AS cron_expr,
 	scheduled_for,
 	status,
 	COALESCE(run_id, '') AS run_id,
@@ -673,6 +680,7 @@ SELECT
 	parent_run_id,
 	user_request_raw,
 	max_generation_attempts,
+	COALESCE(cron_expr, '') AS cron_expr,
 	scheduled_for,
 	status,
 	COALESCE(run_id, '') AS run_id,
@@ -721,10 +729,15 @@ func (r *SQLiteRepository) UpdateScheduledRun(ctx context.Context, scheduledRun 
 UPDATE scheduled_runs
 SET user_request_raw = %s,
 	max_generation_attempts = %d,
+	cron_expr = %s,
 	scheduled_for = %s,
+	status = %s,
+	run_id = %s,
+	error_message = %s,
+	triggered_at = %s,
 	created_at = %s
 WHERE id = %s;
-`, sqlText(scheduledRun.UserRequestRaw), scheduledRun.MaxGenerationAttempts, sqlTime(scheduledRun.ScheduledFor), sqlTime(scheduledRun.CreatedAt), sqlText(scheduledRun.ID))
+`, sqlText(scheduledRun.UserRequestRaw), scheduledRun.MaxGenerationAttempts, sqlText(strings.TrimSpace(scheduledRun.CronExpr)), sqlTime(scheduledRun.ScheduledFor), sqlText(string(scheduledRun.Status)), sqlNullableText(scheduledRun.RunID), sqlText(strings.TrimSpace(scheduledRun.ErrorMessage)), sqlNullableTime(scheduledRun.TriggeredAt), sqlTime(scheduledRun.CreatedAt), sqlText(scheduledRun.ID))
 	return r.exec(ctx, script)
 }
 
@@ -909,6 +922,9 @@ func (r *SQLiteRepository) migrate(ctx context.Context) error {
 	if err := r.ensureRunColumns(ctx); err != nil {
 		return err
 	}
+	if err := r.ensureScheduledRunColumns(ctx); err != nil {
+		return err
+	}
 	return r.backfillRunChatIDs(ctx)
 }
 
@@ -1034,6 +1050,17 @@ WHERE id = %s;
 		}
 	}
 	return nil
+}
+
+func (r *SQLiteRepository) ensureScheduledRunColumns(ctx context.Context) error {
+	exists, err := r.tableColumnExists(ctx, "scheduled_runs", "cron_expr")
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	return r.exec(ctx, `ALTER TABLE scheduled_runs ADD COLUMN cron_expr TEXT NOT NULL DEFAULT '';`)
 }
 
 func (r *SQLiteRepository) exec(ctx context.Context, script string) error {

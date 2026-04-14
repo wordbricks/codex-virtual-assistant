@@ -54,12 +54,14 @@ type runActionRequest struct {
 
 type createScheduledRunRequest struct {
 	ScheduledFor          string `json:"scheduled_for"`
+	CronExpr              string `json:"cron_expr"`
 	Prompt                string `json:"prompt"`
 	MaxGenerationAttempts int    `json:"max_generation_attempts"`
 }
 
 type updateScheduledRunRequest struct {
 	ScheduledFor          string `json:"scheduled_for"`
+	CronExpr              string `json:"cron_expr"`
 	Prompt                string `json:"prompt"`
 	MaxGenerationAttempts int    `json:"max_generation_attempts"`
 }
@@ -215,7 +217,7 @@ func (a *RunAPI) handleRunByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		scheduledRun, err := a.runs.CreateScheduledRun(r.Context(), runID, request.ScheduledFor, request.Prompt, request.MaxGenerationAttempts)
+		scheduledRun, err := a.runs.CreateScheduledRun(r.Context(), runID, request.ScheduledFor, request.CronExpr, request.Prompt, request.MaxGenerationAttempts)
 		if err != nil {
 			status := http.StatusBadRequest
 			if errors.Is(err, store.ErrNotFound) {
@@ -305,7 +307,7 @@ func (a *RunAPI) handleScheduledRunByID(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		scheduledRun, err := a.runs.UpdateScheduledRun(r.Context(), scheduledRunID, request.ScheduledFor, request.Prompt, request.MaxGenerationAttempts)
+		scheduledRun, err := a.runs.UpdateScheduledRun(r.Context(), scheduledRunID, request.ScheduledFor, request.CronExpr, request.Prompt, request.MaxGenerationAttempts)
 		if err != nil {
 			status := http.StatusBadRequest
 			if errors.Is(err, store.ErrNotFound) {

@@ -32,6 +32,7 @@ type ScheduledRun struct {
 	ParentRunID           string             `json:"parent_run_id"`
 	UserRequestRaw        string             `json:"user_request_raw"`
 	MaxGenerationAttempts int                `json:"max_generation_attempts"`
+	CronExpr              string             `json:"cron_expr,omitempty"`
 	ScheduledFor          time.Time          `json:"scheduled_for"`
 	Status                ScheduledRunStatus `json:"status"`
 	RunID                 string             `json:"run_id,omitempty"`
@@ -75,6 +76,10 @@ func (r ScheduledRun) Validate() error {
 		return errors.New("scheduled run user request is required")
 	case r.MaxGenerationAttempts <= 0:
 		return errors.New("scheduled run max generation attempts must be positive")
+	case strings.TrimSpace(r.CronExpr) != "":
+		if _, err := ParseCronExpr(r.CronExpr); err != nil {
+			return fmt.Errorf("scheduled run cron expr is invalid: %w", err)
+		}
 	case r.ScheduledFor.IsZero():
 		return errors.New("scheduled run scheduled_for is required")
 	case r.CreatedAt.IsZero():
@@ -136,6 +141,73 @@ func ParseScheduledFor(raw string, now time.Time) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("unsupported scheduled_for value %q", value)
 }
 
+type CronExpr struct {
+	Minute fieldMatcher
+	Hour   fieldMatcher
+	Dom    fieldMatcher
+	Month  fieldMatcher
+	Dow    fieldMatcher
+}
+
+func ParseCronExpr(raw string) (CronExpr, error) {
+	parts := strings.Fields(strings.TrimSpace(raw))
+	if len(parts) != 5 {
+		return CronExpr{}, fmt.Errorf("cron expr %q must have 5 fields", raw)
+	}
+
+	minute, err := parseCronField(parts[0], 0, 59)
+	if err != nil {
+		return CronExpr{}, fmt.Errorf("minute: %w", err)
+	}
+	hour, err := parseCronField(parts[1], 0, 23)
+	if err != nil {
+		return CronExpr{}, fmt.Errorf("hour: %w", err)
+	}
+	dom, err := parseCronField(parts[2], 1, 31)
+	if err != nil {
+		return CronExpr{}, fmt.Errorf("day of month: %w", err)
+	}
+	month, err := parseCronField(parts[3], 1, 12)
+	if err != nil {
+		return CronExpr{}, fmt.Errorf("month: %w", err)
+	}
+	dow, err := parseCronField(parts[4], 0, 6)
+	if err != nil {
+		return CronExpr{}, fmt.Errorf("day of week: %w", err)
+	}
+
+	return CronExpr{
+		Minute: minute,
+		Hour:   hour,
+		Dom:    dom,
+		Month:  month,
+		Dow:    dow,
+	}, nil
+}
+
+func NextCronOccurrence(raw string, after time.Time) (time.Time, error) {
+	expr, err := ParseCronExpr(raw)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if after.IsZero() {
+		after = time.Now()
+	}
+	loc := after.Location()
+	if loc == nil {
+		loc = time.Local
+	}
+	cursor := after.In(loc).Truncate(time.Minute).Add(time.Minute)
+	deadline := cursor.AddDate(5, 0, 0)
+	for !cursor.After(deadline) {
+		if expr.matches(cursor) {
+			return cursor.UTC(), nil
+		}
+		cursor = cursor.Add(time.Minute)
+	}
+	return time.Time{}, fmt.Errorf("cron expr %q has no occurrence within 5 years", raw)
+}
+
 func parseClockTime(raw string, now time.Time) (time.Time, bool, error) {
 	parts := strings.Split(raw, ":")
 	if len(parts) != 2 && len(parts) != 3 {
@@ -166,4 +238,114 @@ func parseClockTime(raw string, now time.Time) (time.Time, bool, error) {
 		candidate = candidate.Add(24 * time.Hour)
 	}
 	return candidate, true, nil
+}
+
+type fieldMatcher struct {
+	any    bool
+	values map[int]struct{}
+}
+
+func (m fieldMatcher) match(value int) bool {
+	if m.any {
+		return true
+	}
+	_, ok := m.values[value]
+	return ok
+}
+
+func (c CronExpr) matches(ts time.Time) bool {
+	if !c.Minute.match(ts.Minute()) ||
+		!c.Hour.match(ts.Hour()) ||
+		!c.Month.match(int(ts.Month())) {
+		return false
+	}
+	domMatch := c.Dom.match(ts.Day())
+	dowMatch := c.Dow.match(int(ts.Weekday()))
+	switch {
+	case c.Dom.any && c.Dow.any:
+		return true
+	case c.Dom.any:
+		return dowMatch
+	case c.Dow.any:
+		return domMatch
+	default:
+		return domMatch || dowMatch
+	}
+}
+
+func parseCronField(raw string, minValue, maxValue int) (fieldMatcher, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "*" {
+		return fieldMatcher{any: true}, nil
+	}
+	values := make(map[int]struct{})
+	for _, segment := range strings.Split(raw, ",") {
+		segment = strings.TrimSpace(segment)
+		if segment == "" {
+			return fieldMatcher{}, fmt.Errorf("empty segment in %q", raw)
+		}
+		base := segment
+		step := 1
+		if strings.Contains(segment, "/") {
+			parts := strings.Split(segment, "/")
+			if len(parts) != 2 {
+				return fieldMatcher{}, fmt.Errorf("invalid step segment %q", segment)
+			}
+			base = strings.TrimSpace(parts[0])
+			parsedStep, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+			if err != nil || parsedStep <= 0 {
+				return fieldMatcher{}, fmt.Errorf("invalid step in %q", segment)
+			}
+			step = parsedStep
+		}
+
+		rangeStart, rangeEnd, err := parseCronRange(base, minValue, maxValue)
+		if err != nil {
+			return fieldMatcher{}, err
+		}
+		for value := rangeStart; value <= rangeEnd; value += step {
+			values[value] = struct{}{}
+		}
+	}
+	if len(values) == 0 {
+		return fieldMatcher{}, fmt.Errorf("field %q selects no values", raw)
+	}
+	return fieldMatcher{values: values}, nil
+}
+
+func parseCronRange(raw string, minValue, maxValue int) (int, int, error) {
+	raw = strings.TrimSpace(raw)
+	switch {
+	case raw == "" || raw == "*":
+		return minValue, maxValue, nil
+	case strings.Contains(raw, "-"):
+		parts := strings.Split(raw, "-")
+		if len(parts) != 2 {
+			return 0, 0, fmt.Errorf("invalid range %q", raw)
+		}
+		start, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid range start in %q", raw)
+		}
+		end, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid range end in %q", raw)
+		}
+		if start > end {
+			return 0, 0, fmt.Errorf("descending range %q", raw)
+		}
+		if start < minValue || end > maxValue {
+			return 0, 0, fmt.Errorf("range %q is out of bounds", raw)
+		}
+		return start, end, nil
+	default:
+		value, err := strconv.Atoi(raw)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid value %q", raw)
+		}
+		if value < minValue || value > maxValue {
+			return 0, 0, fmt.Errorf("value %q is out of bounds", raw)
+		}
+		return value, value, nil
+	}
 }

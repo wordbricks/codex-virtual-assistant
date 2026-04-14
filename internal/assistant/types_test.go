@@ -125,6 +125,23 @@ func TestParseScheduledForSupportsRelativeAndClockTimes(t *testing.T) {
 	}
 }
 
+func TestNextCronOccurrenceSupportsDailyMidnight(t *testing.T) {
+	t.Parallel()
+
+	loc := time.FixedZone("PDT", -7*60*60)
+	now := time.Date(2026, time.April, 13, 10, 15, 0, 0, loc)
+
+	next, err := NextCronOccurrence("0 0 * * *", now)
+	if err != nil {
+		t.Fatalf("NextCronOccurrence() error = %v", err)
+	}
+
+	want := time.Date(2026, time.April, 14, 7, 0, 0, 0, time.UTC)
+	if !next.Equal(want) {
+		t.Fatalf("next = %s, want %s", next, want)
+	}
+}
+
 func TestScheduledRunValidateRequiresTriggeredRunID(t *testing.T) {
 	t.Parallel()
 

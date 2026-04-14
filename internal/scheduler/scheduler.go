@@ -11,6 +11,7 @@ import (
 
 type Repository interface {
 	ListPendingScheduledRuns(context.Context, time.Time) ([]assistant.ScheduledRun, error)
+	SaveScheduledRun(context.Context, assistant.ScheduledRun) error
 	UpdateScheduledRunTriggered(context.Context, string, string, time.Time) error
 	UpdateScheduledRunStatus(context.Context, string, assistant.ScheduledRunStatus, string) error
 	AddRunEvent(context.Context, assistant.RunEvent) error
@@ -88,8 +89,24 @@ func (s *Scheduler) triggerScheduledRun(ctx context.Context, scheduledRun assist
 	createdRun, err := s.runs.CreateRun(ctx, scheduledRun.UserRequestRaw, scheduledRun.MaxGenerationAttempts, scheduledRun.ParentRunID)
 	if err != nil {
 		message := strings.TrimSpace(err.Error())
-		if updateErr := s.repo.UpdateScheduledRunStatus(ctx, scheduledRun.ID, assistant.ScheduledRunStatusFailed, message); updateErr != nil {
-			return updateErr
+		if strings.TrimSpace(scheduledRun.CronExpr) != "" {
+			nextScheduledFor, nextErr := assistant.NextCronOccurrence(scheduledRun.CronExpr, s.now().In(time.Local))
+			if nextErr != nil {
+				return nextErr
+			}
+			triggeredAt := s.now().UTC()
+			scheduledRun.Status = assistant.ScheduledRunStatusPending
+			scheduledRun.RunID = ""
+			scheduledRun.ErrorMessage = message
+			scheduledRun.TriggeredAt = &triggeredAt
+			scheduledRun.ScheduledFor = nextScheduledFor
+			if saveErr := s.repo.SaveScheduledRun(ctx, scheduledRun); saveErr != nil {
+				return saveErr
+			}
+		} else {
+			if updateErr := s.repo.UpdateScheduledRunStatus(ctx, scheduledRun.ID, assistant.ScheduledRunStatusFailed, message); updateErr != nil {
+				return updateErr
+			}
 		}
 		return s.publish(ctx, assistant.RunEvent{
 			ID:        assistant.NewID("event", s.now().UTC()),
@@ -106,8 +123,23 @@ func (s *Scheduler) triggerScheduledRun(ctx context.Context, scheduledRun assist
 	}
 
 	triggeredAt := s.now().UTC()
-	if err := s.repo.UpdateScheduledRunTriggered(ctx, scheduledRun.ID, createdRun.ID, triggeredAt); err != nil {
-		return err
+	if strings.TrimSpace(scheduledRun.CronExpr) != "" {
+		nextScheduledFor, err := assistant.NextCronOccurrence(scheduledRun.CronExpr, s.now().In(time.Local))
+		if err != nil {
+			return err
+		}
+		scheduledRun.Status = assistant.ScheduledRunStatusPending
+		scheduledRun.RunID = createdRun.ID
+		scheduledRun.ErrorMessage = ""
+		scheduledRun.TriggeredAt = &triggeredAt
+		scheduledRun.ScheduledFor = nextScheduledFor
+		if err := s.repo.SaveScheduledRun(ctx, scheduledRun); err != nil {
+			return err
+		}
+	} else {
+		if err := s.repo.UpdateScheduledRunTriggered(ctx, scheduledRun.ID, createdRun.ID, triggeredAt); err != nil {
+			return err
+		}
 	}
 	return s.publish(ctx, assistant.RunEvent{
 		ID:        assistant.NewID("event", triggeredAt),

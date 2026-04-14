@@ -55,6 +55,9 @@ func NewWithExecutorAndMessenger(cfg config.Config, executor wtl.CodexPhaseExecu
 	if err != nil {
 		return nil, err
 	}
+	if err := ensureWorkspaceWikiManagementSchedule(context.Background(), repo, cfg, time.Now()); err != nil {
+		return nil, err
+	}
 	projectManager := project.NewManager(cfg.DataDir, cfg.EffectiveProjectsDir())
 	if err := projectManager.EnsureBaseScaffold(); err != nil {
 		return nil, err

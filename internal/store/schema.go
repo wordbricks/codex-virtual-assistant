@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS scheduled_runs (
 	parent_run_id TEXT NOT NULL,
 	user_request_raw TEXT NOT NULL,
 	max_generation_attempts INTEGER NOT NULL,
+	cron_expr TEXT NOT NULL DEFAULT '',
 	scheduled_for TEXT NOT NULL,
 	status TEXT NOT NULL,
 	run_id TEXT,

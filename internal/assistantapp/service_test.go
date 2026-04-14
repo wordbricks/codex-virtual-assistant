@@ -66,6 +66,33 @@ func TestRunServiceCreateRunRejectsMissingParent(t *testing.T) {
 	}
 }
 
+func TestRunServiceCreateScheduledRunSupportsCron(t *testing.T) {
+	t.Parallel()
+
+	repo := openServiceTestRepository(t)
+	now := time.Date(2026, time.April, 13, 10, 15, 0, 0, time.FixedZone("PDT", -7*60*60))
+
+	parent := assistant.NewRun("Maintain the workspace wiki.", now.Add(-time.Hour), 2)
+	parent.Status = assistant.RunStatusCompleted
+	parent.Phase = assistant.RunPhaseCompleted
+	parent.CompletedAt = ptrTime(now.Add(-45 * time.Minute))
+	parent.UpdatedAt = now.Add(-45 * time.Minute)
+	if err := repo.SaveRun(context.Background(), parent); err != nil {
+		t.Fatalf("SaveRun(parent) error = %v", err)
+	}
+
+	engine := &recordingEngine{repo: repo}
+	service := NewRunService(context.Background(), repo, engine, fixedPolicy{}, func() time.Time { return now })
+
+	scheduledRun, err := service.CreateScheduledRun(context.Background(), parent.ID, "", "0 0 * * *", "Perform the daily workspace wiki management pass.", 0)
+	if err != nil {
+		t.Fatalf("CreateScheduledRun() error = %v", err)
+	}
+	if scheduledRun.CronExpr != "0 0 * * *" {
+		t.Fatalf("scheduledRun.CronExpr = %q, want daily cron", scheduledRun.CronExpr)
+	}
+}
+
 func TestRunServiceResumeRunRejectsNonWaitingRun(t *testing.T) {
 	t.Parallel()
 

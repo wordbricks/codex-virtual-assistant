@@ -123,6 +123,7 @@ type scheduledRunRow struct {
 	ParentRunID           string `json:"parent_run_id"`
 	UserRequestRaw        string `json:"user_request_raw"`
 	MaxGenerationAttempts int    `json:"max_generation_attempts"`
+	CronExpr              string `json:"cron_expr"`
 	ScheduledFor          string `json:"scheduled_for"`
 	Status                string `json:"status"`
 	RunID                 string `json:"run_id"`
@@ -365,6 +366,7 @@ func (r scheduledRunRow) toAssistantScheduledRun() (assistant.ScheduledRun, erro
 		ParentRunID:           r.ParentRunID,
 		UserRequestRaw:        r.UserRequestRaw,
 		MaxGenerationAttempts: r.MaxGenerationAttempts,
+		CronExpr:              strings.TrimSpace(r.CronExpr),
 		ScheduledFor:          scheduledFor,
 		Status:                assistant.ScheduledRunStatus(r.Status),
 		RunID:                 strings.TrimSpace(r.RunID),

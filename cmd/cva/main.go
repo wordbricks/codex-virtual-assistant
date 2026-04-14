@@ -374,6 +374,7 @@ func cmdSchedule(ctx context.Context, c *Client, args []string, jsonMode, intera
 	case "create":
 		var runID string
 		var scheduledFor string
+		var cronExpr string
 		maxAttempts := 0
 		var filtered []string
 		for i := 1; i < len(args); i++ {
@@ -388,6 +389,11 @@ func cmdSchedule(ctx context.Context, c *Client, args []string, jsonMode, intera
 				i++
 			case strings.HasPrefix(args[i], "--at="):
 				scheduledFor = strings.TrimPrefix(args[i], "--at=")
+			case args[i] == "--cron" && i+1 < len(args):
+				cronExpr = args[i+1]
+				i++
+			case strings.HasPrefix(args[i], "--cron="):
+				cronExpr = strings.TrimPrefix(args[i], "--cron=")
 			case args[i] == "--max-attempts" && i+1 < len(args):
 				var err error
 				maxAttempts, err = parsePositiveInt(args[i+1])
@@ -405,10 +411,10 @@ func cmdSchedule(ctx context.Context, c *Client, args []string, jsonMode, intera
 				filtered = append(filtered, args[i])
 			}
 		}
-		if runID == "" || scheduledFor == "" || len(filtered) == 0 {
-			return fmt.Errorf("usage: cva schedule create --run <run_id> --at <scheduled_for> [--max-attempts N] \"prompt\"")
+		if runID == "" || (scheduledFor == "" && cronExpr == "") || len(filtered) == 0 {
+			return fmt.Errorf("usage: cva schedule create --run <run_id> (--at <scheduled_for> | --cron <expr>) [--max-attempts N] \"prompt\"")
 		}
-		scheduledRun, err := c.CreateScheduledRun(ctx, runID, scheduledFor, strings.Join(filtered, " "), maxAttempts)
+		scheduledRun, err := c.CreateScheduledRun(ctx, runID, scheduledFor, cronExpr, strings.Join(filtered, " "), maxAttempts)
 		if err != nil {
 			return err
 		}
@@ -423,6 +429,7 @@ func cmdSchedule(ctx context.Context, c *Client, args []string, jsonMode, intera
 		}
 		scheduledRunID := args[1]
 		var scheduledFor string
+		var cronExpr string
 		var prompt string
 		maxAttempts := 0
 		for i := 2; i < len(args); i++ {
@@ -432,6 +439,11 @@ func cmdSchedule(ctx context.Context, c *Client, args []string, jsonMode, intera
 				i++
 			case strings.HasPrefix(args[i], "--at="):
 				scheduledFor = strings.TrimPrefix(args[i], "--at=")
+			case args[i] == "--cron" && i+1 < len(args):
+				cronExpr = args[i+1]
+				i++
+			case strings.HasPrefix(args[i], "--cron="):
+				cronExpr = strings.TrimPrefix(args[i], "--cron=")
 			case args[i] == "--prompt" && i+1 < len(args):
 				prompt = args[i+1]
 				i++
@@ -454,10 +466,10 @@ func cmdSchedule(ctx context.Context, c *Client, args []string, jsonMode, intera
 				return fmt.Errorf("unknown schedule update arg: %s", args[i])
 			}
 		}
-		if scheduledFor == "" && prompt == "" && maxAttempts == 0 {
-			return fmt.Errorf("usage: cva schedule update <id> [--at <scheduled_for>] [--prompt <text>] [--max-attempts N]")
+		if scheduledFor == "" && cronExpr == "" && prompt == "" && maxAttempts == 0 {
+			return fmt.Errorf("usage: cva schedule update <id> [--at <scheduled_for>] [--cron <expr>] [--prompt <text>] [--max-attempts N]")
 		}
-		scheduledRun, err := c.UpdateScheduledRun(ctx, scheduledRunID, scheduledFor, prompt, maxAttempts)
+		scheduledRun, err := c.UpdateScheduledRun(ctx, scheduledRunID, scheduledFor, cronExpr, prompt, maxAttempts)
 		if err != nil {
 			return err
 		}

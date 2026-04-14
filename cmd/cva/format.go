@@ -189,6 +189,9 @@ func formatScheduledRunList(scheduledRuns []assistant.ScheduledRun) string {
 	var b strings.Builder
 	for _, scheduledRun := range scheduledRuns {
 		fmt.Fprintf(&b, "[%s] %s  %s\n", scheduledRun.Status, scheduledRun.ID, scheduledRun.ScheduledFor.Local().Format(time.DateTime))
+		if strings.TrimSpace(scheduledRun.CronExpr) != "" {
+			fmt.Fprintf(&b, "      cron: %s\n", scheduledRun.CronExpr)
+		}
 		fmt.Fprintf(&b, "      %s\n", truncate(scheduledRun.UserRequestRaw, 80))
 	}
 	return b.String()
@@ -200,6 +203,9 @@ func formatScheduledRun(scheduledRun assistant.ScheduledRun) string {
 	fmt.Fprintf(&b, "  Chat:      %s\n", scheduledRun.ChatID)
 	fmt.Fprintf(&b, "  Parent:    %s\n", scheduledRun.ParentRunID)
 	fmt.Fprintf(&b, "  Scheduled: %s\n", scheduledRun.ScheduledFor.Local().Format(time.DateTime))
+	if strings.TrimSpace(scheduledRun.CronExpr) != "" {
+		fmt.Fprintf(&b, "  Cron:      %s\n", scheduledRun.CronExpr)
+	}
 	fmt.Fprintf(&b, "  Created:   %s\n", scheduledRun.CreatedAt.Local().Format(time.DateTime))
 	if scheduledRun.TriggeredAt != nil {
 		fmt.Fprintf(&b, "  Triggered: %s\n", scheduledRun.TriggeredAt.Local().Format(time.DateTime))

@@ -221,6 +221,7 @@ func TestSQLiteRepositoryScheduledRunsRoundTrip(t *testing.T) {
 		ParentRunID:           parent.ID,
 		UserRequestRaw:        "Call hospital A.",
 		MaxGenerationAttempts: 2,
+		CronExpr:              "0 0 * * *",
 		ScheduledFor:          now.Add(30 * time.Minute),
 		Status:                assistant.ScheduledRunStatusPending,
 		CreatedAt:             now,
@@ -280,6 +281,9 @@ func TestSQLiteRepositoryScheduledRunsRoundTrip(t *testing.T) {
 	}
 	if updatedFirst.Status != assistant.ScheduledRunStatusTriggered || updatedFirst.RunID != childRun.ID {
 		t.Fatalf("updatedFirst = %#v, want triggered %s", updatedFirst, childRun.ID)
+	}
+	if updatedFirst.CronExpr != first.CronExpr {
+		t.Fatalf("updatedFirst.CronExpr = %q, want %q", updatedFirst.CronExpr, first.CronExpr)
 	}
 	if updatedFirst.TriggeredAt == nil || !updatedFirst.TriggeredAt.Equal(triggeredAt) {
 		t.Fatalf("TriggeredAt = %#v, want %s", updatedFirst.TriggeredAt, triggeredAt)
