@@ -30,6 +30,9 @@ func TestEnsureBaseScaffoldCreatesNoProject(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dataDir, "projects", DefaultProjectSlug, "wiki")); !os.IsNotExist(err) {
 		t.Fatalf("no_project wiki stat err = %v, want not exists", err)
 	}
+	if _, err := os.Stat(filepath.Join(dataDir, "projects", DefaultProjectSlug, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("no_project AGENTS.md stat err = %v, want not exists", err)
+	}
 }
 
 func TestEnsureProjectCreatesProjectMarkdown(t *testing.T) {
@@ -68,6 +71,17 @@ func TestEnsureProjectCreatesProjectMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "Grow the user's X.com account") {
 		t.Fatalf("PROJECT.md = %q, want project description", string(content))
+	}
+	agentsFile := filepath.Join(project.WorkspaceDir, "AGENTS.md")
+	agentsContent, err := os.ReadFile(agentsFile)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", agentsFile, err)
+	}
+	if !strings.Contains(string(agentsContent), "Project name: X Growth") {
+		t.Fatalf("AGENTS.md = %q, want project name", string(agentsContent))
+	}
+	if !strings.Contains(string(agentsContent), "wiki/index.md") {
+		t.Fatalf("AGENTS.md = %q, want wiki guidance", string(agentsContent))
 	}
 	for _, relPath := range []string{
 		filepath.Join("wiki", "overview.md"),
