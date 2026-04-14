@@ -452,6 +452,7 @@ func cmdSchedule(ctx context.Context, c *Client, args []string, jsonMode bool) e
 	case "list":
 		var chatID string
 		var status assistant.ScheduledRunStatus
+		var interactive bool
 		for i := 1; i < len(args); i++ {
 			switch {
 			case args[i] == "--chat" && i+1 < len(args):
@@ -464,6 +465,8 @@ func cmdSchedule(ctx context.Context, c *Client, args []string, jsonMode bool) e
 				i++
 			case strings.HasPrefix(args[i], "--status="):
 				status = assistant.ScheduledRunStatus(strings.TrimPrefix(args[i], "--status="))
+			case args[i] == "--interactive":
+				interactive = true
 			default:
 				return fmt.Errorf("unknown schedule list arg: %s", args[i])
 			}
@@ -474,6 +477,14 @@ func cmdSchedule(ctx context.Context, c *Client, args []string, jsonMode bool) e
 		}
 		if jsonMode {
 			return printJSON(scheduledRuns)
+		}
+		if interactive && isTTY(os.Stdin) && isTTY(os.Stdout) {
+			selected, err := pickScheduledRun(ctx, scheduledRuns)
+			if err != nil || selected == nil {
+				return err
+			}
+			fmt.Print(formatScheduledRun(*selected))
+			return nil
 		}
 		fmt.Print(formatScheduledRunList(scheduledRuns))
 		return nil
@@ -581,7 +592,7 @@ Commands:
   resume <run_id> [key=value ...]        Resume a waiting run with input
   schedule create --run ID --at WHEN "prompt"                   Create a scheduled run
   schedule update <scheduled_run_id> [--at WHEN] [--prompt P]   Update a pending scheduled run
-  schedule list [--chat ID] [--status S]                        List scheduled runs
+  schedule list [--chat ID] [--status S] [--interactive]        List scheduled runs
   schedule show <scheduled_run_id>                              Show a scheduled run
   schedule cancel <scheduled_run_id>                            Cancel a pending scheduled run
 
