@@ -61,6 +61,29 @@ var (
 		".py":  {},
 		".ts":  {},
 	}
+	proceduralTopicPrefixes = []string{
+		"continue-",
+		"execute-",
+		"finish-",
+		"normalize-",
+		"preserve-",
+		"produce-",
+		"re-evaluate-",
+		"re-review-",
+		"re-run-",
+		"recover-",
+		"repeat-",
+		"retry-",
+		"return-",
+		"review-",
+		"run-",
+		"safely-",
+		"schedule-",
+		"set-the-",
+	}
+	proceduralReportPrefixes = []string{
+		"run-run_",
+	}
 )
 
 func LintProject(projectDir string) (LintReport, error) {
@@ -128,6 +151,52 @@ func LintProject(projectDir string) (LintReport, error) {
 		}
 	} else if !os.IsNotExist(err) {
 		return LintReport{}, fmt.Errorf("read raw/imports: %w", err)
+	}
+
+	topicsDir := filepath.Join(projectDir, "wiki", "topics")
+	topicEntries, err := os.ReadDir(topicsDir)
+	if err == nil {
+		for _, entry := range topicEntries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
+				continue
+			}
+			name := strings.ToLower(entry.Name())
+			for _, prefix := range proceduralTopicPrefixes {
+				if strings.HasPrefix(name, prefix) {
+					report.Failures = append(report.Failures, LintFailure{
+						Kind:    "procedural_topic_page",
+						Path:    filepath.ToSlash(filepath.Join("wiki", "topics", entry.Name())),
+						Message: "topic pages should be durable concepts, not prompt-like procedural tasks",
+					})
+					break
+				}
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return LintReport{}, fmt.Errorf("read wiki/topics: %w", err)
+	}
+
+	reportsDir := filepath.Join(projectDir, "wiki", "reports")
+	reportEntries, err := os.ReadDir(reportsDir)
+	if err == nil {
+		for _, entry := range reportEntries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
+				continue
+			}
+			name := strings.ToLower(entry.Name())
+			for _, prefix := range proceduralReportPrefixes {
+				if strings.HasPrefix(name, prefix) {
+					report.Failures = append(report.Failures, LintFailure{
+						Kind:    "procedural_report_page",
+						Path:    filepath.ToSlash(filepath.Join("wiki", "reports", entry.Name())),
+						Message: "run-history dump pages should be archived under runs/ rather than kept as durable wiki reports",
+					})
+					break
+				}
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return LintReport{}, fmt.Errorf("read wiki/reports: %w", err)
 	}
 
 	sort.Slice(report.Failures, func(i, j int) bool {
