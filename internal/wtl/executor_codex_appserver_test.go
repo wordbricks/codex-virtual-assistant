@@ -309,6 +309,35 @@ func TestAppServerEnvUsesProjectBrowserSettings(t *testing.T) {
 	}
 }
 
+func TestPrepareArtifactCaptureUsesProjectArtifactDirectory(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	session := newAppServerTurnSession(AppServerPhaseExecutorConfig{
+		ProjectsDir: filepath.Join(baseDir, "projects"),
+		ArtifactDir: filepath.Join(baseDir, "artifacts"),
+	}, func() time.Time {
+		return time.Date(2026, time.April, 5, 4, 0, 0, 0, time.UTC)
+	})
+
+	session.prepareArtifactCapture(CodexPhaseRequest{
+		ProjectSlug: "docs-bot",
+		RunID:       "run_123",
+		AttemptID:   "attempt_456",
+	})
+
+	wantDir := filepath.Join(baseDir, "projects", "docs-bot", "artifacts", "run_123", "attempt_456")
+	if session.runArtifactDir != wantDir {
+		t.Fatalf("runArtifactDir = %q, want %q", session.runArtifactDir, wantDir)
+	}
+	if session.runArtifactRelDir != filepath.Join("docs-bot", "run_123", "attempt_456") {
+		t.Fatalf("runArtifactRelDir = %q", session.runArtifactRelDir)
+	}
+	if _, err := os.Stat(wantDir); err != nil {
+		t.Fatalf("artifact dir stat err = %v", err)
+	}
+}
+
 func TestBuildPhaseResultPreservesReporterEnvelope(t *testing.T) {
 	t.Parallel()
 

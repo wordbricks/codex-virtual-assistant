@@ -118,3 +118,19 @@ func TestLoadFromEnvHonorsOverrides(t *testing.T) {
 		t.Fatalf("SchedulerInterval = %s, want 45s", cfg.SchedulerInterval)
 	}
 }
+
+func TestProjectArtifactDirUsesProjectsDir(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		DataDir:     "/tmp/cva/workspace",
+		ProjectsDir: "/tmp/cva/workspace/projects",
+	}
+
+	if got := cfg.ProjectArtifactDir("docs-bot"); got != "/tmp/cva/workspace/projects/docs-bot/artifacts" {
+		t.Fatalf("ProjectArtifactDir(docs-bot) = %q", got)
+	}
+	if got := cfg.ProjectArtifactDir(""); got != "/tmp/cva/workspace/projects/no_project/artifacts" {
+		t.Fatalf("ProjectArtifactDir(\"\") = %q", got)
+	}
+}

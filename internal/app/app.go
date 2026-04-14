@@ -33,6 +33,7 @@ func New(cfg config.Config) (*App, error) {
 	executor := wtl.NewAppServerPhaseExecutor(wtl.AppServerPhaseExecutorConfig{
 		BinaryPath:     cfg.CodexBin,
 		Cwd:            cfg.CodexCwd,
+		ProjectsDir:    cfg.EffectiveProjectsDir(),
 		ArtifactDir:    cfg.ArtifactDir,
 		Model:          cfg.DefaultModel,
 		ApprovalPolicy: cfg.CodexApprovalPolicy,

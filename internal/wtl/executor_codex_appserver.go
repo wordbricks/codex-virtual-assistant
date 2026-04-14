@@ -30,6 +30,7 @@ var lookupAgentBrowserCLIPath = detectAgentBrowserCLIPath
 type AppServerPhaseExecutorConfig struct {
 	BinaryPath         string
 	Cwd                string
+	ProjectsDir        string
 	ArtifactDir        string
 	Model              string
 	ApprovalPolicy     string
@@ -1212,12 +1213,19 @@ func (s *appServerTurnSession) prepareArtifactCapture(request CodexPhaseRequest)
 	s.browserFrameRel = nil
 	s.runArtifactDir = ""
 	s.runArtifactRelDir = ""
-	if strings.TrimSpace(s.config.ArtifactDir) == "" || strings.TrimSpace(request.RunID) == "" || strings.TrimSpace(request.AttemptID) == "" {
+	if (strings.TrimSpace(s.config.ProjectsDir) == "" && strings.TrimSpace(s.config.ArtifactDir) == "") || strings.TrimSpace(request.RunID) == "" || strings.TrimSpace(request.AttemptID) == "" {
 		return
 	}
 
-	relDir := filepath.Join(firstNonEmpty(strings.TrimSpace(request.ProjectSlug), "no_project"), request.RunID, request.AttemptID)
-	absDir := filepath.Join(s.config.ArtifactDir, relDir)
+	projectSlug := firstNonEmpty(strings.TrimSpace(request.ProjectSlug), "no_project")
+	relDir := filepath.Join(projectSlug, request.RunID, request.AttemptID)
+	artifactRoot := strings.TrimSpace(s.config.ProjectsDir)
+	if artifactRoot != "" {
+		artifactRoot = filepath.Join(artifactRoot, projectSlug, "artifacts")
+	} else {
+		artifactRoot = filepath.Join(s.config.ArtifactDir, projectSlug)
+	}
+	absDir := filepath.Join(artifactRoot, request.RunID, request.AttemptID)
 	if err := os.MkdirAll(absDir, 0o755); err != nil {
 		return
 	}

@@ -15,6 +15,7 @@ const (
 	defaultHTTPAddr             = "127.0.0.1:8080"
 	defaultDataDir              = "workspace"
 	defaultProjectsDirName      = "projects"
+	defaultProjectSlug          = "no_project"
 	defaultMaxGenerationAttempt = 3
 	defaultCodexBin             = "codex"
 	defaultCodexApprovalPolicy  = "never"
@@ -208,6 +209,14 @@ func (c Config) EffectiveProjectsDir() string {
 		return filepath.Clean(filepath.Join(c.DataDir, defaultProjectsDirName))
 	}
 	return defaultProjectsDirName
+}
+
+func (c Config) ProjectArtifactDir(projectSlug string) string {
+	slug := strings.TrimSpace(projectSlug)
+	if slug == "" {
+		slug = defaultProjectSlug
+	}
+	return filepath.Clean(filepath.Join(c.EffectiveProjectsDir(), slug, "artifacts"))
 }
 
 func resolvePath(baseDir, value string) (string, error) {

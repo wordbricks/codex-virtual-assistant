@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -514,6 +515,7 @@ func TestRunAPIArtifactURL(t *testing.T) {
 	t.Parallel()
 
 	artifactDir := t.TempDir()
+	projectsDir := filepath.Join(t.TempDir(), "projects")
 	relativePath := filepath.Join("run_123", "attempt_123", "browser-replay.mp4")
 	absolutePath := filepath.Join(artifactDir, relativePath)
 	if err := os.MkdirAll(filepath.Dir(absolutePath), 0o755); err != nil {
@@ -523,15 +525,59 @@ func TestRunAPIArtifactURL(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	api := &RunAPI{cfg: config.Config{ArtifactDir: artifactDir}}
+	projectRelativePath := filepath.Join("docs-bot", "run_456", "attempt_789", "browser-replay.mp4")
+	projectAbsolutePath := filepath.Join(projectsDir, "docs-bot", "artifacts", "run_456", "attempt_789", "browser-replay.mp4")
+	if err := os.MkdirAll(filepath.Dir(projectAbsolutePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(project) error = %v", err)
+	}
+	if err := os.WriteFile(projectAbsolutePath, []byte("video"), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+
+	api := &RunAPI{cfg: config.Config{ArtifactDir: artifactDir, ProjectsDir: projectsDir}}
 	if got := api.artifactURL(relativePath); got != "/artifacts/run_123/attempt_123/browser-replay.mp4" {
 		t.Fatalf("artifactURL(relative) = %q", got)
 	}
 	if got := api.artifactURL(absolutePath); got != "/artifacts/run_123/attempt_123/browser-replay.mp4" {
 		t.Fatalf("artifactURL(absolute) = %q", got)
 	}
+	if got := api.artifactURL(projectRelativePath); got != "/artifacts/docs-bot/run_456/attempt_789/browser-replay.mp4" {
+		t.Fatalf("artifactURL(project relative) = %q", got)
+	}
+	if got := api.artifactURL(projectAbsolutePath); got != "/artifacts/docs-bot/run_456/attempt_789/browser-replay.mp4" {
+		t.Fatalf("artifactURL(project absolute) = %q", got)
+	}
 	if got := api.artifactURL(filepath.Join(t.TempDir(), "outside.mp4")); got != "" {
 		t.Fatalf("artifactURL(outside) = %q, want empty", got)
+	}
+}
+
+func TestRunAPIHandleArtifactServesProjectArtifact(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	projectsDir := filepath.Join(dataDir, "projects")
+	projectArtifact := filepath.Join(projectsDir, "docs-bot", "artifacts", "run_123", "attempt_456", "browser-replay.mp4")
+	if err := os.MkdirAll(filepath.Dir(projectArtifact), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(projectArtifact, []byte("video"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	api := &RunAPI{cfg: config.Config{
+		ArtifactDir: filepath.Join(dataDir, "artifacts"),
+		ProjectsDir: projectsDir,
+	}}
+	request := httptest.NewRequest(http.MethodGet, path.Join("/artifacts", "docs-bot", "run_123", "attempt_456", "browser-replay.mp4"), nil)
+	recorder := httptest.NewRecorder()
+
+	api.handleArtifact(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("handleArtifact status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if body := recorder.Body.String(); body != "video" {
+		t.Fatalf("handleArtifact body = %q, want %q", body, "video")
 	}
 }
 

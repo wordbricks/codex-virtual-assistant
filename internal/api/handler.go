@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -95,7 +96,7 @@ func NewHandler(cfg config.Config, runs *assistantapp.RunService, events *EventB
 	mux.HandleFunc("/api/v1/scheduled/", api.handleScheduledRunByID)
 	mux.HandleFunc("/api/v1/projects", api.handleProjects)
 	mux.HandleFunc("/api/v1/projects/", api.handleProjectBySlug)
-	mux.Handle("/artifacts/", http.StripPrefix("/artifacts/", http.FileServer(http.Dir(cfg.ArtifactDir))))
+	mux.HandleFunc("/artifacts/", api.handleArtifact)
 	mux.Handle("/assets/", http.StripPrefix("/", http.FileServer(http.FS(staticFS))))
 	mux.HandleFunc("/", api.serveIndex)
 	return mux, nil
@@ -393,6 +394,16 @@ func (a *RunAPI) enrichArtifactURLs(record *store.RunRecord) {
 	}
 }
 
+func (a *RunAPI) handleArtifact(w http.ResponseWriter, r *http.Request) {
+	relPath := strings.TrimPrefix(r.URL.Path, "/artifacts/")
+	absPath, ok := a.resolveArtifactPath(relPath)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeFile(w, r, absPath)
+}
+
 func (a *RunAPI) artifactURL(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -403,8 +414,8 @@ func (a *RunAPI) artifactURL(path string) string {
 	}
 	cleaned := filepath.Clean(path)
 	if filepath.IsAbs(cleaned) {
-		rel, err := filepath.Rel(a.cfg.ArtifactDir, cleaned)
-		if err != nil || strings.HasPrefix(rel, "..") {
+		rel, ok := a.artifactRelativePath(cleaned)
+		if !ok {
 			return ""
 		}
 		cleaned = rel
@@ -413,10 +424,48 @@ func (a *RunAPI) artifactURL(path string) string {
 	if cleaned == "." || cleaned == "" || strings.HasPrefix(cleaned, "../") {
 		return ""
 	}
-	if _, err := os.Stat(filepath.Join(a.cfg.ArtifactDir, filepath.FromSlash(cleaned))); err != nil {
+	if _, ok := a.resolveArtifactPath(cleaned); !ok {
 		return ""
 	}
 	return "/artifacts/" + cleaned
+}
+
+func (a *RunAPI) artifactRelativePath(absPath string) (string, bool) {
+	cleaned := filepath.Clean(absPath)
+	projectsRoot := filepath.Clean(a.cfg.EffectiveProjectsDir())
+	if relToProjects, err := filepath.Rel(projectsRoot, cleaned); err == nil && relToProjects != "." && !strings.HasPrefix(relToProjects, "..") {
+		parts := strings.Split(filepath.ToSlash(relToProjects), "/")
+		if len(parts) >= 3 && parts[1] == "artifacts" {
+			return path.Join(append([]string{parts[0]}, parts[2:]...)...), true
+		}
+	}
+	legacyRoot := filepath.Clean(a.cfg.ArtifactDir)
+	if relToLegacy, err := filepath.Rel(legacyRoot, cleaned); err == nil && relToLegacy != "." && !strings.HasPrefix(relToLegacy, "..") {
+		return filepath.ToSlash(relToLegacy), true
+	}
+	return "", false
+}
+
+func (a *RunAPI) resolveArtifactPath(relPath string) (string, bool) {
+	cleaned := filepath.ToSlash(strings.TrimSpace(relPath))
+	cleaned = path.Clean(strings.TrimPrefix(cleaned, "/"))
+	if cleaned == "." || cleaned == "" || strings.HasPrefix(cleaned, "../") {
+		return "", false
+	}
+
+	parts := strings.Split(cleaned, "/")
+	if len(parts) > 1 {
+		projectPath := filepath.Join(a.cfg.ProjectArtifactDir(parts[0]), filepath.Join(parts[1:]...))
+		if info, err := os.Stat(projectPath); err == nil && !info.IsDir() {
+			return projectPath, true
+		}
+	}
+
+	legacyPath := filepath.Join(a.cfg.ArtifactDir, filepath.FromSlash(cleaned))
+	if info, err := os.Stat(legacyPath); err == nil && !info.IsDir() {
+		return legacyPath, true
+	}
+	return "", false
 }
 
 func (a *RunAPI) streamRunEvents(w http.ResponseWriter, r *http.Request, runID string) error {
