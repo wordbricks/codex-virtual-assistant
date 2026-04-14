@@ -28,6 +28,7 @@ Clone this repository, install prerequisites, build it, and run it locally.
 
 2. Install prerequisites:
    - Install Go 1.26 or newer.
+   - Install Node.js 20.19.0 or newer (or Node.js 22.12.0+) for the webapp toolchain.
    - Install sqlite3 and make sure it is on PATH.
    - Install `ffmpeg` and make sure it is on PATH. CVA uses it to turn captured browser frames into the report video replay.
    - Install the codex CLI and authenticate it so `codex app-server` can run.
@@ -262,8 +263,9 @@ make release-npm
 ## Local requirements
 
 - Go 1.26+
+- Node.js `^20.19.0 || >=22.12.0` for the `webapp/` Vite toolchain
 - `codex` CLI installed and authenticated; the default runtime shells out to `codex app-server`
 - `agent-browser` CLI installed and initialized with `agent-browser install`
 - `sqlite3` available on the local machine; the current repository layer uses the system SQLite CLI for local persistence in this sandboxed environment
 - `ffmpeg` available on the local machine; browser-session report videos are generated only when `ffmpeg` is present on `PATH`
-- Node.js is optional, but useful for checking the browser script during local development
+- The npm CLI wrapper in `npm/` remains compatible with Node.js 18+, but repository development now assumes the webapp runtime above
