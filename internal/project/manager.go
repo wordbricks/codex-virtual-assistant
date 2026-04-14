@@ -17,6 +17,8 @@ const (
 	DefaultProjectSlug      = "no_project"
 	projectFileName         = "PROJECT.md"
 	agentsFileName          = "AGENTS.md"
+	scriptsDirName          = "scripts"
+	runsDirName             = "runs"
 	browserProfileDirName   = ".browser-profile"
 	defaultBrowserCDPPort   = 9223
 	defaultNoProjectName    = "No Project"
@@ -88,6 +90,19 @@ func (m *Manager) EnsureProject(project assistant.ProjectContext) (assistant.Pro
 	}
 	if err := os.MkdirAll(project.BrowserProfileDir, 0o755); err != nil {
 		return assistant.ProjectContext{}, fmt.Errorf("create browser profile dir %s: %w", project.BrowserProfileDir, err)
+	}
+	if slug != DefaultProjectSlug {
+		for _, subdir := range []string{
+			filepath.Join(dir, scriptsDirName),
+			filepath.Join(dir, runsDirName),
+			filepath.Join(dir, runsDirName, "evidence"),
+			filepath.Join(dir, runsDirName, "artifacts"),
+			filepath.Join(dir, runsDirName, "tmp"),
+		} {
+			if err := os.MkdirAll(subdir, 0o755); err != nil {
+				return assistant.ProjectContext{}, fmt.Errorf("create project scaffold dir %s: %w", subdir, err)
+			}
+		}
 	}
 
 	projectFile := filepath.Join(dir, projectFileName)

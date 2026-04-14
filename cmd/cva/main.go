@@ -101,6 +101,8 @@ func main() {
 	case "schedule":
 		client := NewClient(addr)
 		err = cmdSchedule(ctx, client, cmdArgs, jsonMode, interactiveMode)
+	case "workspace":
+		err = cmdWorkspace(cmdArgs, jsonMode)
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -607,6 +609,7 @@ Commands:
   schedule list [--chat ID] [--status S]                        List scheduled runs
   schedule show <scheduled_run_id>                              Show a scheduled run
   schedule cancel <scheduled_run_id>                            Cancel a pending scheduled run
+  workspace lint [project_slug ...]                             Lint project workspace structure
 
 Global Options:
   --addr URL    API server address (default: http://127.0.0.1:8080, env: CVA_ADDR)

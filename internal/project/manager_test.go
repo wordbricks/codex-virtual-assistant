@@ -84,6 +84,11 @@ func TestEnsureProjectCreatesProjectMarkdown(t *testing.T) {
 		t.Fatalf("AGENTS.md = %q, want wiki guidance", string(agentsContent))
 	}
 	for _, relPath := range []string{
+		"scripts",
+		"runs",
+		filepath.Join("runs", "evidence"),
+		filepath.Join("runs", "artifacts"),
+		filepath.Join("runs", "tmp"),
 		filepath.Join("wiki", "overview.md"),
 		filepath.Join("wiki", "index.md"),
 		filepath.Join("wiki", "log.md"),
