@@ -80,8 +80,6 @@ func NewWithExecutorAndMessenger(cfg config.Config, executor wtl.CodexPhaseExecu
 		return nil, err
 	}
 
-	registerAgentMessageHooks(events, messenger)
-
 	return &App{
 		cfg:       cfg,
 		store:     repo,
@@ -107,64 +105,6 @@ func (a *App) RegisterHook(name api.HookName, hook api.HookFunc) func() {
 		return func() {}
 	}
 	return a.events.RegisterHook(name, hook)
-}
-
-func registerAgentMessageHooks(events *api.EventBroker, messenger agentmessage.Service) {
-	if events == nil || messenger == nil {
-		return
-	}
-
-	register := func(name api.HookName, build func(api.HookPayload) (string, bool)) {
-		events.RegisterHook(name, func(ctx context.Context, payload api.HookPayload) error {
-			if payload.Record == nil {
-				return nil
-			}
-			spec, ok := build(payload)
-			if !ok {
-				return nil
-			}
-			return messenger.SendJSONRender(ctx, payload.Record.Run.ChatID, spec)
-		})
-	}
-
-	register(api.HookOnRunStarted, func(payload api.HookPayload) (string, bool) {
-		spec, err := agentmessage.RenderLifecycleCard(agentmessage.StartedCard(payload.Record.Run, payload.Event.Summary))
-		return spec, err == nil
-	})
-	register(api.HookOnWaitEntered, func(payload api.HookPayload) (string, bool) {
-		spec, err := agentmessage.RenderLifecycleCard(agentmessage.WaitingCard(payload.Record.Run))
-		return spec, err == nil
-	})
-	register(api.HookOnRunCompleted, func(payload api.HookPayload) (string, bool) {
-		spec, err := agentmessage.RenderLifecycleCard(agentmessage.CompletedCard(payload.Record.Run))
-		return spec, err == nil
-	})
-	register(api.HookOnRunExhausted, func(payload api.HookPayload) (string, bool) {
-		spec, err := agentmessage.RenderLifecycleCard(agentmessage.ExhaustedCard(payload.Record.Run))
-		return spec, err == nil
-	})
-	register(api.HookOnRunFailed, func(payload api.HookPayload) (string, bool) {
-		spec, err := agentmessage.RenderLifecycleCard(agentmessage.FailedCard(payload.Record.Run, payload.Event.Summary))
-		return spec, err == nil
-	})
-	register(api.HookOnScheduleCreated, func(payload api.HookPayload) (string, bool) {
-		spec, err := agentmessage.RenderLifecycleCard(agentmessage.ScheduleCreatedCard(payload.Record.Run, payload.Record.ScheduledRuns))
-		return spec, err == nil
-	})
-	register(api.HookOnScheduleTriggered, func(payload api.HookPayload) (string, bool) {
-		if payload.ScheduledRun == nil || payload.CreatedRun == nil {
-			return "", false
-		}
-		spec, err := agentmessage.RenderLifecycleCard(agentmessage.ScheduleTriggeredCard(*payload.ScheduledRun, *payload.CreatedRun))
-		return spec, err == nil
-	})
-	register(api.HookOnScheduleFailed, func(payload api.HookPayload) (string, bool) {
-		if payload.ScheduledRun == nil {
-			return "", false
-		}
-		spec, err := agentmessage.RenderLifecycleCard(agentmessage.ScheduleFailedCard(*payload.ScheduledRun, payload.Event.Summary))
-		return spec, err == nil
-	})
 }
 
 func (a *App) Run(ctx context.Context) error {
