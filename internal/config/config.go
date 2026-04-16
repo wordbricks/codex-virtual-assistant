@@ -186,7 +186,7 @@ func ReadFileConfig(path string) (FileConfig, error) {
 		return FileConfig{}, fmt.Errorf("parse config file: %w", err)
 	}
 	if cfg.RuntimeProvider != "" && !ValidRuntimeProvider(cfg.RuntimeProvider) {
-		return FileConfig{}, fmt.Errorf("config file: runtime provider must be %q or %q", "codex", "claude")
+		return FileConfig{}, fmt.Errorf("config file: runtime provider must be %q, %q, or %q", "codex", "claude", "zai")
 	}
 	return cfg, nil
 }
@@ -194,7 +194,7 @@ func ReadFileConfig(path string) (FileConfig, error) {
 func WriteRuntimeProvider(configDir, provider string) error {
 	provider = strings.TrimSpace(provider)
 	if !ValidRuntimeProvider(provider) {
-		return fmt.Errorf("runtime provider must be %q or %q", "codex", "claude")
+		return fmt.Errorf("runtime provider must be %q, %q, or %q", "codex", "claude", "zai")
 	}
 
 	path := ConfigFilePath(configDir)
@@ -208,7 +208,7 @@ func WriteRuntimeProvider(configDir, provider string) error {
 
 func WriteFileConfig(path string, cfg FileConfig) error {
 	if cfg.RuntimeProvider != "" && !ValidRuntimeProvider(cfg.RuntimeProvider) {
-		return fmt.Errorf("runtime provider must be %q or %q", "codex", "claude")
+		return fmt.Errorf("runtime provider must be %q, %q, or %q", "codex", "claude", "zai")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
@@ -226,7 +226,7 @@ func WriteFileConfig(path string, cfg FileConfig) error {
 
 func ValidRuntimeProvider(provider string) bool {
 	switch provider {
-	case "codex", "claude":
+	case "codex", "claude", "zai":
 		return true
 	default:
 		return false
@@ -352,7 +352,7 @@ func (c Config) Validate() error {
 	case c.MaxGenerationAttempts <= 0:
 		return errors.New("config: max generation attempts must be positive")
 	case !ValidRuntimeProvider(runtimeProvider):
-		return fmt.Errorf("config: runtime provider must be %q or %q", "codex", "claude")
+		return fmt.Errorf("config: runtime provider must be %q, %q, or %q", "codex", "claude", "zai")
 	case runtimeProvider == "codex" && c.CodexBin == "":
 		return errors.New("config: codex bin is required")
 	case runtimeProvider == "claude" && c.ClaudeBin == "":

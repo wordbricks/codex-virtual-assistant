@@ -31,13 +31,14 @@ type App struct {
 
 func New(cfg config.Config) (*App, error) {
 	var executor wtl.CodexPhaseExecutor
-	if cfg.RuntimeProvider == "claude" {
+	if cfg.RuntimeProvider == "claude" || cfg.RuntimeProvider == "zai" {
 		executor = wtl.NewClaudeHeadlessPhaseExecutor(wtl.ClaudeHeadlessPhaseExecutorConfig{
-			BinaryPath:  cfg.ClaudeBin,
-			Cwd:         cfg.CodexCwd,
-			Model:       cfg.ClaudeModel,
-			ProjectsDir: cfg.EffectiveProjectsDir(),
-			ArtifactDir: cfg.ArtifactDir,
+			BinaryPath:      cfg.ClaudeBin,
+			UsePrintWrapper: cfg.RuntimeProvider == "zai",
+			Cwd:             cfg.CodexCwd,
+			Model:           cfg.ClaudeModel,
+			ProjectsDir:     cfg.EffectiveProjectsDir(),
+			ArtifactDir:     cfg.ArtifactDir,
 		}, time.Now)
 	} else {
 		executor = wtl.NewAppServerPhaseExecutor(wtl.AppServerPhaseExecutorConfig{
