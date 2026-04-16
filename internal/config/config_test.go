@@ -8,27 +8,36 @@ import (
 func TestLoadFromEnvUsesDefaults(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := LoadFromEnv(func(string) string { return "" }, func() (string, error) {
-		return "/tmp/cva", nil
-	})
+	cfg, err := loadFromEnv(
+		func(string) string { return "" },
+		func() (string, error) {
+			return "/tmp/cva", nil
+		},
+		func() (string, error) {
+			return "/home/test/.config", nil
+		},
+		func() (string, error) {
+			return "/home/test", nil
+		},
+	)
 	if err != nil {
-		t.Fatalf("LoadFromEnv() error = %v", err)
+		t.Fatalf("loadFromEnv() error = %v", err)
 	}
 
 	if cfg.HTTPAddr != "127.0.0.1:8080" {
 		t.Fatalf("HTTPAddr = %q, want %q", cfg.HTTPAddr, "127.0.0.1:8080")
 	}
-	if cfg.DataDir != "/tmp/cva/workspace" {
-		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, "/tmp/cva/workspace")
+	if cfg.DataDir != "/home/test/.config/cva/workspace" {
+		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, "/home/test/.config/cva/workspace")
 	}
-	if cfg.ProjectsDir != "/tmp/cva/workspace/projects" {
-		t.Fatalf("ProjectsDir = %q, want %q", cfg.ProjectsDir, "/tmp/cva/workspace/projects")
+	if cfg.ProjectsDir != "/home/test/.config/cva/workspace/projects" {
+		t.Fatalf("ProjectsDir = %q, want %q", cfg.ProjectsDir, "/home/test/.config/cva/workspace/projects")
 	}
-	if cfg.DatabasePath != "/tmp/cva/workspace/assistant.db" {
-		t.Fatalf("DatabasePath = %q, want %q", cfg.DatabasePath, "/tmp/cva/workspace/assistant.db")
+	if cfg.DatabasePath != "/home/test/.config/cva/workspace/assistant.db" {
+		t.Fatalf("DatabasePath = %q, want %q", cfg.DatabasePath, "/home/test/.config/cva/workspace/assistant.db")
 	}
-	if cfg.ArtifactDir != "/tmp/cva/workspace/artifacts" {
-		t.Fatalf("ArtifactDir = %q, want %q", cfg.ArtifactDir, "/tmp/cva/workspace/artifacts")
+	if cfg.ArtifactDir != "/home/test/.config/cva/workspace/artifacts" {
+		t.Fatalf("ArtifactDir = %q, want %q", cfg.ArtifactDir, "/home/test/.config/cva/workspace/artifacts")
 	}
 	if cfg.DefaultModel != FixedModel {
 		t.Fatalf("DefaultModel = %q, want %q", cfg.DefaultModel, FixedModel)
@@ -39,8 +48,8 @@ func TestLoadFromEnvUsesDefaults(t *testing.T) {
 	if cfg.CodexBin != "codex" {
 		t.Fatalf("CodexBin = %q, want %q", cfg.CodexBin, "codex")
 	}
-	if cfg.CodexCwd != "/tmp/cva" {
-		t.Fatalf("CodexCwd = %q, want %q", cfg.CodexCwd, "/tmp/cva")
+	if cfg.CodexCwd != "/home/test/.config/cva" {
+		t.Fatalf("CodexCwd = %q, want %q", cfg.CodexCwd, "/home/test/.config/cva")
 	}
 	if cfg.CodexApprovalPolicy != "never" {
 		t.Fatalf("CodexApprovalPolicy = %q, want %q", cfg.CodexApprovalPolicy, "never")
@@ -53,6 +62,33 @@ func TestLoadFromEnvUsesDefaults(t *testing.T) {
 	}
 	if cfg.SchedulerInterval != 30*time.Second {
 		t.Fatalf("SchedulerInterval = %s, want 30s", cfg.SchedulerInterval)
+	}
+}
+
+func TestLoadFromEnvFallsBackToHomeDirWhenConfigDirUnavailable(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := loadFromEnv(
+		func(string) string { return "" },
+		func() (string, error) {
+			return "/tmp/cva", nil
+		},
+		func() (string, error) {
+			return "", assertiveErr("no config dir")
+		},
+		func() (string, error) {
+			return "/home/test", nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("loadFromEnv() error = %v", err)
+	}
+
+	if cfg.DataDir != "/home/test/.cva/workspace" {
+		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, "/home/test/.cva/workspace")
+	}
+	if cfg.CodexCwd != "/home/test/.cva" {
+		t.Fatalf("CodexCwd = %q, want %q", cfg.CodexCwd, "/home/test/.cva")
 	}
 }
 
@@ -74,27 +110,36 @@ func TestLoadFromEnvHonorsOverrides(t *testing.T) {
 		"ASSISTANT_SCHEDULER_INTERVAL":      "45s",
 	}
 
-	cfg, err := LoadFromEnv(func(key string) string { return env[key] }, func() (string, error) {
-		return "/workspace/project", nil
-	})
+	cfg, err := loadFromEnv(
+		func(key string) string { return env[key] },
+		func() (string, error) {
+			return "/workspace/project", nil
+		},
+		func() (string, error) {
+			return "/home/test/.config", nil
+		},
+		func() (string, error) {
+			return "/home/test", nil
+		},
+	)
 	if err != nil {
-		t.Fatalf("LoadFromEnv() error = %v", err)
+		t.Fatalf("loadFromEnv() error = %v", err)
 	}
 
 	if cfg.HTTPAddr != "0.0.0.0:9000" {
 		t.Fatalf("HTTPAddr = %q, want %q", cfg.HTTPAddr, "0.0.0.0:9000")
 	}
-	if cfg.DataDir != "/workspace/project/var/state" {
-		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, "/workspace/project/var/state")
+	if cfg.DataDir != "/home/test/.config/cva/var/state" {
+		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, "/home/test/.config/cva/var/state")
 	}
-	if cfg.ProjectsDir != "/workspace/project/var/projects" {
-		t.Fatalf("ProjectsDir = %q, want %q", cfg.ProjectsDir, "/workspace/project/var/projects")
+	if cfg.ProjectsDir != "/home/test/.config/cva/var/projects" {
+		t.Fatalf("ProjectsDir = %q, want %q", cfg.ProjectsDir, "/home/test/.config/cva/var/projects")
 	}
-	if cfg.DatabasePath != "/workspace/project/var/sqlite/app.db" {
-		t.Fatalf("DatabasePath = %q, want %q", cfg.DatabasePath, "/workspace/project/var/sqlite/app.db")
+	if cfg.DatabasePath != "/home/test/.config/cva/var/sqlite/app.db" {
+		t.Fatalf("DatabasePath = %q, want %q", cfg.DatabasePath, "/home/test/.config/cva/var/sqlite/app.db")
 	}
-	if cfg.ArtifactDir != "/workspace/project/var/artifacts" {
-		t.Fatalf("ArtifactDir = %q, want %q", cfg.ArtifactDir, "/workspace/project/var/artifacts")
+	if cfg.ArtifactDir != "/home/test/.config/cva/var/artifacts" {
+		t.Fatalf("ArtifactDir = %q, want %q", cfg.ArtifactDir, "/home/test/.config/cva/var/artifacts")
 	}
 	if cfg.MaxGenerationAttempts != 5 {
 		t.Fatalf("MaxGenerationAttempts = %d, want 5", cfg.MaxGenerationAttempts)
@@ -102,8 +147,8 @@ func TestLoadFromEnvHonorsOverrides(t *testing.T) {
 	if cfg.CodexBin != "/usr/local/bin/codex" {
 		t.Fatalf("CodexBin = %q, want %q", cfg.CodexBin, "/usr/local/bin/codex")
 	}
-	if cfg.CodexCwd != "/workspace/project/workspace/codex" {
-		t.Fatalf("CodexCwd = %q, want %q", cfg.CodexCwd, "/workspace/project/workspace/codex")
+	if cfg.CodexCwd != "/home/test/.config/cva/workspace/codex" {
+		t.Fatalf("CodexCwd = %q, want %q", cfg.CodexCwd, "/home/test/.config/cva/workspace/codex")
 	}
 	if cfg.CodexApprovalPolicy != "on-request" {
 		t.Fatalf("CodexApprovalPolicy = %q, want %q", cfg.CodexApprovalPolicy, "on-request")
@@ -117,6 +162,39 @@ func TestLoadFromEnvHonorsOverrides(t *testing.T) {
 	if cfg.SchedulerInterval != 45*time.Second {
 		t.Fatalf("SchedulerInterval = %s, want 45s", cfg.SchedulerInterval)
 	}
+}
+
+func TestLoadFromEnvUsesWorkingDirectoryAsLastFallback(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := loadFromEnv(
+		func(string) string { return "" },
+		func() (string, error) {
+			return "/tmp/cva", nil
+		},
+		func() (string, error) {
+			return "", assertiveErr("no config dir")
+		},
+		func() (string, error) {
+			return "", assertiveErr("no home dir")
+		},
+	)
+	if err != nil {
+		t.Fatalf("loadFromEnv() error = %v", err)
+	}
+
+	if cfg.DataDir != "/tmp/cva/workspace" {
+		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, "/tmp/cva/workspace")
+	}
+	if cfg.CodexCwd != "/tmp/cva" {
+		t.Fatalf("CodexCwd = %q, want %q", cfg.CodexCwd, "/tmp/cva")
+	}
+}
+
+type assertiveErr string
+
+func (e assertiveErr) Error() string {
+	return string(e)
 }
 
 func TestProjectArtifactDirUsesProjectsDir(t *testing.T) {

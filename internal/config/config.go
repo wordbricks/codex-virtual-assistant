@@ -13,6 +13,8 @@ import (
 const (
 	FixedModel                  = "gpt-5.4"
 	defaultHTTPAddr             = "127.0.0.1:8080"
+	defaultAppDirName           = "cva"
+	defaultHiddenAppDirName     = ".cva"
 	defaultDataDir              = "workspace"
 	defaultProjectsDirName      = "projects"
 	defaultProjectSlug          = "no_project"
@@ -40,13 +42,22 @@ type Config struct {
 }
 
 func Load() (Config, error) {
-	return LoadFromEnv(os.Getenv, os.Getwd)
+	return loadFromEnv(os.Getenv, os.Getwd, os.UserConfigDir, os.UserHomeDir)
 }
 
 func LoadFromEnv(getenv func(string) string, getwd func() (string, error)) (Config, error) {
-	baseDir, err := getwd()
+	return loadFromEnv(getenv, getwd, os.UserConfigDir, os.UserHomeDir)
+}
+
+func loadFromEnv(
+	getenv func(string) string,
+	getwd func() (string, error),
+	userConfigDir func() (string, error),
+	userHomeDir func() (string, error),
+) (Config, error) {
+	baseDir, err := resolveBaseDir(getwd, userConfigDir, userHomeDir)
 	if err != nil {
-		return Config{}, fmt.Errorf("resolve working directory: %w", err)
+		return Config{}, err
 	}
 
 	cfg := Config{
@@ -110,6 +121,34 @@ func LoadFromEnv(getenv func(string) string, getwd func() (string, error)) (Conf
 		cfg.SchedulerInterval = parsed
 	}
 	return cfg.Normalize(baseDir)
+}
+
+func resolveBaseDir(
+	getwd func() (string, error),
+	userConfigDir func() (string, error),
+	userHomeDir func() (string, error),
+) (string, error) {
+	if userConfigDir != nil {
+		if dir, err := userConfigDir(); err == nil && strings.TrimSpace(dir) != "" {
+			return filepath.Clean(filepath.Join(dir, defaultAppDirName)), nil
+		}
+	}
+	if userHomeDir != nil {
+		if dir, err := userHomeDir(); err == nil && strings.TrimSpace(dir) != "" {
+			return filepath.Clean(filepath.Join(dir, defaultHiddenAppDirName)), nil
+		}
+	}
+	if getwd == nil {
+		return "", errors.New("resolve working directory: getwd is required")
+	}
+	dir, err := getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory: %w", err)
+	}
+	if strings.TrimSpace(dir) == "" {
+		return "", errors.New("resolve working directory: empty path")
+	}
+	return filepath.Clean(dir), nil
 }
 
 func (c Config) Normalize(baseDir string) (Config, error) {

@@ -94,7 +94,7 @@ cva start --yolo
 
 Then open `http://127.0.0.1:8080`.
 
-Daemon logs are written to `workspace/logs/cva.log` by default, and the PID file is stored at `workspace/cva.pid`.
+Daemon logs are written to `<CVA home>/workspace/logs/cva.log` by default, and the PID file is stored at `<CVA home>/workspace/cva.pid`.
 
 Basic CLI usage:
 
@@ -158,16 +158,18 @@ If you want browser activity to appear as an embedded replay video in the final 
 Environment variables:
 
 - `ASSISTANT_HTTP_ADDR`: override the listen address, default `127.0.0.1:8080`
-- `ASSISTANT_DATA_DIR`: root directory for local state, default `./workspace`
+- `ASSISTANT_DATA_DIR`: root directory for local state, default `<CVA home>/workspace`
 - `ASSISTANT_PROJECTS_DIR`: project workspace root, default `<data dir>/projects`
 - `ASSISTANT_DATABASE_PATH`: SQLite database path, default `<data dir>/assistant.db`
 - `ASSISTANT_ARTIFACT_DIR`: directory for generated artifacts, default `<data dir>/artifacts`
 - `ASSISTANT_MAX_GENERATION_ATTEMPTS`: default generator retry budget, default `3`
 - `ASSISTANT_CODEX_BIN`: Codex CLI path, default `codex`
-- `ASSISTANT_CODEX_CWD`: working directory given to Codex app server, default current repo root
+- `ASSISTANT_CODEX_CWD`: working directory given to Codex app server, default `<CVA home>`
 - `ASSISTANT_CODEX_APPROVAL_POLICY`: Codex approval policy, default `never`
 - `ASSISTANT_CODEX_SANDBOX`: Codex sandbox mode, default `workspace-write`
 - `ASSISTANT_CODEX_NETWORK_ACCESS`: outbound network access for Codex workspace-write turns, default `true`
+
+`<CVA home>` is the app-owned directory under the current user's OS config directory, so `cva` uses the same default workspace no matter where you launch it. Relative path overrides are resolved from that directory.
 
 ## Current scope
 
@@ -207,8 +209,8 @@ Current local runtime behavior:
 
 Local state locations:
 
-- SQLite database: `data/assistant.db` by default
-- generated artifacts directory: `data/artifacts` by default
+- SQLite database: `<CVA home>/workspace/assistant.db` by default
+- generated artifacts directory: `<CVA home>/workspace/artifacts` by default
 
 ## Validation
 

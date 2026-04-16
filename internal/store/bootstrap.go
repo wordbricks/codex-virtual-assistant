@@ -9,8 +9,11 @@ import (
 )
 
 func EnsureScaffold(cfg config.Config) error {
-	dirs := []string{cfg.DataDir, cfg.EffectiveProjectsDir(), cfg.ArtifactDir, filepath.Dir(cfg.DatabasePath)}
+	dirs := []string{cfg.DataDir, cfg.EffectiveProjectsDir(), cfg.ArtifactDir, filepath.Dir(cfg.DatabasePath), cfg.CodexCwd}
 	for _, dir := range dirs {
+		if filepath.Clean(dir) == "." {
+			continue
+		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("ensure directory %s: %w", dir, err)
 		}
