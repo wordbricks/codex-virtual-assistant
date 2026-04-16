@@ -511,6 +511,52 @@ func TestRunEngineReportFailurePreventsCompletion(t *testing.T) {
 	}
 }
 
+func TestRunEngineMarksReportingBeforeReporterSetupForAnswerRuns(t *testing.T) {
+	t.Parallel()
+
+	repo, dataDir := openEngineTestRepository(t)
+	now := time.Date(2026, time.March, 27, 17, 45, 0, 0, time.UTC)
+	runtime := &scriptedRuntime{
+		steps: map[assistant.AttemptRole][]runtimeStep{
+			assistant.AttemptRoleGate: {
+				{response: PhaseResponse{Summary: "Gate routed to answer.", Output: gateJSON("answer", "This is a read-only request.")}},
+			},
+			assistant.AttemptRoleAnswer: {
+				{response: PhaseResponse{Summary: "Prepared direct answer.", Output: "Hi! How can I help you today?"}},
+			},
+		},
+	}
+	messenger := fakeMessenger()
+	messenger.withAccountErr = errors.New("agent-message config is invalid")
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), newEngineTestWikiService(dataDir), messenger, fixedClock(now))
+
+	run := assistant.NewRun("reply hi to me", now, 1)
+	err := engine.Start(context.Background(), run)
+	if !errors.Is(err, messenger.withAccountErr) {
+		t.Fatalf("Start() error = %v, want %v", err, messenger.withAccountErr)
+	}
+
+	record, getErr := repo.GetRunRecord(context.Background(), run.ID)
+	if getErr != nil {
+		t.Fatalf("GetRunRecord() error = %v", getErr)
+	}
+	if record.Run.Status != assistant.RunStatusFailed {
+		t.Fatalf("Run.Status = %q, want %q", record.Run.Status, assistant.RunStatusFailed)
+	}
+	if record.Run.Phase != assistant.RunPhaseFailed {
+		t.Fatalf("Run.Phase = %q, want %q", record.Run.Phase, assistant.RunPhaseFailed)
+	}
+	if len(record.Attempts) != 2 {
+		t.Fatalf("len(Attempts) = %d, want 2", len(record.Attempts))
+	}
+	if got := record.Attempts[len(record.Attempts)-1].Role; got != assistant.AttemptRoleAnswer {
+		t.Fatalf("last attempt role = %q, want %q", got, assistant.AttemptRoleAnswer)
+	}
+	if record.Run.CompletedAt != nil {
+		t.Fatalf("CompletedAt = %v, want nil for failed run", record.Run.CompletedAt)
+	}
+}
+
 type scriptedRuntime struct {
 	steps map[assistant.AttemptRole][]runtimeStep
 	index map[assistant.AttemptRole]int
@@ -691,7 +737,8 @@ func stringsJoin(values []string) string {
 }
 
 type fakeAgentMessageService struct {
-	account agentmessage.ChatAccount
+	account        agentmessage.ChatAccount
+	withAccountErr error
 }
 
 func fakeMessenger() *fakeAgentMessageService {
@@ -704,6 +751,9 @@ func fakeMessenger() *fakeAgentMessageService {
 }
 
 func (f *fakeAgentMessageService) WithChatAccount(_ context.Context, chatID string, fn func(agentmessage.ChatAccount) error) error {
+	if f.withAccountErr != nil {
+		return f.withAccountErr
+	}
 	account := f.account
 	account.ChatID = chatID
 	return fn(account)

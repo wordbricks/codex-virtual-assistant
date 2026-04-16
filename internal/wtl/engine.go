@@ -839,8 +839,20 @@ func (e *RunEngine) executeScheduler(ctx context.Context, record *store.RunRecor
 }
 
 func (e *RunEngine) executeWikiIngest(ctx context.Context, record *store.RunRecord) error {
+	enterReporting := func(summary string) error {
+		now := e.now().UTC()
+		record.Run.Status = assistant.RunStatusReporting
+		record.Run.Phase = assistant.RunPhaseReporting
+		record.Run.WaitingFor = nil
+		record.Run.UpdatedAt = now
+		if err := e.repo.SaveRun(ctx, record.Run); err != nil {
+			return err
+		}
+		return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, summary)
+	}
+
 	if e.wiki == nil || strings.TrimSpace(record.Run.Project.Slug) == "" {
-		return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, "Wiki ingest skipped. Delivering the final report.")
+		return enterReporting("Wiki ingest skipped. Delivering the final report.")
 	}
 
 	now := e.now().UTC()
@@ -864,7 +876,7 @@ func (e *RunEngine) executeWikiIngest(ctx context.Context, record *store.RunReco
 		if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypeReasoning, assistant.RunPhaseWikiIngesting, fmt.Sprintf("Project wiki ingest failed: %v", ingestErr)); err != nil {
 			return err
 		}
-		return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, "Project wiki ingest failed. Continuing to the final report.")
+		return enterReporting("Project wiki ingest failed. Continuing to the final report.")
 	}
 
 	if len(result.ChangedPages) > 0 {
@@ -874,7 +886,7 @@ func (e *RunEngine) executeWikiIngest(ctx context.Context, record *store.RunReco
 			return err
 		}
 	}
-	return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, "Project wiki memory updated. Delivering the final report.")
+	return enterReporting("Project wiki memory updated. Delivering the final report.")
 }
 
 func (e *RunEngine) executeReporter(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) (Directive, error) {
@@ -969,7 +981,7 @@ func (e *RunEngine) executeReporter(ctx context.Context, record *store.RunRecord
 		return nil
 	})
 	if err != nil {
-		return "", err
+		return DirectiveFail, e.failRun(ctx, record.Run, fmt.Sprintf("Report delivery setup failed: %v", err), err)
 	}
 	return directive, phaseErr
 }
