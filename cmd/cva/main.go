@@ -83,6 +83,8 @@ func main() {
 	case "status":
 		client := NewClient(addr)
 		err = cmdStatus(ctx, client, cmdArgs, jsonMode)
+	case "runtime":
+		err = cmdRuntime(cmdArgs, jsonMode)
 	case "list":
 		client := NewClient(addr)
 		err = cmdList(ctx, client, jsonMode, interactiveMode)
@@ -623,6 +625,7 @@ Commands:
   stop [--pid-file PATH]                 Stop the local CVA daemon
   run [--follow-up <run_id>] "request"   Create a new run and stream events
   status [run_id]                        Show local config paths or run details
+  runtime [codex|claude]                 Show or change the execution runtime
   list                                   List all chats
   chat <chat_id>                         Show chat details
   watch [<run_id>]                       Stream a run or browse recent runs

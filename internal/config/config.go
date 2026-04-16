@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -19,7 +20,9 @@ const (
 	defaultProjectsDirName      = "projects"
 	defaultProjectSlug          = "no_project"
 	defaultMaxGenerationAttempt = 3
+	defaultRuntimeProvider      = "codex"
 	defaultCodexBin             = "codex"
+	defaultClaudeBin            = "claude"
 	defaultCodexApprovalPolicy  = "never"
 	defaultCodexSandboxMode     = "workspace-write"
 	defaultSchedulerInterval    = 30 * time.Second
@@ -34,7 +37,10 @@ type Config struct {
 	ArtifactDir           string
 	DefaultModel          string
 	MaxGenerationAttempts int
+	RuntimeProvider       string
 	CodexBin              string
+	ClaudeBin             string
+	ClaudeModel           string
 	CodexCwd              string
 	CodexApprovalPolicy   string
 	CodexSandboxMode      string
@@ -42,8 +48,12 @@ type Config struct {
 	SchedulerInterval     time.Duration
 }
 
+type FileConfig struct {
+	RuntimeProvider string `json:"runtime_provider,omitempty"`
+}
+
 func Load() (Config, error) {
-	return loadFromEnv(os.Getenv, os.Getwd, os.UserConfigDir, os.UserHomeDir)
+	return loadFromSources(os.Getenv, os.Getwd, os.UserConfigDir, os.UserHomeDir, ReadFileConfig)
 }
 
 func LoadFromEnv(getenv func(string) string, getwd func() (string, error)) (Config, error) {
@@ -56,6 +66,16 @@ func loadFromEnv(
 	userConfigDir func() (string, error),
 	userHomeDir func() (string, error),
 ) (Config, error) {
+	return loadFromSources(getenv, getwd, userConfigDir, userHomeDir, nil)
+}
+
+func loadFromSources(
+	getenv func(string) string,
+	getwd func() (string, error),
+	userConfigDir func() (string, error),
+	userHomeDir func() (string, error),
+	readFileConfig func(string) (FileConfig, error),
+) (Config, error) {
 	baseDir, err := resolveBaseDir(getwd, userConfigDir, userHomeDir)
 	if err != nil {
 		return Config{}, err
@@ -66,11 +86,23 @@ func loadFromEnv(
 		DataDir:               defaultDataDir,
 		DefaultModel:          FixedModel,
 		MaxGenerationAttempts: defaultMaxGenerationAttempt,
+		RuntimeProvider:       defaultRuntimeProvider,
 		CodexBin:              defaultCodexBin,
+		ClaudeBin:             defaultClaudeBin,
 		CodexApprovalPolicy:   defaultCodexApprovalPolicy,
 		CodexSandboxMode:      defaultCodexSandboxMode,
 		CodexNetworkAccess:    true,
 		SchedulerInterval:     defaultSchedulerInterval,
+	}
+
+	if readFileConfig != nil {
+		fileConfig, err := readFileConfig(ConfigFilePath(baseDir))
+		if err != nil {
+			return Config{}, err
+		}
+		if fileConfig.RuntimeProvider != "" {
+			cfg.RuntimeProvider = fileConfig.RuntimeProvider
+		}
 	}
 
 	if value := getenv("ASSISTANT_HTTP_ADDR"); value != "" {
@@ -95,8 +127,17 @@ func loadFromEnv(
 		}
 		cfg.MaxGenerationAttempts = parsed
 	}
+	if value := getenv("ASSISTANT_RUNTIME"); value != "" {
+		cfg.RuntimeProvider = value
+	}
 	if value := getenv("ASSISTANT_CODEX_BIN"); value != "" {
 		cfg.CodexBin = value
+	}
+	if value := getenv("ASSISTANT_CLAUDE_BIN"); value != "" {
+		cfg.ClaudeBin = value
+	}
+	if value := getenv("ASSISTANT_CLAUDE_MODEL"); value != "" {
+		cfg.ClaudeModel = value
 	}
 	if value := getenv("ASSISTANT_CODEX_CWD"); value != "" {
 		cfg.CodexCwd = value
@@ -122,6 +163,74 @@ func loadFromEnv(
 		cfg.SchedulerInterval = parsed
 	}
 	return cfg.Normalize(baseDir)
+}
+
+func ConfigFilePath(configDir string) string {
+	return filepath.Join(configDir, "config.json")
+}
+
+func ReadFileConfig(path string) (FileConfig, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return FileConfig{}, nil
+	}
+	if err != nil {
+		return FileConfig{}, fmt.Errorf("read config file: %w", err)
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		return FileConfig{}, nil
+	}
+
+	var cfg FileConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return FileConfig{}, fmt.Errorf("parse config file: %w", err)
+	}
+	if cfg.RuntimeProvider != "" && !ValidRuntimeProvider(cfg.RuntimeProvider) {
+		return FileConfig{}, fmt.Errorf("config file: runtime provider must be %q or %q", "codex", "claude")
+	}
+	return cfg, nil
+}
+
+func WriteRuntimeProvider(configDir, provider string) error {
+	provider = strings.TrimSpace(provider)
+	if !ValidRuntimeProvider(provider) {
+		return fmt.Errorf("runtime provider must be %q or %q", "codex", "claude")
+	}
+
+	path := ConfigFilePath(configDir)
+	cfg, err := ReadFileConfig(path)
+	if err != nil {
+		return err
+	}
+	cfg.RuntimeProvider = provider
+	return WriteFileConfig(path, cfg)
+}
+
+func WriteFileConfig(path string, cfg FileConfig) error {
+	if cfg.RuntimeProvider != "" && !ValidRuntimeProvider(cfg.RuntimeProvider) {
+		return fmt.Errorf("runtime provider must be %q or %q", "codex", "claude")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode config file: %w", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write config file: %w", err)
+	}
+	return nil
+}
+
+func ValidRuntimeProvider(provider string) bool {
+	switch provider {
+	case "codex", "claude":
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveBaseDir(
@@ -176,8 +285,14 @@ func (c Config) Normalize(baseDir string) (Config, error) {
 	if c.MaxGenerationAttempts == 0 {
 		c.MaxGenerationAttempts = defaultMaxGenerationAttempt
 	}
+	if c.RuntimeProvider == "" {
+		c.RuntimeProvider = defaultRuntimeProvider
+	}
 	if c.CodexBin == "" {
 		c.CodexBin = defaultCodexBin
+	}
+	if c.ClaudeBin == "" {
+		c.ClaudeBin = defaultClaudeBin
 	}
 	if c.CodexCwd == "" {
 		c.CodexCwd = baseDir
@@ -219,6 +334,10 @@ func (c Config) Normalize(baseDir string) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	runtimeProvider := c.RuntimeProvider
+	if runtimeProvider == "" {
+		runtimeProvider = defaultRuntimeProvider
+	}
 	switch {
 	case c.HTTPAddr == "":
 		return errors.New("config: HTTP address is required")
@@ -232,8 +351,12 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: default model must remain %q", FixedModel)
 	case c.MaxGenerationAttempts <= 0:
 		return errors.New("config: max generation attempts must be positive")
-	case c.CodexBin == "":
+	case !ValidRuntimeProvider(runtimeProvider):
+		return fmt.Errorf("config: runtime provider must be %q or %q", "codex", "claude")
+	case runtimeProvider == "codex" && c.CodexBin == "":
 		return errors.New("config: codex bin is required")
+	case runtimeProvider == "claude" && c.ClaudeBin == "":
+		return errors.New("config: claude bin is required")
 	case c.CodexCwd == "":
 		return errors.New("config: codex cwd is required")
 	case c.CodexApprovalPolicy == "":

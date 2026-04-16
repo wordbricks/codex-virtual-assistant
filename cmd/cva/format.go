@@ -22,22 +22,24 @@ const (
 )
 
 type localStatus struct {
-	ConfigDir    string `json:"config_dir"`
-	WorkspaceDir string `json:"workspace_dir"`
-	ProjectsDir  string `json:"projects_dir"`
-	DatabasePath string `json:"database_path"`
-	ArtifactDir  string `json:"artifact_dir"`
-	CodexCwd     string `json:"codex_cwd"`
+	ConfigDir       string `json:"config_dir"`
+	WorkspaceDir    string `json:"workspace_dir"`
+	ProjectsDir     string `json:"projects_dir"`
+	DatabasePath    string `json:"database_path"`
+	ArtifactDir     string `json:"artifact_dir"`
+	RuntimeProvider string `json:"runtime_provider"`
+	RuntimeCwd      string `json:"runtime_cwd"`
 }
 
 func localStatusFromConfig(cfg config.Config) localStatus {
 	return localStatus{
-		ConfigDir:    cfg.ConfigDir,
-		WorkspaceDir: cfg.DataDir,
-		ProjectsDir:  cfg.EffectiveProjectsDir(),
-		DatabasePath: cfg.DatabasePath,
-		ArtifactDir:  cfg.ArtifactDir,
-		CodexCwd:     cfg.CodexCwd,
+		ConfigDir:       cfg.ConfigDir,
+		WorkspaceDir:    cfg.DataDir,
+		ProjectsDir:     cfg.EffectiveProjectsDir(),
+		DatabasePath:    cfg.DatabasePath,
+		ArtifactDir:     cfg.ArtifactDir,
+		RuntimeProvider: cfg.RuntimeProvider,
+		RuntimeCwd:      cfg.CodexCwd,
 	}
 }
 
@@ -49,7 +51,8 @@ func formatLocalStatus(status localStatus) string {
 	fmt.Fprintf(&b, "  Projects:         %s\n", status.ProjectsDir)
 	fmt.Fprintf(&b, "  Database:         %s\n", status.DatabasePath)
 	fmt.Fprintf(&b, "  Artifacts:        %s\n", status.ArtifactDir)
-	fmt.Fprintf(&b, "  Codex CWD:        %s\n", status.CodexCwd)
+	fmt.Fprintf(&b, "  Runtime:          %s\n", status.RuntimeProvider)
+	fmt.Fprintf(&b, "  Runtime CWD:      %s\n", status.RuntimeCwd)
 	return b.String()
 }
 

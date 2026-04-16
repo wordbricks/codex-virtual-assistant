@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -48,8 +49,14 @@ func TestLoadFromEnvUsesDefaults(t *testing.T) {
 	if cfg.MaxGenerationAttempts != 3 {
 		t.Fatalf("MaxGenerationAttempts = %d, want 3", cfg.MaxGenerationAttempts)
 	}
+	if cfg.RuntimeProvider != "codex" {
+		t.Fatalf("RuntimeProvider = %q, want codex", cfg.RuntimeProvider)
+	}
 	if cfg.CodexBin != "codex" {
 		t.Fatalf("CodexBin = %q, want %q", cfg.CodexBin, "codex")
+	}
+	if cfg.ClaudeBin != "claude" {
+		t.Fatalf("ClaudeBin = %q, want %q", cfg.ClaudeBin, "claude")
 	}
 	if cfg.CodexCwd != "/home/test/.config/cva" {
 		t.Fatalf("CodexCwd = %q, want %q", cfg.CodexCwd, "/home/test/.config/cva")
@@ -108,7 +115,10 @@ func TestLoadFromEnvHonorsOverrides(t *testing.T) {
 		"ASSISTANT_DATABASE_PATH":           "var/sqlite/app.db",
 		"ASSISTANT_ARTIFACT_DIR":            "var/artifacts",
 		"ASSISTANT_MAX_GENERATION_ATTEMPTS": "5",
+		"ASSISTANT_RUNTIME":                 "claude",
 		"ASSISTANT_CODEX_BIN":               "/usr/local/bin/codex",
+		"ASSISTANT_CLAUDE_BIN":              "/usr/local/bin/claude",
+		"ASSISTANT_CLAUDE_MODEL":            "claude-sonnet-4-5",
 		"ASSISTANT_CODEX_CWD":               "workspace/codex",
 		"ASSISTANT_CODEX_APPROVAL_POLICY":   "on-request",
 		"ASSISTANT_CODEX_SANDBOX":           "danger-full-access",
@@ -153,8 +163,17 @@ func TestLoadFromEnvHonorsOverrides(t *testing.T) {
 	if cfg.MaxGenerationAttempts != 5 {
 		t.Fatalf("MaxGenerationAttempts = %d, want 5", cfg.MaxGenerationAttempts)
 	}
+	if cfg.RuntimeProvider != "claude" {
+		t.Fatalf("RuntimeProvider = %q, want claude", cfg.RuntimeProvider)
+	}
 	if cfg.CodexBin != "/usr/local/bin/codex" {
 		t.Fatalf("CodexBin = %q, want %q", cfg.CodexBin, "/usr/local/bin/codex")
+	}
+	if cfg.ClaudeBin != "/usr/local/bin/claude" {
+		t.Fatalf("ClaudeBin = %q, want %q", cfg.ClaudeBin, "/usr/local/bin/claude")
+	}
+	if cfg.ClaudeModel != "claude-sonnet-4-5" {
+		t.Fatalf("ClaudeModel = %q, want %q", cfg.ClaudeModel, "claude-sonnet-4-5")
 	}
 	if cfg.CodexCwd != "/home/test/.config/cva/workspace/codex" {
 		t.Fatalf("CodexCwd = %q, want %q", cfg.CodexCwd, "/home/test/.config/cva/workspace/codex")
@@ -170,6 +189,85 @@ func TestLoadFromEnvHonorsOverrides(t *testing.T) {
 	}
 	if cfg.SchedulerInterval != 45*time.Second {
 		t.Fatalf("SchedulerInterval = %s, want 45s", cfg.SchedulerInterval)
+	}
+}
+
+func TestLoadFromSourcesHonorsFileRuntimeProvider(t *testing.T) {
+	t.Parallel()
+
+	configRoot := t.TempDir()
+	cfg, err := loadFromSources(
+		func(string) string { return "" },
+		func() (string, error) {
+			return "/workspace/project", nil
+		},
+		func() (string, error) {
+			return configRoot, nil
+		},
+		func() (string, error) {
+			return "/home/test", nil
+		},
+		func(path string) (FileConfig, error) {
+			want := filepath.Join(configRoot, "cva", "config.json")
+			if path != want {
+				t.Fatalf("config file path = %q, want %q", path, want)
+			}
+			return FileConfig{RuntimeProvider: "claude"}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("loadFromSources() error = %v", err)
+	}
+
+	if cfg.RuntimeProvider != "claude" {
+		t.Fatalf("RuntimeProvider = %q, want claude", cfg.RuntimeProvider)
+	}
+}
+
+func TestLoadFromSourcesEnvRuntimeOverridesFile(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"ASSISTANT_RUNTIME": "codex",
+	}
+	cfg, err := loadFromSources(
+		func(key string) string { return env[key] },
+		func() (string, error) {
+			return "/workspace/project", nil
+		},
+		func() (string, error) {
+			return "/home/test/.config", nil
+		},
+		func() (string, error) {
+			return "/home/test", nil
+		},
+		func(string) (FileConfig, error) {
+			return FileConfig{RuntimeProvider: "claude"}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("loadFromSources() error = %v", err)
+	}
+
+	if cfg.RuntimeProvider != "codex" {
+		t.Fatalf("RuntimeProvider = %q, want codex", cfg.RuntimeProvider)
+	}
+}
+
+func TestWriteRuntimeProviderPersistsFileConfig(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	if err := WriteRuntimeProvider(configDir, "claude"); err != nil {
+		t.Fatalf("WriteRuntimeProvider() error = %v", err)
+	}
+
+	cfg, err := ReadFileConfig(ConfigFilePath(configDir))
+	if err != nil {
+		t.Fatalf("ReadFileConfig() error = %v", err)
+	}
+	if cfg.RuntimeProvider != "claude" {
+		t.Fatalf("RuntimeProvider = %q, want claude", cfg.RuntimeProvider)
 	}
 }
 

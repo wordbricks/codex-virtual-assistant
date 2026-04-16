@@ -30,16 +30,27 @@ type App struct {
 }
 
 func New(cfg config.Config) (*App, error) {
-	executor := wtl.NewAppServerPhaseExecutor(wtl.AppServerPhaseExecutorConfig{
-		BinaryPath:     cfg.CodexBin,
-		Cwd:            cfg.CodexCwd,
-		ProjectsDir:    cfg.EffectiveProjectsDir(),
-		ArtifactDir:    cfg.ArtifactDir,
-		Model:          cfg.DefaultModel,
-		ApprovalPolicy: cfg.CodexApprovalPolicy,
-		SandboxMode:    cfg.CodexSandboxMode,
-		NetworkAccess:  cfg.CodexNetworkAccess,
-	}, time.Now)
+	var executor wtl.CodexPhaseExecutor
+	if cfg.RuntimeProvider == "claude" {
+		executor = wtl.NewClaudeHeadlessPhaseExecutor(wtl.ClaudeHeadlessPhaseExecutorConfig{
+			BinaryPath:  cfg.ClaudeBin,
+			Cwd:         cfg.CodexCwd,
+			Model:       cfg.ClaudeModel,
+			ProjectsDir: cfg.EffectiveProjectsDir(),
+			ArtifactDir: cfg.ArtifactDir,
+		}, time.Now)
+	} else {
+		executor = wtl.NewAppServerPhaseExecutor(wtl.AppServerPhaseExecutorConfig{
+			BinaryPath:     cfg.CodexBin,
+			Cwd:            cfg.CodexCwd,
+			ProjectsDir:    cfg.EffectiveProjectsDir(),
+			ArtifactDir:    cfg.ArtifactDir,
+			Model:          cfg.DefaultModel,
+			ApprovalPolicy: cfg.CodexApprovalPolicy,
+			SandboxMode:    cfg.CodexSandboxMode,
+			NetworkAccess:  cfg.CodexNetworkAccess,
+		}, time.Now)
+	}
 	return NewWithExecutorAndMessenger(cfg, executor, agentmessage.NewClient())
 }
 
