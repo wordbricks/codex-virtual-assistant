@@ -24,8 +24,11 @@ func TestLoadFromEnvUsesDefaults(t *testing.T) {
 		t.Fatalf("loadFromEnv() error = %v", err)
 	}
 
-	if cfg.HTTPAddr != "127.0.0.1:8080" {
-		t.Fatalf("HTTPAddr = %q, want %q", cfg.HTTPAddr, "127.0.0.1:8080")
+	if cfg.HTTPAddr != "127.0.0.1:4999" {
+		t.Fatalf("HTTPAddr = %q, want %q", cfg.HTTPAddr, "127.0.0.1:4999")
+	}
+	if cfg.ConfigDir != "/home/test/.config/cva" {
+		t.Fatalf("ConfigDir = %q, want %q", cfg.ConfigDir, "/home/test/.config/cva")
 	}
 	if cfg.DataDir != "/home/test/.config/cva/workspace" {
 		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, "/home/test/.config/cva/workspace")
@@ -87,6 +90,9 @@ func TestLoadFromEnvFallsBackToHomeDirWhenConfigDirUnavailable(t *testing.T) {
 	if cfg.DataDir != "/home/test/.cva/workspace" {
 		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, "/home/test/.cva/workspace")
 	}
+	if cfg.ConfigDir != "/home/test/.cva" {
+		t.Fatalf("ConfigDir = %q, want %q", cfg.ConfigDir, "/home/test/.cva")
+	}
 	if cfg.CodexCwd != "/home/test/.cva" {
 		t.Fatalf("CodexCwd = %q, want %q", cfg.CodexCwd, "/home/test/.cva")
 	}
@@ -128,6 +134,9 @@ func TestLoadFromEnvHonorsOverrides(t *testing.T) {
 
 	if cfg.HTTPAddr != "0.0.0.0:9000" {
 		t.Fatalf("HTTPAddr = %q, want %q", cfg.HTTPAddr, "0.0.0.0:9000")
+	}
+	if cfg.ConfigDir != "/home/test/.config/cva" {
+		t.Fatalf("ConfigDir = %q, want %q", cfg.ConfigDir, "/home/test/.config/cva")
 	}
 	if cfg.DataDir != "/home/test/.config/cva/var/state" {
 		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, "/home/test/.config/cva/var/state")
@@ -185,6 +194,9 @@ func TestLoadFromEnvUsesWorkingDirectoryAsLastFallback(t *testing.T) {
 
 	if cfg.DataDir != "/tmp/cva/workspace" {
 		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, "/tmp/cva/workspace")
+	}
+	if cfg.ConfigDir != "/tmp/cva" {
+		t.Fatalf("ConfigDir = %q, want %q", cfg.ConfigDir, "/tmp/cva")
 	}
 	if cfg.CodexCwd != "/tmp/cva" {
 		t.Fatalf("CodexCwd = %q, want %q", cfg.CodexCwd, "/tmp/cva")

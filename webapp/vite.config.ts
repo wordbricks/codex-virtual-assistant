@@ -7,8 +7,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      "/api": "http://127.0.0.1:8080",
-      "/artifacts": "http://127.0.0.1:8080",
+      "/api": "http://127.0.0.1:4999",
+      "/artifacts": "http://127.0.0.1:4999",
     },
   },
   resolve: {

@@ -12,7 +12,7 @@ import (
 
 const (
 	FixedModel                  = "gpt-5.4"
-	defaultHTTPAddr             = "127.0.0.1:8080"
+	defaultHTTPAddr             = "127.0.0.1:4999"
 	defaultAppDirName           = "cva"
 	defaultHiddenAppDirName     = ".cva"
 	defaultDataDir              = "workspace"
@@ -27,6 +27,7 @@ const (
 
 type Config struct {
 	HTTPAddr              string
+	ConfigDir             string
 	DataDir               string
 	ProjectsDir           string
 	DatabasePath          string
@@ -154,6 +155,9 @@ func resolveBaseDir(
 func (c Config) Normalize(baseDir string) (Config, error) {
 	c.DefaultModel = FixedModel
 
+	if c.ConfigDir == "" {
+		c.ConfigDir = baseDir
+	}
 	if c.DataDir == "" {
 		c.DataDir = defaultDataDir
 	}
@@ -189,6 +193,9 @@ func (c Config) Normalize(baseDir string) (Config, error) {
 	}
 
 	var err error
+	if c.ConfigDir, err = resolvePath(baseDir, c.ConfigDir); err != nil {
+		return Config{}, fmt.Errorf("resolve config dir: %w", err)
+	}
 	if c.DataDir, err = resolvePath(baseDir, c.DataDir); err != nil {
 		return Config{}, fmt.Errorf("resolve data dir: %w", err)
 	}

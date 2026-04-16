@@ -45,7 +45,7 @@ Clone this repository, install prerequisites, build it, and run it locally.
    - or run with full Codex filesystem access: ./dist/cva start --yolo
 
 5. Open the UI:
-   - http://127.0.0.1:8080
+   - http://127.0.0.1:4999
 ```
 
 You can also install the CLI from npm:
@@ -92,7 +92,7 @@ Start with full Codex filesystem access:
 cva start --yolo
 ```
 
-Then open `http://127.0.0.1:8080`.
+Then open `http://127.0.0.1:4999`.
 
 Daemon logs are written to `<CVA home>/workspace/logs/cva.log` by default, and the PID file is stored at `<CVA home>/workspace/cva.pid`.
 
@@ -105,6 +105,7 @@ cva start --daemon
 cva logs
 cva logs --follow
 cva stop
+cva status
 cva run "Summarize today's work"
 cva status <run_id>
 cva watch <run_id>
@@ -128,7 +129,7 @@ cva schedule cancel <scheduled_run_id>
 go run ./cmd/cva start
 ```
 
-Then open `http://127.0.0.1:8080`.
+Then open `http://127.0.0.1:4999`.
 
 To run the server in the background during development:
 
@@ -157,7 +158,7 @@ If you want browser activity to appear as an embedded replay video in the final 
 
 Environment variables:
 
-- `ASSISTANT_HTTP_ADDR`: override the listen address, default `127.0.0.1:8080`
+- `ASSISTANT_HTTP_ADDR`: override the listen address, default `127.0.0.1:4999`
 - `ASSISTANT_DATA_DIR`: root directory for local state, default `<CVA home>/workspace`
 - `ASSISTANT_PROJECTS_DIR`: project workspace root, default `<data dir>/projects`
 - `ASSISTANT_DATABASE_PATH`: SQLite database path, default `<data dir>/assistant.db`
@@ -186,7 +187,7 @@ Current completed foundation:
 
 ## Using the web UI
 
-Open `http://127.0.0.1:8080`, describe the task in plain language, and start the run from the top form.
+Open `http://127.0.0.1:4999`, describe the task in plain language, and start the run from the top form.
 
 The page then keeps a single run view updated through the run status API and SSE stream:
 

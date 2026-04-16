@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
+	"github.com/siisee11/CodexVirtualAssistant/internal/config"
 	"github.com/siisee11/CodexVirtualAssistant/internal/store"
 )
 
@@ -19,6 +20,38 @@ const (
 	colorDim    = "\033[2m"
 	colorBold   = "\033[1m"
 )
+
+type localStatus struct {
+	ConfigDir    string `json:"config_dir"`
+	WorkspaceDir string `json:"workspace_dir"`
+	ProjectsDir  string `json:"projects_dir"`
+	DatabasePath string `json:"database_path"`
+	ArtifactDir  string `json:"artifact_dir"`
+	CodexCwd     string `json:"codex_cwd"`
+}
+
+func localStatusFromConfig(cfg config.Config) localStatus {
+	return localStatus{
+		ConfigDir:    cfg.ConfigDir,
+		WorkspaceDir: cfg.DataDir,
+		ProjectsDir:  cfg.EffectiveProjectsDir(),
+		DatabasePath: cfg.DatabasePath,
+		ArtifactDir:  cfg.ArtifactDir,
+		CodexCwd:     cfg.CodexCwd,
+	}
+}
+
+func formatLocalStatus(status localStatus) string {
+	var b strings.Builder
+	b.WriteString("CVA Status\n")
+	fmt.Fprintf(&b, "  Config Directory: %s\n", status.ConfigDir)
+	fmt.Fprintf(&b, "  Workspace:        %s\n", status.WorkspaceDir)
+	fmt.Fprintf(&b, "  Projects:         %s\n", status.ProjectsDir)
+	fmt.Fprintf(&b, "  Database:         %s\n", status.DatabasePath)
+	fmt.Fprintf(&b, "  Artifacts:        %s\n", status.ArtifactDir)
+	fmt.Fprintf(&b, "  Codex CWD:        %s\n", status.CodexCwd)
+	return b.String()
+}
 
 func statusColor(s assistant.RunStatus) string {
 	switch s {

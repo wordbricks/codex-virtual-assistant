@@ -35,9 +35,9 @@ func TestParseStartArgs(t *testing.T) {
 func TestStripDaemonFlag(t *testing.T) {
 	t.Parallel()
 
-	args := []string{"--addr", "http://127.0.0.1:8080", "start", "--daemon", "--yolo"}
+	args := []string{"--addr", "http://127.0.0.1:4999", "start", "--daemon", "--yolo"}
 	got := stripDaemonFlag(args)
-	want := []string{"--addr", "http://127.0.0.1:8080", "start", "--yolo"}
+	want := []string{"--addr", "http://127.0.0.1:4999", "start", "--yolo"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("stripDaemonFlag() = %#v, want %#v", got, want)
 	}
@@ -64,8 +64,8 @@ func TestWebURLForHTTPAddr(t *testing.T) {
 	}{
 		{
 			name: "default bind address",
-			addr: "127.0.0.1:8080",
-			want: "http://127.0.0.1:8080",
+			addr: "127.0.0.1:4999",
+			want: "http://127.0.0.1:4999",
 		},
 		{
 			name: "wildcard bind address uses localhost",

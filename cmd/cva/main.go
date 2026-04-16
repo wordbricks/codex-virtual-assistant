@@ -17,7 +17,7 @@ import (
 	"github.com/siisee11/CodexVirtualAssistant/internal/config"
 )
 
-const defaultAddr = "http://127.0.0.1:8080"
+const defaultAddr = "http://127.0.0.1:4999"
 
 type runOutputMode string
 
@@ -225,7 +225,19 @@ func streamRunTUI(ctx context.Context, c *Client, run assistant.Run) error {
 
 func cmdStatus(ctx context.Context, c *Client, args []string, jsonMode bool) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: cva status <run_id>")
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+		status := localStatusFromConfig(cfg)
+		if jsonMode {
+			return printJSON(status)
+		}
+		fmt.Print(formatLocalStatus(status))
+		return nil
+	}
+	if len(args) > 1 {
+		return fmt.Errorf("usage: cva status [run_id]")
 	}
 	rec, err := c.GetRun(ctx, args[0])
 	if err != nil {
@@ -610,7 +622,7 @@ Commands:
                                          Show daemon log output
   stop [--pid-file PATH]                 Stop the local CVA daemon
   run [--follow-up <run_id>] "request"   Create a new run and stream events
-  status <run_id>                        Show run details
+  status [run_id]                        Show local config paths or run details
   list                                   List all chats
   chat <chat_id>                         Show chat details
   watch [<run_id>]                       Stream a run or browse recent runs
@@ -624,7 +636,7 @@ Commands:
   workspace lint [project_slug ...]                             Lint project workspace structure
 
 Global Options:
-  --addr URL    API server address (default: http://127.0.0.1:8080, env: CVA_ADDR)
+  --addr URL    API server address (default: http://127.0.0.1:4999, env: CVA_ADDR)
   --json        Output raw JSON instead of formatted text
   --interactive, -i
                  Enable TUI for supported commands when stdin/stdout are TTYs
