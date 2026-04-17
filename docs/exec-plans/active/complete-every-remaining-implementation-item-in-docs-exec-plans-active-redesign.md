@@ -27,7 +27,7 @@ The active redesign plan already records product direction, API targets, and fro
 - [x] Milestone 2: Finish backend project APIs for project-first pages (`GET /api/v1/projects/:slug`, `GET /api/v1/projects/:slug/runs`) with handler/service coverage.
 - [x] Milestone 3: Finish backend flat wiki pages API and hard-bound run creation (`GET /api/v1/projects/:slug/wiki/pages`, `POST /api/v1/runs` with explicit `project_slug` override and selector bypass) with tests.
 - [x] Milestone 4: Replace frontend app shell with TanStack Router + TanStack Query and split API client/types out of legacy `App.tsx`.
-- [ ] Milestone 5: Implement project-first pages (projects home, project overview, Notion-style wiki reader with tree, breadcrumbs, metadata row, and internal link navigation).
+- [x] Milestone 5: Implement project-first pages (projects home, project overview, Notion-style wiki reader with tree, breadcrumbs, metadata row, and internal link navigation).
 - [ ] Milestone 6: Implement Linear-style runs board with side drawer detail, remove report overlay and all legacy chat UI including `/chats/:chatId`, then run verification builds/tests.
 
 ## Current progress
@@ -82,6 +82,15 @@ The active redesign plan already records product direction, API targets, and fro
 - `/projects/:slug/wiki/*`
 - `/projects/:slug/runs`
 - Explicitly did not add `/chats/:chatId` route in new router shell.
+- Verification run: `npm run build` (webapp)
+- Milestone 5 completed:
+- Added project-first page implementations in `webapp/src/routes/placeholders.tsx`:
+- projects home cards with per-project stats and latest-run summary (`/api/v1/projects` + per-project aggregate queries).
+- project overview with stats, rendered overview/open-questions wiki sections, recent logs/runs, and project-scoped run composer posting `project_slug`.
+- Notion-style wiki reader with page-type grouped sidebar tree, folder branches, breadcrumb navigation, frontmatter metadata pills, and inline internal link navigation through TanStack Router routes.
+- Added wiki/project API client coverage in `webapp/src/api/client.ts` and corresponding types in `webapp/src/api/types.ts`.
+- Added `react-markdown` dependency for rich wiki document rendering.
+- Added styling for project home/overview/wiki layouts and typography in `webapp/src/styles.css`.
 - Verification run: `npm run build` (webapp)
 
 ## Key decisions

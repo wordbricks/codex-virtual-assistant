@@ -1,4 +1,14 @@
-import type { BootstrapResponse, ChatRecord, ChatSummary, ProjectSummary, RunRecord, RunStatus } from "@/api/types";
+import type {
+  BootstrapResponse,
+  ChatRecord,
+  ChatSummary,
+  ProjectDetailResponse,
+  ProjectSummary,
+  RunRecord,
+  RunStatus,
+  WikiPageMeta,
+  WikiPageResponse,
+} from "@/api/types";
 
 export async function fetchJSON<T>(url: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(url, {
@@ -21,6 +31,14 @@ export async function fetchJSON<T>(url: string, options: RequestInit = {}): Prom
 export const apiClient = {
   bootstrap: () => fetchJSON<BootstrapResponse>("/api/v1/bootstrap"),
   listProjects: () => fetchJSON<{ projects: ProjectSummary[] }>("/api/v1/projects"),
+  getProjectDetail: (slug: string) =>
+    fetchJSON<ProjectDetailResponse>(`/api/v1/projects/${encodeURIComponent(slug)}`),
+  listWikiPages: (slug: string) =>
+    fetchJSON<{ pages: WikiPageMeta[] }>(`/api/v1/projects/${encodeURIComponent(slug)}/wiki/pages`),
+  getWikiPage: (slug: string, path: string) =>
+    fetchJSON<WikiPageResponse>(
+      `/api/v1/projects/${encodeURIComponent(slug)}/wiki/page?path=${encodeURIComponent(path)}`,
+    ),
   listChats: (path: string) => fetchJSON<{ chats: ChatSummary[] }>(path),
   getChat: (path: string, chatId: string) => fetchJSON<ChatRecord>(`${path}/${encodeURIComponent(chatId)}`),
   createRun: (

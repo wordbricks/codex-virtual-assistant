@@ -158,3 +158,36 @@ export type ProjectSummary = {
   wiki_page_count: number;
   updated_at?: string;
 };
+
+export type ProjectRunStats = {
+  active_runs: number;
+  waiting_runs: number;
+  scheduled_runs: number;
+  completed_runs: number;
+  stopped_runs: number;
+  wiki_page_count: number;
+};
+
+export type ProjectDetailResponse = {
+  project: ProjectSummary;
+  stats: ProjectRunStats;
+  recent_runs: Array<RunRecord["run"]>;
+  latest_log_entries?: string[];
+};
+
+export type WikiPageMeta = {
+  path: string;
+  title: string;
+  page_type: string;
+  updated_at?: string;
+  status?: string;
+  confidence?: string;
+  source_refs?: string[];
+  related?: string[];
+};
+
+export type WikiPageResponse = {
+  meta: WikiPageMeta;
+  path: string;
+  content: string;
+};
