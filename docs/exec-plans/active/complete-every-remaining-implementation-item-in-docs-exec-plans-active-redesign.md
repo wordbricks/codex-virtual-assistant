@@ -25,7 +25,7 @@ The active redesign plan already records product direction, API targets, and fro
 
 - [x] Milestone 1: Finish backend project-scoped run data access and filtering (`ListRunsByProjectSlug` path, service wiring, pagination/status behavior, and store/service tests).
 - [x] Milestone 2: Finish backend project APIs for project-first pages (`GET /api/v1/projects/:slug`, `GET /api/v1/projects/:slug/runs`) with handler/service coverage.
-- [ ] Milestone 3: Finish backend flat wiki pages API and hard-bound run creation (`GET /api/v1/projects/:slug/wiki/pages`, `POST /api/v1/runs` with explicit `project_slug` override and selector bypass) with tests.
+- [x] Milestone 3: Finish backend flat wiki pages API and hard-bound run creation (`GET /api/v1/projects/:slug/wiki/pages`, `POST /api/v1/runs` with explicit `project_slug` override and selector bypass) with tests.
 - [ ] Milestone 4: Replace frontend app shell with TanStack Router + TanStack Query and split API client/types out of legacy `App.tsx`.
 - [ ] Milestone 5: Implement project-first pages (projects home, project overview, Notion-style wiki reader with tree, breadcrumbs, metadata row, and internal link navigation).
 - [ ] Milestone 6: Implement Linear-style runs board with side drawer detail, remove report overlay and all legacy chat UI including `/chats/:chatId`, then run verification builds/tests.
@@ -54,6 +54,20 @@ The active redesign plan already records product direction, API targets, and fro
 - `TestRunServiceListAllRunsByProjectSlug`
 - `TestProjectsAPIProjectDetailAndRunsEndpoints`
 - Verification run: `go test ./internal/assistantapp ./internal/api ./internal/store`
+- Milestone 3 completed:
+- Added flat wiki pages endpoint `GET /api/v1/projects/:slug/wiki/pages` returning `{"pages":[...]}` metadata entries.
+- Added wiki service read API `ListPages(slug)` for flat page metadata listing.
+- Added explicit project-bound run creation in API `POST /api/v1/runs` via `project_slug`.
+- Added project existence validation for explicit `project_slug` before run creation (missing project returns `404`).
+- Added `RunService.CreateRunWithProject(...)` and handler wiring to pass explicit project slug.
+- Updated run engine to:
+- respect explicit project context at start (`EnsureProject` for pre-bound project),
+- skip `AttemptRoleProjectSelector` when workflow run already has a bound project slug.
+- Added focused coverage:
+- `TestListPagesReturnsFlatSortedMetadata`
+- `TestRunsAPICreateRunWithProjectSlugSkipsProjectSelector`
+- `TestRunServiceCreateRunWithProjectBindsProjectSlug`
+- Verification run: `go test ./internal/assistantapp ./internal/wiki ./internal/wtl ./internal/api ./internal/store`
 
 ## Key decisions
 
@@ -69,6 +83,7 @@ The active redesign plan already records product direction, API targets, and fro
 - Project run list pagination defaults: `page=1`, `page_size=20`, capped at `page_size=200`.
 - Project run status filtering validates against `assistant.AllRunStatuses()` and rejects unknown statuses.
 - `/api/v1/projects/:slug/runs?include_details=true` returns paginated run summaries plus `run_records`; default remains summary-only payload.
+- `POST /api/v1/runs` now accepts optional `project_slug`; when provided, the run is hard-bound to that project and workflow execution bypasses project selector phase.
 
 ## Remaining issues / open questions
 

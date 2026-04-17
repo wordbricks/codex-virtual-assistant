@@ -49,6 +49,7 @@ type createRunRequest struct {
 	UserRequestRaw        string `json:"user_request_raw"`
 	MaxGenerationAttempts int    `json:"max_generation_attempts"`
 	ParentRunID           string `json:"parent_run_id"`
+	ProjectSlug           string `json:"project_slug"`
 }
 
 type runActionRequest struct {
@@ -192,7 +193,23 @@ func (a *RunAPI) handleRuns(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		run, err := a.runs.CreateRun(r.Context(), request.UserRequestRaw, request.MaxGenerationAttempts, request.ParentRunID)
+		projectSlug := strings.TrimSpace(request.ProjectSlug)
+		if projectSlug != "" {
+			if a.wiki == nil {
+				http.Error(w, "project wiki service is not configured", http.StatusServiceUnavailable)
+				return
+			}
+			if _, err := a.findProjectSummaryBySlug(projectSlug); err != nil {
+				if errors.Is(err, store.ErrNotFound) {
+					http.Error(w, fmt.Sprintf("project %q not found", projectSlug), http.StatusNotFound)
+					return
+				}
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+
+		run, err := a.runs.CreateRunWithProject(r.Context(), request.UserRequestRaw, request.MaxGenerationAttempts, request.ParentRunID, projectSlug)
 		if err != nil {
 			status := http.StatusBadRequest
 			if errors.Is(err, store.ErrNotFound) {
@@ -484,6 +501,13 @@ func (a *RunAPI) handleProjectBySlug(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, page)
+	case action == "wiki/pages" && r.Method == http.MethodGet:
+		pages, err := a.wiki.ListPages(slug)
+		if err != nil {
+			writeWikiError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"pages": pages})
 	case action == "wiki/lint" && r.Method == http.MethodPost:
 		projectCtx := assistant.ProjectContext{
 			Slug:         slug,

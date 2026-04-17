@@ -407,6 +407,14 @@ func TestProjectsAPIListsWikiAndSupportsIndexAndLint(t *testing.T) {
 		t.Fatalf("index response = %q, want wiki index content", indexResponse.Body.String())
 	}
 
+	pagesResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/projects/docs-bot/wiki/pages", nil)
+	if pagesResponse.Code != http.StatusOK {
+		t.Fatalf("GET /projects/:slug/wiki/pages status = %d, want %d", pagesResponse.Code, http.StatusOK)
+	}
+	if !strings.Contains(pagesResponse.Body.String(), "\"pages\"") || !strings.Contains(pagesResponse.Body.String(), "overview.md") {
+		t.Fatalf("pages response = %q, want flat pages payload", pagesResponse.Body.String())
+	}
+
 	lintResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/projects/docs-bot/wiki/lint", map[string]any{})
 	if lintResponse.Code != http.StatusOK {
 		t.Fatalf("POST /projects/:slug/wiki/lint status = %d, want %d", lintResponse.Code, http.StatusOK)
@@ -558,6 +566,66 @@ func TestProjectsAPIProjectDetailAndRunsEndpoints(t *testing.T) {
 	missingProjectRunsResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/projects/missing-project/runs", nil)
 	if missingProjectRunsResponse.Code != http.StatusNotFound {
 		t.Fatalf("GET /projects/missing/runs status = %d, want %d", missingProjectRunsResponse.Code, http.StatusNotFound)
+	}
+}
+
+func TestRunsAPICreateRunWithProjectSlugSkipsProjectSelector(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestAPIHandler(t, &sequenceExecutor{
+		steps: []executorStep{
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request requires workflow execution.")},
+			{role: assistant.AttemptRoleProjectSelector, result: projectSelectorPhaseResult("docs-bot", "Docs Bot", "Maintain documentation workflows.")},
+			{role: assistant.AttemptRolePlanner, result: plannerPhaseResult("Seed docs-bot", []string{"Seed docs"})},
+			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Seed docs"})},
+			{role: assistant.AttemptRoleGenerator, result: generatorPhaseResult("Prepared seed docs output")},
+			{role: assistant.AttemptRoleEvaluator, result: evaluatorPhaseResult(true, 92, "Seed docs output complete.", nil, "")},
+			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered seed report.", "Seed docs delivered.")},
+
+			// Explicit project_slug run intentionally omits AttemptRoleProjectSelector.
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request requires workflow execution.")},
+			{role: assistant.AttemptRolePlanner, result: plannerPhaseResult("Bound docs-bot", []string{"Bound docs"})},
+			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Bound docs"})},
+			{role: assistant.AttemptRoleGenerator, result: generatorPhaseResult("Prepared bound docs output")},
+			{role: assistant.AttemptRoleEvaluator, result: evaluatorPhaseResult(true, 94, "Bound docs output complete.", nil, "")},
+			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered bound report.", "Bound docs delivered.")},
+		},
+	})
+
+	seedResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "Create docs-bot project context.",
+	})
+	if seedResponse.Code != http.StatusAccepted {
+		t.Fatalf("seed POST /runs status = %d, want %d", seedResponse.Code, http.StatusAccepted)
+	}
+	var seedCreated createRunResponse
+	if err := json.Unmarshal(seedResponse.Body.Bytes(), &seedCreated); err != nil {
+		t.Fatalf("decode seed create response: %v", err)
+	}
+	waitForRunStatus(t, handler, seedCreated.Run.ID, assistant.RunStatusCompleted)
+
+	boundResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "Continue docs-bot work with explicit project binding.",
+		"project_slug":     "docs-bot",
+	})
+	if boundResponse.Code != http.StatusAccepted {
+		t.Fatalf("bound POST /runs status = %d, want %d", boundResponse.Code, http.StatusAccepted)
+	}
+	var boundCreated createRunResponse
+	if err := json.Unmarshal(boundResponse.Body.Bytes(), &boundCreated); err != nil {
+		t.Fatalf("decode bound create response: %v", err)
+	}
+	record := waitForRunStatus(t, handler, boundCreated.Run.ID, assistant.RunStatusCompleted)
+	if record.Run.Project.Slug != "docs-bot" {
+		t.Fatalf("record.Run.Project.Slug = %q, want docs-bot", record.Run.Project.Slug)
+	}
+
+	missingProjectResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "This should fail because project is missing.",
+		"project_slug":     "missing-project",
+	})
+	if missingProjectResponse.Code != http.StatusNotFound {
+		t.Fatalf("POST /runs with missing project status = %d, want %d", missingProjectResponse.Code, http.StatusNotFound)
 	}
 }
 

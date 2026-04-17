@@ -66,6 +66,31 @@ func TestRunServiceCreateRunRejectsMissingParent(t *testing.T) {
 	}
 }
 
+func TestRunServiceCreateRunWithProjectBindsProjectSlug(t *testing.T) {
+	t.Parallel()
+
+	repo := openServiceTestRepository(t)
+	engine := &recordingEngine{repo: repo}
+	now := time.Date(2026, time.April, 14, 8, 0, 0, 0, time.UTC)
+	service := NewRunService(context.Background(), repo, engine, fixedPolicy{}, func() time.Time { return now })
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	run, err := service.CreateRunWithProject(ctx, "Continue docs migration work.", 0, "", "docs-bot")
+	if err != nil {
+		t.Fatalf("CreateRunWithProject() error = %v", err)
+	}
+	if run.Project.Slug != "docs-bot" {
+		t.Fatalf("run.Project.Slug = %q, want %q", run.Project.Slug, "docs-bot")
+	}
+	if len(engine.startedRuns) != 1 {
+		t.Fatalf("len(startedRuns) = %d, want 1", len(engine.startedRuns))
+	}
+	if engine.startedRuns[0].Project.Slug != "docs-bot" {
+		t.Fatalf("started run Project.Slug = %q, want %q", engine.startedRuns[0].Project.Slug, "docs-bot")
+	}
+}
+
 func TestRunServiceCreateScheduledRunSupportsCron(t *testing.T) {
 	t.Parallel()
 

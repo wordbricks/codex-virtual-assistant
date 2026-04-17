@@ -66,6 +66,10 @@ func NewRunService(bgCtx context.Context, repo *store.SQLiteRepository, engine w
 }
 
 func (s *RunService) CreateRun(ctx context.Context, userRequest string, maxGenerationAttempts int, parentRunID string) (assistant.Run, error) {
+	return s.CreateRunWithProject(ctx, userRequest, maxGenerationAttempts, parentRunID, "")
+}
+
+func (s *RunService) CreateRunWithProject(ctx context.Context, userRequest string, maxGenerationAttempts int, parentRunID, projectSlug string) (assistant.Run, error) {
 	if strings.TrimSpace(userRequest) == "" {
 		return assistant.Run{}, errors.New("assistant: user request is required")
 	}
@@ -85,6 +89,9 @@ func (s *RunService) CreateRun(ctx context.Context, userRequest string, maxGener
 		run = assistant.NewRun(userRequest, now, maxGenerationAttempts)
 	}
 	run.ParentRunID = parentRunID
+	if trimmedProjectSlug := strings.TrimSpace(projectSlug); trimmedProjectSlug != "" {
+		run.Project = assistant.ProjectContext{Slug: trimmedProjectSlug}
+	}
 	if parentRunID != "" {
 		run.ChatID = firstNonEmpty(parentRun.ChatID, parentRun.ID)
 	}

@@ -424,6 +424,22 @@ func (s *Service) ReadPage(slug, relPath string) (Page, error) {
 	return s.readPageFromProject(projectCtx, relPath)
 }
 
+func (s *Service) ListPages(slug string) ([]assistant.WikiPageMeta, error) {
+	projectCtx, err := s.projectBySlug(slug)
+	if err != nil {
+		return nil, err
+	}
+	pages, err := s.listPages(projectCtx)
+	if err != nil {
+		return nil, err
+	}
+	metas := make([]assistant.WikiPageMeta, 0, len(pages))
+	for _, page := range pages {
+		metas = append(metas, page.Meta)
+	}
+	return metas, nil
+}
+
 func (s *Service) projectBySlug(slug string) (assistant.ProjectContext, error) {
 	slug = strings.TrimSpace(slug)
 	if slug == "" {

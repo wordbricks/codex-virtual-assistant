@@ -87,6 +87,17 @@ func (e *RunEngine) Start(ctx context.Context, run assistant.Run) error {
 		return err
 	}
 
+	if strings.TrimSpace(run.Project.Slug) != "" {
+		if e.projects == nil {
+			return fmt.Errorf("%w: explicit project requires project manager", ErrInvalidRunState)
+		}
+		projectSelection, err := e.projects.EnsureProject(run.Project)
+		if err != nil {
+			return fmt.Errorf("wtl: explicit project could not be prepared: %w", err)
+		}
+		run.Project = projectSelection
+	}
+
 	run.Status = assistant.RunStatusQueued
 	run.Phase = assistant.RunPhaseQueued
 	run.WaitingFor = nil
@@ -179,6 +190,8 @@ func (e *RunEngine) continueRun(ctx context.Context, runID string, role assistan
 			}
 			if record.Run.GateRoute == assistant.RunRouteAnswer {
 				role = assistant.AttemptRoleAnswer
+			} else if strings.TrimSpace(record.Run.Project.Slug) != "" {
+				role = assistant.AttemptRolePlanner
 			} else {
 				role = assistant.AttemptRoleProjectSelector
 			}
@@ -371,7 +384,11 @@ func (e *RunEngine) executeGate(ctx context.Context, record *store.RunRecord, re
 	case assistant.RunRouteAnswer:
 		return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseAnswering, firstNonEmpty(summary, "Gate selected answer mode for this run."))
 	case assistant.RunRouteWorkflow:
-		return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseSelectingProject, firstNonEmpty(summary, "Gate selected workflow mode. Starting project selection."))
+		defaultSummary := "Gate selected workflow mode. Starting project selection."
+		if strings.TrimSpace(record.Run.Project.Slug) != "" {
+			defaultSummary = fmt.Sprintf("Gate selected workflow mode with preselected project %s. Starting planning.", record.Run.Project.Slug)
+		}
+		return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseSelectingProject, firstNonEmpty(summary, defaultSummary))
 	default:
 		return e.failRun(ctx, record.Run, fmt.Sprintf("Gate selected an unsupported route %q.", route), ErrInvalidRunState)
 	}
