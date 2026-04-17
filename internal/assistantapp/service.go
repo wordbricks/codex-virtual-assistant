@@ -15,8 +15,30 @@ import (
 var ErrRunNotWaiting = errors.New("assistant: run is not waiting")
 var ErrScheduledRunNotPending = errors.New("assistant: scheduled run is not pending")
 
+const DefaultProjectRunsPage = 1
+const DefaultProjectRunsPageSize = 20
+const MaxProjectRunsPageSize = 200
+
 type InitialRunPolicy interface {
 	InitialRun(string, time.Time) assistant.Run
+}
+
+type ProjectRunsQuery struct {
+	Status   assistant.RunStatus
+	Page     int
+	PageSize int
+}
+
+type Pagination struct {
+	Page       int `json:"page"`
+	PageSize   int `json:"page_size"`
+	Total      int `json:"total"`
+	TotalPages int `json:"total_pages"`
+}
+
+type ProjectRunsPage struct {
+	Runs       []assistant.Run `json:"runs"`
+	Pagination Pagination      `json:"pagination"`
 }
 
 type RunService struct {
@@ -91,6 +113,54 @@ func (s *RunService) ListChats(ctx context.Context) ([]assistant.Chat, error) {
 
 func (s *RunService) ListRunEvents(ctx context.Context, runID string) ([]assistant.RunEvent, error) {
 	return s.repo.ListRunEvents(ctx, runID)
+}
+
+func (s *RunService) ListRunsByProjectSlug(ctx context.Context, slug string, query ProjectRunsQuery) (ProjectRunsPage, error) {
+	runs, err := s.repo.ListRunsByProjectSlug(ctx, slug)
+	if err != nil {
+		return ProjectRunsPage{}, err
+	}
+
+	if trimmedStatus := strings.TrimSpace(string(query.Status)); trimmedStatus != "" {
+		if !isValidRunStatus(assistant.RunStatus(trimmedStatus)) {
+			return ProjectRunsPage{}, fmt.Errorf("assistant: invalid run status %q", trimmedStatus)
+		}
+
+		status := assistant.RunStatus(trimmedStatus)
+		filtered := make([]assistant.Run, 0, len(runs))
+		for _, run := range runs {
+			if run.Status == status {
+				filtered = append(filtered, run)
+			}
+		}
+		runs = filtered
+	}
+
+	page, pageSize := normalizeProjectRunsPage(query.Page, query.PageSize)
+	total := len(runs)
+	totalPages := total / pageSize
+	if total%pageSize != 0 {
+		totalPages++
+	}
+
+	start := (page - 1) * pageSize
+	if start > total {
+		start = total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+
+	return ProjectRunsPage{
+		Runs: runs[start:end],
+		Pagination: Pagination{
+			Page:       page,
+			PageSize:   pageSize,
+			Total:      total,
+			TotalPages: totalPages,
+		},
+	}, nil
 }
 
 func (s *RunService) SubmitInput(ctx context.Context, runID string, input map[string]string) error {
@@ -255,4 +325,26 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func isValidRunStatus(status assistant.RunStatus) bool {
+	for _, candidate := range assistant.AllRunStatuses() {
+		if candidate == status {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeProjectRunsPage(page, pageSize int) (int, int) {
+	if page <= 0 {
+		page = DefaultProjectRunsPage
+	}
+	if pageSize <= 0 {
+		pageSize = DefaultProjectRunsPageSize
+	}
+	if pageSize > MaxProjectRunsPageSize {
+		pageSize = MaxProjectRunsPageSize
+	}
+	return page, pageSize
 }

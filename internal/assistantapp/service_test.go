@@ -155,6 +155,91 @@ func TestRunServiceResumeRunStillWorksForWaitingRun(t *testing.T) {
 	}
 }
 
+func TestRunServiceListRunsByProjectSlugFiltersStatusAndPaginates(t *testing.T) {
+	t.Parallel()
+
+	repo := openServiceTestRepository(t)
+	now := time.Date(2026, time.April, 14, 9, 0, 0, 0, time.UTC)
+
+	makeProjectRun := func(idx int, slug string, status assistant.RunStatus) assistant.Run {
+		run := assistant.NewRun("project run", now.Add(time.Duration(idx)*time.Minute), 2)
+		run.Project = assistant.ProjectContext{Slug: slug}
+		run.Status = status
+		run.UpdatedAt = run.CreatedAt.Add(5 * time.Second)
+		return run
+	}
+
+	seedRuns := []assistant.Run{
+		makeProjectRun(0, "alpha", assistant.RunStatusQueued),
+		makeProjectRun(1, "alpha", assistant.RunStatusCompleted),
+		makeProjectRun(2, "alpha", assistant.RunStatusWaiting),
+		makeProjectRun(3, "beta", assistant.RunStatusCompleted),
+		makeProjectRun(4, "alpha", assistant.RunStatusCompleted),
+	}
+	for _, run := range seedRuns {
+		if err := repo.SaveRun(context.Background(), run); err != nil {
+			t.Fatalf("SaveRun(%s) error = %v", run.ID, err)
+		}
+	}
+
+	service := NewRunService(context.Background(), repo, &recordingEngine{repo: repo}, fixedPolicy{}, time.Now)
+
+	completedPage, err := service.ListRunsByProjectSlug(context.Background(), "alpha", ProjectRunsQuery{
+		Status:   assistant.RunStatusCompleted,
+		Page:     1,
+		PageSize: 1,
+	})
+	if err != nil {
+		t.Fatalf("ListRunsByProjectSlug(alpha/completed) error = %v", err)
+	}
+	if completedPage.Pagination.Total != 2 {
+		t.Fatalf("Total = %d, want 2 completed alpha runs", completedPage.Pagination.Total)
+	}
+	if completedPage.Pagination.TotalPages != 2 {
+		t.Fatalf("TotalPages = %d, want 2", completedPage.Pagination.TotalPages)
+	}
+	if len(completedPage.Runs) != 1 || completedPage.Runs[0].Status != assistant.RunStatusCompleted {
+		t.Fatalf("runs = %#v, want one completed run", completedPage.Runs)
+	}
+
+	secondPage, err := service.ListRunsByProjectSlug(context.Background(), "alpha", ProjectRunsQuery{
+		Page:     2,
+		PageSize: 2,
+	})
+	if err != nil {
+		t.Fatalf("ListRunsByProjectSlug(alpha/page2) error = %v", err)
+	}
+	if secondPage.Pagination.Total != 4 {
+		t.Fatalf("Total = %d, want 4 alpha runs", secondPage.Pagination.Total)
+	}
+	if secondPage.Pagination.TotalPages != 2 {
+		t.Fatalf("TotalPages = %d, want 2", secondPage.Pagination.TotalPages)
+	}
+	if len(secondPage.Runs) != 2 {
+		t.Fatalf("len(runs) = %d, want 2", len(secondPage.Runs))
+	}
+}
+
+func TestRunServiceListRunsByProjectSlugRejectsInvalidStatus(t *testing.T) {
+	t.Parallel()
+
+	repo := openServiceTestRepository(t)
+	now := time.Date(2026, time.April, 14, 9, 30, 0, 0, time.UTC)
+	run := assistant.NewRun("project run", now, 2)
+	run.Project = assistant.ProjectContext{Slug: "alpha"}
+	if err := repo.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+
+	service := NewRunService(context.Background(), repo, &recordingEngine{repo: repo}, fixedPolicy{}, time.Now)
+	_, err := service.ListRunsByProjectSlug(context.Background(), "alpha", ProjectRunsQuery{
+		Status: assistant.RunStatus("unknown"),
+	})
+	if err == nil {
+		t.Fatal("ListRunsByProjectSlug() error = nil, want invalid run status error")
+	}
+}
+
 type fixedPolicy struct{}
 
 func (fixedPolicy) InitialRun(userRequest string, now time.Time) assistant.Run {

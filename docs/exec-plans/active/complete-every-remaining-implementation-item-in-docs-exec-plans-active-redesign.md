@@ -23,7 +23,7 @@ The active redesign plan already records product direction, API targets, and fro
 
 ## Milestones
 
-- [ ] Milestone 1: Finish backend project-scoped run data access and filtering (`ListRunsByProjectSlug` path, service wiring, pagination/status behavior, and store/service tests).
+- [x] Milestone 1: Finish backend project-scoped run data access and filtering (`ListRunsByProjectSlug` path, service wiring, pagination/status behavior, and store/service tests).
 - [ ] Milestone 2: Finish backend project APIs for project-first pages (`GET /api/v1/projects/:slug`, `GET /api/v1/projects/:slug/runs`) with handler/service coverage.
 - [ ] Milestone 3: Finish backend flat wiki pages API and hard-bound run creation (`GET /api/v1/projects/:slug/wiki/pages`, `POST /api/v1/runs` with explicit `project_slug` override and selector bypass) with tests.
 - [ ] Milestone 4: Replace frontend app shell with TanStack Router + TanStack Query and split API client/types out of legacy `App.tsx`.
@@ -32,8 +32,14 @@ The active redesign plan already records product direction, API targets, and fro
 
 ## Current progress
 
-- Not started.
-- This execution plan is prepared and staged for loop execution handoff.
+- Milestone 1 completed:
+- Added `SQLiteRepository.ListRunsByProjectSlug(ctx, slug)` that filters hydrated runs by `run.Project.Slug`.
+- Added `RunService.ListRunsByProjectSlug(ctx, slug, query)` with status filtering, page/page_size normalization, and pagination metadata (`total`, `total_pages`).
+- Added focused tests:
+- `TestSQLiteRepositoryListRunsByProjectSlug`
+- `TestRunServiceListRunsByProjectSlugFiltersStatusAndPaginates`
+- `TestRunServiceListRunsByProjectSlugRejectsInvalidStatus`
+- Verification run: `go test ./internal/store ./internal/assistantapp`
 
 ## Key decisions
 
@@ -46,6 +52,8 @@ The active redesign plan already records product direction, API targets, and fro
 - Report overlay is removed.
 - Legacy chat UI is removed, including `/chats/:chatId`.
 - Implementation order is backend-first, then frontend shell, then page surfaces.
+- Project run list pagination defaults: `page=1`, `page_size=20`, capped at `page_size=200`.
+- Project run status filtering validates against `assistant.AllRunStatuses()` and rejects unknown statuses.
 
 ## Remaining issues / open questions
 
