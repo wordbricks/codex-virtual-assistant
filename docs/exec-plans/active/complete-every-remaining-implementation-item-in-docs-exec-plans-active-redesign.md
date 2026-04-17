@@ -1,61 +1,60 @@
-# Complete Remaining Redesign Implementation Items
+# Complete Every Remaining Redesign Implementation Item
 
 ## Goal / scope
 
-Implement every remaining item in [docs/exec-plans/active/redesign-cva-web-project-first.md](/Users/dev/git/codex-virtual-assistant/.worktrees/redesign-cva-web-project-first/docs/exec-plans/active/redesign-cva-web-project-first.md), covering all backend and frontend phases for the project-first CVA web redesign.
+Complete all remaining implementation work defined in [docs/exec-plans/active/redesign-cva-web-project-first.md](/Users/dev/git/codex-virtual-assistant/.worktrees/redesign-cva-web-project-first/docs/exec-plans/active/redesign-cva-web-project-first.md), including backend and frontend phases.
 
-Scope includes:
+In scope:
 
-- Backend project-scoped run queries and APIs.
-- Backend flat wiki pages API and hard-bound project-scoped run creation.
-- Frontend API/type split, TanStack Router/Query project shell, and page-level UI (home, overview, Notion-style wiki, Linear-style runs board and run drawer).
-- Removal of the legacy chat-first UI, legacy `/chats/:chatId` route, and old report overlay in favor of project/run surfaces.
-- Test/build verification for modified backend and frontend surfaces.
+- Backend project-scoped run queries and project aggregate APIs.
+- Flat project wiki pages API and project-scoped run creation hard-bound by `project_slug`.
+- Frontend migration to TanStack Router + TanStack Query.
+- Full project-first UX surfaces (projects home, project overview, wiki reader, runs board, run detail drawer).
+- Removal of legacy chat UI, `/chats/:chatId` route, and report overlay.
+- Verification with relevant tests/build checks.
 
-Out of scope remains the same as the active redesign plan (wiki editing, multi-user permissions, store/runtime replacement, and semantic wiki search).
+Out of scope remains unchanged from the active redesign plan.
 
 ## Background
 
-The active redesign plan defines a full project-first information architecture and implementation order, but execution work is still pending. The repository already has core primitives in API handlers, wiki services, store records, and a monolithic `webapp/src/App.tsx`; remaining work is integrating these into project-centered backend endpoints and frontend routes.
+The active redesign plan already records product direction, API targets, and frontend IA. This branch contains updated decisions that must be treated as fixed implementation constraints: TanStack Router, TanStack Query, hard-bound `project_slug` run creation, flat wiki pages API, Linear-style side drawer for run detail, and removal of report overlay plus legacy chat route/UI.
 
-`ARCHITECTURE.md` is not present in this worktree, so architecture context is taken from [README.md](/Users/dev/git/codex-virtual-assistant/.worktrees/redesign-cva-web-project-first/README.md), [PRD.md](/Users/dev/git/codex-virtual-assistant/.worktrees/redesign-cva-web-project-first/PRD.md), and the active redesign execution plan.
+`ARCHITECTURE.md` is not present in this worktree, so implementation context is taken from `README.md`, `docs/PLANS.md`, and the active redesign execution plan.
 
 ## Milestones
 
-- [ ] Milestone 1: Implement backend project-scoped run data access and service plumbing (`ListRunsByProjectSlug`, filtering, pagination/status handling, and store/service tests).
-- [ ] Milestone 2: Implement backend project APIs (`GET /api/v1/projects/:slug`, `GET /api/v1/projects/:slug/runs`, `GET /api/v1/projects/:slug/wiki/pages`) plus handler/service coverage.
-- [ ] Milestone 3: Implement hard-bound project-scoped run creation support in `POST /api/v1/runs` (`project_slug` request field, explicit project validation, skip project selector when provided, and regression tests).
-- [ ] Milestone 4: Refactor frontend foundations by installing TanStack Router and TanStack Query, extracting API client/types from `App.tsx`, aligning status models, and introducing project-first routes/shell.
-- [ ] Milestone 5: Build project-first frontend views (projects home, project overview, Notion-style wiki reader with collapsible tree, rich markdown blocks, metadata property row, breadcrumbs, and internal link navigation).
-- [ ] Milestone 6: Build the Linear-style runs experience (kanban columns, compact cards, filters, scheduled/waiting visibility, smooth refresh behavior, run detail side drawer), remove the legacy chat route/report overlay, and finish verification (targeted tests + build).
+- [ ] Milestone 1: Finish backend project-scoped run data access and filtering (`ListRunsByProjectSlug` path, service wiring, pagination/status behavior, and store/service tests).
+- [ ] Milestone 2: Finish backend project APIs for project-first pages (`GET /api/v1/projects/:slug`, `GET /api/v1/projects/:slug/runs`) with handler/service coverage.
+- [ ] Milestone 3: Finish backend flat wiki pages API and hard-bound run creation (`GET /api/v1/projects/:slug/wiki/pages`, `POST /api/v1/runs` with explicit `project_slug` override and selector bypass) with tests.
+- [ ] Milestone 4: Replace frontend app shell with TanStack Router + TanStack Query and split API client/types out of legacy `App.tsx`.
+- [ ] Milestone 5: Implement project-first pages (projects home, project overview, Notion-style wiki reader with tree, breadcrumbs, metadata row, and internal link navigation).
+- [ ] Milestone 6: Implement Linear-style runs board with side drawer detail, remove report overlay and all legacy chat UI including `/chats/:chatId`, then run verification builds/tests.
 
 ## Current progress
 
 - Not started.
-- Plan created for full remaining implementation execution.
+- This execution plan is prepared and staged for loop execution handoff.
 
 ## Key decisions
 
-- Use the existing redesign plan as source of truth for feature scope and sequence.
-- Treat Project as top-level navigation object and Run as project work unit.
-- Use TanStack Router for durable, shareable project routes.
-- Use TanStack Query for server-state caching, background refresh, and SSE integration.
-- Hard-bind project-scoped run creation: explicit `project_slug` wins and skips the project selector.
-- Represent run detail as a Linear-style side drawer over the kanban board, not a full-page route.
-- Return wiki pages as a flat API response and build the tree in the frontend.
-- Replace the old report overlay with the new run detail drawer.
-- Drop `/chats/:chatId` entirely; do not preserve a backward-compatible chat route.
-- Prioritize minimal-risk backend additions first, then frontend IA/routing, then page assembly.
-- Require tests/build checks before considering milestones complete.
+- Project is the primary navigation object.
+- TanStack Router is required for routing.
+- TanStack Query is required for server-state management.
+- `project_slug` is hard-bound for project-scoped run creation; project selector is skipped when provided.
+- Wiki pages API remains flat; frontend builds tree/grouping by page path.
+- Run detail is a Linear-style side drawer over the runs board.
+- Report overlay is removed.
+- Legacy chat UI is removed, including `/chats/:chatId`.
+- Implementation order is backend-first, then frontend shell, then page surfaces.
 
 ## Remaining issues / open questions
 
-- Whether changed wiki pages should be inferred from ingest artifacts/events or persisted explicitly for run cards/detail.
+- Confirm whether changed wiki page summaries for run cards should be inferred from ingest artifacts/events or persisted in a dedicated field.
+- Confirm the desired fallback UX when project wiki metadata fields are absent on older pages.
 
 ## Links to related documents
 
 - [AGENTS.md](/Users/dev/git/codex-virtual-assistant/.worktrees/redesign-cva-web-project-first/AGENTS.md)
 - [README.md](/Users/dev/git/codex-virtual-assistant/.worktrees/redesign-cva-web-project-first/README.md)
-- [PRD.md](/Users/dev/git/codex-virtual-assistant/.worktrees/redesign-cva-web-project-first/PRD.md)
 - [docs/PLANS.md](/Users/dev/git/codex-virtual-assistant/.worktrees/redesign-cva-web-project-first/docs/PLANS.md)
 - [docs/exec-plans/active/redesign-cva-web-project-first.md](/Users/dev/git/codex-virtual-assistant/.worktrees/redesign-cva-web-project-first/docs/exec-plans/active/redesign-cva-web-project-first.md)
