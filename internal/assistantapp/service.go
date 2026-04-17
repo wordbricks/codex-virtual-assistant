@@ -115,6 +115,10 @@ func (s *RunService) ListRunEvents(ctx context.Context, runID string) ([]assista
 	return s.repo.ListRunEvents(ctx, runID)
 }
 
+func (s *RunService) ListAllRunsByProjectSlug(ctx context.Context, slug string) ([]assistant.Run, error) {
+	return s.repo.ListRunsByProjectSlug(ctx, slug)
+}
+
 func (s *RunService) ListRunsByProjectSlug(ctx context.Context, slug string, query ProjectRunsQuery) (ProjectRunsPage, error) {
 	runs, err := s.repo.ListRunsByProjectSlug(ctx, slug)
 	if err != nil {

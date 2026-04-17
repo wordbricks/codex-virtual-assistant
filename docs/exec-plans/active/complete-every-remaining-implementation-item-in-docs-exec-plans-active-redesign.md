@@ -24,7 +24,7 @@ The active redesign plan already records product direction, API targets, and fro
 ## Milestones
 
 - [x] Milestone 1: Finish backend project-scoped run data access and filtering (`ListRunsByProjectSlug` path, service wiring, pagination/status behavior, and store/service tests).
-- [ ] Milestone 2: Finish backend project APIs for project-first pages (`GET /api/v1/projects/:slug`, `GET /api/v1/projects/:slug/runs`) with handler/service coverage.
+- [x] Milestone 2: Finish backend project APIs for project-first pages (`GET /api/v1/projects/:slug`, `GET /api/v1/projects/:slug/runs`) with handler/service coverage.
 - [ ] Milestone 3: Finish backend flat wiki pages API and hard-bound run creation (`GET /api/v1/projects/:slug/wiki/pages`, `POST /api/v1/runs` with explicit `project_slug` override and selector bypass) with tests.
 - [ ] Milestone 4: Replace frontend app shell with TanStack Router + TanStack Query and split API client/types out of legacy `App.tsx`.
 - [ ] Milestone 5: Implement project-first pages (projects home, project overview, Notion-style wiki reader with tree, breadcrumbs, metadata row, and internal link navigation).
@@ -40,6 +40,20 @@ The active redesign plan already records product direction, API targets, and fro
 - `TestRunServiceListRunsByProjectSlugFiltersStatusAndPaginates`
 - `TestRunServiceListRunsByProjectSlugRejectsInvalidStatus`
 - Verification run: `go test ./internal/store ./internal/assistantapp`
+- Milestone 2 completed:
+- Added `GET /api/v1/projects/:slug` project aggregate payload with:
+- `project` summary
+- `stats` (`active_runs`, `waiting_runs`, `scheduled_runs`, `completed_runs`, `stopped_runs`, `wiki_page_count`)
+- `recent_runs` (latest 5 by `updated_at`)
+- `latest_log_entries`
+- Added `GET /api/v1/projects/:slug/runs` with query support for:
+- `status`, `page`, `page_size`, `include_details`
+- Added API response pagination metadata and optional `run_records` expansion when `include_details=true`.
+- Added service wiring for aggregate path: `RunService.ListAllRunsByProjectSlug(ctx, slug)`.
+- Added focused coverage:
+- `TestRunServiceListAllRunsByProjectSlug`
+- `TestProjectsAPIProjectDetailAndRunsEndpoints`
+- Verification run: `go test ./internal/assistantapp ./internal/api ./internal/store`
 
 ## Key decisions
 
@@ -54,6 +68,7 @@ The active redesign plan already records product direction, API targets, and fro
 - Implementation order is backend-first, then frontend shell, then page surfaces.
 - Project run list pagination defaults: `page=1`, `page_size=20`, capped at `page_size=200`.
 - Project run status filtering validates against `assistant.AllRunStatuses()` and rejects unknown statuses.
+- `/api/v1/projects/:slug/runs?include_details=true` returns paginated run summaries plus `run_records`; default remains summary-only payload.
 
 ## Remaining issues / open questions
 

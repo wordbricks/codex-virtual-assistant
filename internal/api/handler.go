@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,6 +74,28 @@ type createRunResponse struct {
 	ChatURL   string        `json:"chat_url"`
 	StatusURL string        `json:"status_url"`
 	EventsURL string        `json:"events_url"`
+}
+
+type projectRunStats struct {
+	ActiveRuns    int `json:"active_runs"`
+	WaitingRuns   int `json:"waiting_runs"`
+	ScheduledRuns int `json:"scheduled_runs"`
+	CompletedRuns int `json:"completed_runs"`
+	StoppedRuns   int `json:"stopped_runs"`
+	WikiPageCount int `json:"wiki_page_count"`
+}
+
+type projectDetailResponse struct {
+	Project          wiki.ProjectSummary `json:"project"`
+	Stats            projectRunStats     `json:"stats"`
+	RecentRuns       []assistant.Run     `json:"recent_runs"`
+	LatestLogEntries []string            `json:"latest_log_entries,omitempty"`
+}
+
+type projectRunsResponse struct {
+	Runs       []assistant.Run         `json:"runs"`
+	Pagination assistantapp.Pagination `json:"pagination"`
+	RunRecords []store.RunRecord       `json:"run_records,omitempty"`
 }
 
 func NewHandler(cfg config.Config, runs *assistantapp.RunService, events *EventBroker, wikiService *wiki.Service) (http.Handler, error) {
@@ -358,6 +383,92 @@ func (a *RunAPI) handleProjectBySlug(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
+	case action == "" && r.Method == http.MethodGet:
+		projectSummary, err := a.findProjectSummaryBySlug(slug)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				http.NotFound(w, r)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		payload, err := a.projectDetailPayload(r.Context(), projectSummary)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, payload)
+	case action == "runs" && r.Method == http.MethodGet:
+		if _, err := a.findProjectSummaryBySlug(slug); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				http.NotFound(w, r)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		status := assistant.RunStatus(strings.TrimSpace(r.URL.Query().Get("status")))
+		page := 0
+		if rawPage := strings.TrimSpace(r.URL.Query().Get("page")); rawPage != "" {
+			value, err := strconv.Atoi(rawPage)
+			if err != nil {
+				http.Error(w, "page must be an integer", http.StatusBadRequest)
+				return
+			}
+			page = value
+		}
+		pageSize := 0
+		if rawPageSize := strings.TrimSpace(r.URL.Query().Get("page_size")); rawPageSize != "" {
+			value, err := strconv.Atoi(rawPageSize)
+			if err != nil {
+				http.Error(w, "page_size must be an integer", http.StatusBadRequest)
+				return
+			}
+			pageSize = value
+		}
+		includeDetails := false
+		if rawInclude := strings.TrimSpace(r.URL.Query().Get("include_details")); rawInclude != "" {
+			value, err := strconv.ParseBool(rawInclude)
+			if err != nil {
+				http.Error(w, "include_details must be a boolean", http.StatusBadRequest)
+				return
+			}
+			includeDetails = value
+		}
+
+		runsPage, err := a.runs.ListRunsByProjectSlug(r.Context(), slug, assistantapp.ProjectRunsQuery{
+			Status:   status,
+			Page:     page,
+			PageSize: pageSize,
+		})
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "invalid run status") {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		payload := projectRunsResponse{
+			Runs:       runsPage.Runs,
+			Pagination: runsPage.Pagination,
+		}
+		if includeDetails {
+			payload.RunRecords = make([]store.RunRecord, 0, len(runsPage.Runs))
+			for _, run := range runsPage.Runs {
+				record, err := a.runs.GetRunRecord(r.Context(), run.ID)
+				if err != nil {
+					writeStoreError(w, err)
+					return
+				}
+				a.enrichArtifactURLs(&record)
+				payload.RunRecords = append(payload.RunRecords, record)
+			}
+		}
+		writeJSON(w, http.StatusOK, payload)
 	case action == "wiki/index" && r.Method == http.MethodGet:
 		page, err := a.wiki.ReadIndex(slug)
 		if err != nil {
@@ -388,6 +499,117 @@ func (a *RunAPI) handleProjectBySlug(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (a *RunAPI) findProjectSummaryBySlug(slug string) (wiki.ProjectSummary, error) {
+	projects, err := a.wiki.ListProjects()
+	if err != nil {
+		return wiki.ProjectSummary{}, err
+	}
+	for _, project := range projects {
+		if project.Slug == slug {
+			return project, nil
+		}
+	}
+	return wiki.ProjectSummary{}, store.ErrNotFound
+}
+
+func (a *RunAPI) projectDetailPayload(ctx context.Context, project wiki.ProjectSummary) (projectDetailResponse, error) {
+	runs, err := a.runs.ListAllRunsByProjectSlug(ctx, project.Slug)
+	if err != nil {
+		return projectDetailResponse{}, err
+	}
+
+	stats := projectRunStats{WikiPageCount: project.WikiPageCount}
+	projectRunIDs := make(map[string]struct{}, len(runs))
+	for _, run := range runs {
+		projectRunIDs[run.ID] = struct{}{}
+		switch {
+		case isActiveRunStatus(run.Status):
+			stats.ActiveRuns++
+		case run.Status == assistant.RunStatusWaiting:
+			stats.WaitingRuns++
+		case run.Status == assistant.RunStatusCompleted:
+			stats.CompletedRuns++
+		case isStoppedRunStatus(run.Status):
+			stats.StoppedRuns++
+		}
+	}
+
+	scheduledRuns, err := a.runs.ListScheduledRuns(ctx, "", assistant.ScheduledRunStatusPending)
+	if err != nil {
+		return projectDetailResponse{}, err
+	}
+	for _, scheduledRun := range scheduledRuns {
+		if _, ok := projectRunIDs[scheduledRun.ParentRunID]; ok {
+			stats.ScheduledRuns++
+		}
+	}
+
+	sort.Slice(runs, func(i, j int) bool {
+		left := runSortTimestamp(runs[i])
+		right := runSortTimestamp(runs[j])
+		if left.Equal(right) {
+			return runs[i].ID > runs[j].ID
+		}
+		return left.After(right)
+	})
+	recentRuns := runs
+	if len(recentRuns) > 5 {
+		recentRuns = recentRuns[:5]
+	}
+
+	var latestLogEntries []string
+	if project.WikiEnabled {
+		wikiContext, err := a.wiki.LoadContext(assistant.ProjectContext{
+			Slug:         project.Slug,
+			Name:         project.Name,
+			Description:  project.Description,
+			WorkspaceDir: project.WorkspaceDir,
+			WikiDir:      filepath.Join(project.WorkspaceDir, "wiki"),
+		})
+		if err != nil && !errors.Is(err, wiki.ErrWikiDisabled) {
+			return projectDetailResponse{}, err
+		}
+		latestLogEntries = wikiContext.RecentLogEntries
+	}
+
+	return projectDetailResponse{
+		Project:          project,
+		Stats:            stats,
+		RecentRuns:       recentRuns,
+		LatestLogEntries: latestLogEntries,
+	}, nil
+}
+
+func isActiveRunStatus(status assistant.RunStatus) bool {
+	switch status {
+	case assistant.RunStatusQueued,
+		assistant.RunStatusGating,
+		assistant.RunStatusAnswering,
+		assistant.RunStatusSelectingProject,
+		assistant.RunStatusPlanning,
+		assistant.RunStatusContracting,
+		assistant.RunStatusGenerating,
+		assistant.RunStatusEvaluating,
+		assistant.RunStatusScheduling,
+		assistant.RunStatusWikiIngesting,
+		assistant.RunStatusReporting:
+		return true
+	default:
+		return false
+	}
+}
+
+func isStoppedRunStatus(status assistant.RunStatus) bool {
+	return status == assistant.RunStatusFailed || status == assistant.RunStatusExhausted || status == assistant.RunStatusCancelled
+}
+
+func runSortTimestamp(run assistant.Run) time.Time {
+	if run.UpdatedAt.IsZero() {
+		return run.CreatedAt
+	}
+	return run.UpdatedAt
 }
 
 func (a *RunAPI) enrichArtifactURLs(record *store.RunRecord) {
@@ -589,11 +811,13 @@ func parseProjectPath(path string) (slug, action string, ok bool) {
 		return "", "", false
 	}
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(path, prefix), "/"), "/")
-	if len(parts) < 2 || parts[0] == "" {
+	if len(parts) == 0 || parts[0] == "" {
 		return "", "", false
 	}
 	slug = parts[0]
-	action = strings.Join(parts[1:], "/")
+	if len(parts) > 1 {
+		action = strings.Join(parts[1:], "/")
+	}
 	return slug, action, true
 }
 

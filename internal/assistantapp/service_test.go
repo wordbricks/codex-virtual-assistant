@@ -240,6 +240,43 @@ func TestRunServiceListRunsByProjectSlugRejectsInvalidStatus(t *testing.T) {
 	}
 }
 
+func TestRunServiceListAllRunsByProjectSlug(t *testing.T) {
+	t.Parallel()
+
+	repo := openServiceTestRepository(t)
+	now := time.Date(2026, time.April, 14, 10, 0, 0, 0, time.UTC)
+
+	alphaA := assistant.NewRun("alpha A", now, 2)
+	alphaA.Project = assistant.ProjectContext{Slug: "alpha"}
+	if err := repo.SaveRun(context.Background(), alphaA); err != nil {
+		t.Fatalf("SaveRun(alphaA) error = %v", err)
+	}
+
+	beta := assistant.NewRun("beta", now.Add(time.Minute), 2)
+	beta.Project = assistant.ProjectContext{Slug: "beta"}
+	if err := repo.SaveRun(context.Background(), beta); err != nil {
+		t.Fatalf("SaveRun(beta) error = %v", err)
+	}
+
+	alphaB := assistant.NewRun("alpha B", now.Add(2*time.Minute), 2)
+	alphaB.Project = assistant.ProjectContext{Slug: "alpha"}
+	if err := repo.SaveRun(context.Background(), alphaB); err != nil {
+		t.Fatalf("SaveRun(alphaB) error = %v", err)
+	}
+
+	service := NewRunService(context.Background(), repo, &recordingEngine{repo: repo}, fixedPolicy{}, time.Now)
+	runs, err := service.ListAllRunsByProjectSlug(context.Background(), "alpha")
+	if err != nil {
+		t.Fatalf("ListAllRunsByProjectSlug(alpha) error = %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("len(runs) = %d, want 2", len(runs))
+	}
+	if runs[0].ID != alphaA.ID || runs[1].ID != alphaB.ID {
+		t.Fatalf("runs = %#v, want alphaA then alphaB", runs)
+	}
+}
+
 type fixedPolicy struct{}
 
 func (fixedPolicy) InitialRun(userRequest string, now time.Time) assistant.Run {
