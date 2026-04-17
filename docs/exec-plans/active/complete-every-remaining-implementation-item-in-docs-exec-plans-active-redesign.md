@@ -26,7 +26,7 @@ The active redesign plan already records product direction, API targets, and fro
 - [x] Milestone 1: Finish backend project-scoped run data access and filtering (`ListRunsByProjectSlug` path, service wiring, pagination/status behavior, and store/service tests).
 - [x] Milestone 2: Finish backend project APIs for project-first pages (`GET /api/v1/projects/:slug`, `GET /api/v1/projects/:slug/runs`) with handler/service coverage.
 - [x] Milestone 3: Finish backend flat wiki pages API and hard-bound run creation (`GET /api/v1/projects/:slug/wiki/pages`, `POST /api/v1/runs` with explicit `project_slug` override and selector bypass) with tests.
-- [ ] Milestone 4: Replace frontend app shell with TanStack Router + TanStack Query and split API client/types out of legacy `App.tsx`.
+- [x] Milestone 4: Replace frontend app shell with TanStack Router + TanStack Query and split API client/types out of legacy `App.tsx`.
 - [ ] Milestone 5: Implement project-first pages (projects home, project overview, Notion-style wiki reader with tree, breadcrumbs, metadata row, and internal link navigation).
 - [ ] Milestone 6: Implement Linear-style runs board with side drawer detail, remove report overlay and all legacy chat UI including `/chats/:chatId`, then run verification builds/tests.
 
@@ -68,6 +68,21 @@ The active redesign plan already records product direction, API targets, and fro
 - `TestRunsAPICreateRunWithProjectSlugSkipsProjectSelector`
 - `TestRunServiceCreateRunWithProjectBindsProjectSlug`
 - Verification run: `go test ./internal/assistantapp ./internal/wiki ./internal/wtl ./internal/api ./internal/store`
+- Milestone 4 completed:
+- Added TanStack Router app shell with route tree and router provider wiring.
+- Added TanStack Query provider and bootstrap/projects query usage in the new shell/routes.
+- Replaced `main.tsx` root render path with `QueryClientProvider` + `RouterProvider`.
+- Split API domain types from legacy chat UI into `webapp/src/api/types.ts`.
+- Split shared fetch client into `webapp/src/api/client.ts`.
+- Moved legacy chat-heavy UI from `App.tsx` to `legacy/LegacyChatPage.tsx` and mounted it behind `/legacy`.
+- Added route scaffolding for:
+- `/`
+- `/projects/:slug`
+- `/projects/:slug/wiki`
+- `/projects/:slug/wiki/*`
+- `/projects/:slug/runs`
+- Explicitly did not add `/chats/:chatId` route in new router shell.
+- Verification run: `npm run build` (webapp)
 
 ## Key decisions
 
@@ -84,6 +99,7 @@ The active redesign plan already records product direction, API targets, and fro
 - Project run status filtering validates against `assistant.AllRunStatuses()` and rejects unknown statuses.
 - `/api/v1/projects/:slug/runs?include_details=true` returns paginated run summaries plus `run_records`; default remains summary-only payload.
 - `POST /api/v1/runs` now accepts optional `project_slug`; when provided, the run is hard-bound to that project and workflow execution bypasses project selector phase.
+- Frontend shell now uses TanStack Router + TanStack Query; legacy chat UI is temporarily accessible at `/legacy` until Milestone 6 removal.
 
 ## Remaining issues / open questions
 
