@@ -183,3 +183,77 @@ func TestReadPageRejectsTraversal(t *testing.T) {
 		t.Fatal("ReadPage() error = nil, want invalid path rejection")
 	}
 }
+
+func TestListPagesReturnsFlatSortedMetadata(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	manager := project.NewManager(dataDir, filepath.Join(dataDir, "projects"))
+	projectCtx, err := manager.EnsureProject(assistant.ProjectContext{
+		Slug:        "docs-bot",
+		Name:        "Docs Bot",
+		Description: "Maintain documentation workflows.",
+	})
+	if err != nil {
+		t.Fatalf("EnsureProject() error = %v", err)
+	}
+
+	service := wiki.NewService(filepath.Join(dataDir, "projects"), time.Now)
+	if err := os.WriteFile(filepath.Join(projectCtx.WikiDir, "topics", "alpha.md"), []byte(`---
+title: Alpha Topic
+page_type: topic
+updated_at: 2026-04-01T00:00:00Z
+status: active
+confidence: medium
+source_refs:
+  - run:1
+related:
+  - index.md
+---
+# Alpha Topic
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(alpha) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectCtx.WikiDir, "reports", "zeta.md"), []byte(`---
+title: Zeta Report
+page_type: report
+updated_at: 2026-04-02T00:00:00Z
+status: active
+confidence: high
+source_refs:
+  - run:2
+related:
+  - overview.md
+---
+# Zeta Report
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(zeta) error = %v", err)
+	}
+
+	pages, err := service.ListPages("docs-bot")
+	if err != nil {
+		t.Fatalf("ListPages() error = %v", err)
+	}
+	if len(pages) == 0 {
+		t.Fatal("ListPages() returned no pages")
+	}
+	contains := func(path string) bool {
+		for _, page := range pages {
+			if page.Path == path {
+				return true
+			}
+		}
+		return false
+	}
+	if !contains("topics/alpha.md") {
+		t.Fatalf("pages = %#v, want topics/alpha.md", pages)
+	}
+	if !contains("reports/zeta.md") {
+		t.Fatalf("pages = %#v, want reports/zeta.md", pages)
+	}
+	for idx := 1; idx < len(pages); idx++ {
+		if pages[idx-1].Path > pages[idx].Path {
+			t.Fatalf("pages not sorted by path: %q then %q", pages[idx-1].Path, pages[idx].Path)
+		}
+	}
+}

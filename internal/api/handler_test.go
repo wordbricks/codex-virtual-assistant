@@ -407,12 +407,225 @@ func TestProjectsAPIListsWikiAndSupportsIndexAndLint(t *testing.T) {
 		t.Fatalf("index response = %q, want wiki index content", indexResponse.Body.String())
 	}
 
+	pagesResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/projects/docs-bot/wiki/pages", nil)
+	if pagesResponse.Code != http.StatusOK {
+		t.Fatalf("GET /projects/:slug/wiki/pages status = %d, want %d", pagesResponse.Code, http.StatusOK)
+	}
+	if !strings.Contains(pagesResponse.Body.String(), "\"pages\"") || !strings.Contains(pagesResponse.Body.String(), "overview.md") {
+		t.Fatalf("pages response = %q, want flat pages payload", pagesResponse.Body.String())
+	}
+
 	lintResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/projects/docs-bot/wiki/lint", map[string]any{})
 	if lintResponse.Code != http.StatusOK {
 		t.Fatalf("POST /projects/:slug/wiki/lint status = %d, want %d", lintResponse.Code, http.StatusOK)
 	}
 	if !strings.Contains(lintResponse.Body.String(), "wiki-health-") {
 		t.Fatalf("lint response = %q, want lint report path", lintResponse.Body.String())
+	}
+}
+
+func TestProjectsAPIProjectDetailAndRunsEndpoints(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestAPIHandler(t, &sequenceExecutor{
+		steps: []executorStep{
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request requires workflow execution.")},
+			{role: assistant.AttemptRoleProjectSelector, result: projectSelectorPhaseResult("docs-bot", "Docs Bot", "Maintain documentation workflows.")},
+			{role: assistant.AttemptRolePlanner, result: plannerPhaseResult("Summarize docs work", []string{"Docs summary"})},
+			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Docs summary"})},
+			{role: assistant.AttemptRoleGenerator, result: generatorPhaseResult("Prepared docs summary")},
+			{role: assistant.AttemptRoleEvaluator, result: evaluatorPhaseResult(true, 93, "The docs summary is complete.", nil, "")},
+			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered final report.", "Docs summary delivered.")},
+
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request requires workflow execution.")},
+			{role: assistant.AttemptRoleProjectSelector, result: projectSelectorPhaseResult("docs-bot", "Docs Bot", "Maintain documentation workflows.")},
+			{role: assistant.AttemptRolePlanner, result: wtl.CodexPhaseResult{
+				Summary: "Need approval before continuing.",
+				WaitRequest: &assistant.WaitRequest{
+					Kind:   assistant.WaitKindApproval,
+					Title:  "Approval required",
+					Prompt: "Approve opening the external service?",
+				},
+			}},
+
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request requires workflow execution.")},
+			{role: assistant.AttemptRoleProjectSelector, result: projectSelectorPhaseResult("ops-bot", "Ops Bot", "Maintain operations workflows.")},
+			{role: assistant.AttemptRolePlanner, result: plannerPhaseResult("Summarize ops work", []string{"Ops summary"})},
+			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Ops summary"})},
+			{role: assistant.AttemptRoleGenerator, result: generatorPhaseResult("Prepared ops summary")},
+			{role: assistant.AttemptRoleEvaluator, result: evaluatorPhaseResult(true, 91, "The ops summary is complete.", nil, "")},
+			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered ops report.", "Ops summary delivered.")},
+		},
+	})
+
+	completedResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "Summarize docs migration work.",
+	})
+	if completedResponse.Code != http.StatusAccepted {
+		t.Fatalf("POST /runs docs complete status = %d, want %d", completedResponse.Code, http.StatusAccepted)
+	}
+	var completed createRunResponse
+	if err := json.Unmarshal(completedResponse.Body.Bytes(), &completed); err != nil {
+		t.Fatalf("decode completed response: %v", err)
+	}
+	waitForRunStatus(t, handler, completed.Run.ID, assistant.RunStatusCompleted)
+
+	scheduledResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs/"+completed.Run.ID+"/scheduled", map[string]any{
+		"scheduled_for":           "2026-04-18T12:00:00Z",
+		"prompt":                  "Run a docs follow-up tomorrow.",
+		"max_generation_attempts": 2,
+	})
+	if scheduledResponse.Code != http.StatusCreated {
+		t.Fatalf("POST /runs/:id/scheduled status = %d, want %d", scheduledResponse.Code, http.StatusCreated)
+	}
+
+	waitingResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "Open the external docs dashboard.",
+	})
+	if waitingResponse.Code != http.StatusAccepted {
+		t.Fatalf("POST /runs docs waiting status = %d, want %d", waitingResponse.Code, http.StatusAccepted)
+	}
+	var waiting createRunResponse
+	if err := json.Unmarshal(waitingResponse.Body.Bytes(), &waiting); err != nil {
+		t.Fatalf("decode waiting response: %v", err)
+	}
+	waitForRunStatus(t, handler, waiting.Run.ID, assistant.RunStatusWaiting)
+
+	otherProjectResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "Summarize ops incident triage.",
+	})
+	if otherProjectResponse.Code != http.StatusAccepted {
+		t.Fatalf("POST /runs ops status = %d, want %d", otherProjectResponse.Code, http.StatusAccepted)
+	}
+	var otherProject createRunResponse
+	if err := json.Unmarshal(otherProjectResponse.Body.Bytes(), &otherProject); err != nil {
+		t.Fatalf("decode ops response: %v", err)
+	}
+	waitForRunStatus(t, handler, otherProject.Run.ID, assistant.RunStatusCompleted)
+
+	detailResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/projects/docs-bot", nil)
+	if detailResponse.Code != http.StatusOK {
+		t.Fatalf("GET /projects/:slug status = %d, want %d", detailResponse.Code, http.StatusOK)
+	}
+	var detail projectDetailResponse
+	if err := json.Unmarshal(detailResponse.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("decode project detail response: %v", err)
+	}
+	if detail.Project.Slug != "docs-bot" {
+		t.Fatalf("detail.Project.Slug = %q, want docs-bot", detail.Project.Slug)
+	}
+	if detail.Stats.WaitingRuns != 1 {
+		t.Fatalf("detail.Stats.WaitingRuns = %d, want 1", detail.Stats.WaitingRuns)
+	}
+	if detail.Stats.CompletedRuns != 1 {
+		t.Fatalf("detail.Stats.CompletedRuns = %d, want 1", detail.Stats.CompletedRuns)
+	}
+	if detail.Stats.ScheduledRuns != 1 {
+		t.Fatalf("detail.Stats.ScheduledRuns = %d, want 1", detail.Stats.ScheduledRuns)
+	}
+	if len(detail.RecentRuns) != 2 {
+		t.Fatalf("len(detail.RecentRuns) = %d, want 2", len(detail.RecentRuns))
+	}
+
+	runsResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/projects/docs-bot/runs?status=waiting&page=1&page_size=10", nil)
+	if runsResponse.Code != http.StatusOK {
+		t.Fatalf("GET /projects/:slug/runs status = %d, want %d", runsResponse.Code, http.StatusOK)
+	}
+	var runsPayload projectRunsResponse
+	if err := json.Unmarshal(runsResponse.Body.Bytes(), &runsPayload); err != nil {
+		t.Fatalf("decode project runs response: %v", err)
+	}
+	if len(runsPayload.Runs) != 1 || runsPayload.Runs[0].Status != assistant.RunStatusWaiting {
+		t.Fatalf("runs payload = %#v, want one waiting run", runsPayload)
+	}
+	if runsPayload.Pagination.Total != 1 {
+		t.Fatalf("runs pagination total = %d, want 1", runsPayload.Pagination.Total)
+	}
+
+	detailedRunsResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/projects/docs-bot/runs?page=1&page_size=1&include_details=true", nil)
+	if detailedRunsResponse.Code != http.StatusOK {
+		t.Fatalf("GET /projects/:slug/runs include_details status = %d, want %d", detailedRunsResponse.Code, http.StatusOK)
+	}
+	var detailedRuns projectRunsResponse
+	if err := json.Unmarshal(detailedRunsResponse.Body.Bytes(), &detailedRuns); err != nil {
+		t.Fatalf("decode detailed runs response: %v", err)
+	}
+	if len(detailedRuns.RunRecords) != 1 {
+		t.Fatalf("len(detailedRuns.RunRecords) = %d, want 1", len(detailedRuns.RunRecords))
+	}
+
+	invalidStatusResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/projects/docs-bot/runs?status=unknown_status", nil)
+	if invalidStatusResponse.Code != http.StatusBadRequest {
+		t.Fatalf("GET /projects/:slug/runs invalid status = %d, want %d", invalidStatusResponse.Code, http.StatusBadRequest)
+	}
+
+	missingProjectResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/projects/missing-project", nil)
+	if missingProjectResponse.Code != http.StatusNotFound {
+		t.Fatalf("GET /projects/missing status = %d, want %d", missingProjectResponse.Code, http.StatusNotFound)
+	}
+	missingProjectRunsResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/projects/missing-project/runs", nil)
+	if missingProjectRunsResponse.Code != http.StatusNotFound {
+		t.Fatalf("GET /projects/missing/runs status = %d, want %d", missingProjectRunsResponse.Code, http.StatusNotFound)
+	}
+}
+
+func TestRunsAPICreateRunWithProjectSlugSkipsProjectSelector(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestAPIHandler(t, &sequenceExecutor{
+		steps: []executorStep{
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request requires workflow execution.")},
+			{role: assistant.AttemptRoleProjectSelector, result: projectSelectorPhaseResult("docs-bot", "Docs Bot", "Maintain documentation workflows.")},
+			{role: assistant.AttemptRolePlanner, result: plannerPhaseResult("Seed docs-bot", []string{"Seed docs"})},
+			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Seed docs"})},
+			{role: assistant.AttemptRoleGenerator, result: generatorPhaseResult("Prepared seed docs output")},
+			{role: assistant.AttemptRoleEvaluator, result: evaluatorPhaseResult(true, 92, "Seed docs output complete.", nil, "")},
+			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered seed report.", "Seed docs delivered.")},
+
+			// Explicit project_slug run intentionally omits AttemptRoleProjectSelector.
+			{role: assistant.AttemptRoleGate, result: gatePhaseResult("workflow", "This request requires workflow execution.")},
+			{role: assistant.AttemptRolePlanner, result: plannerPhaseResult("Bound docs-bot", []string{"Bound docs"})},
+			{role: assistant.AttemptRoleContractor, result: contractPhaseResult("agreed", []string{"Bound docs"})},
+			{role: assistant.AttemptRoleGenerator, result: generatorPhaseResult("Prepared bound docs output")},
+			{role: assistant.AttemptRoleEvaluator, result: evaluatorPhaseResult(true, 94, "Bound docs output complete.", nil, "")},
+			{role: assistant.AttemptRoleReporter, result: reportPhaseResult("Delivered bound report.", "Bound docs delivered.")},
+		},
+	})
+
+	seedResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "Create docs-bot project context.",
+	})
+	if seedResponse.Code != http.StatusAccepted {
+		t.Fatalf("seed POST /runs status = %d, want %d", seedResponse.Code, http.StatusAccepted)
+	}
+	var seedCreated createRunResponse
+	if err := json.Unmarshal(seedResponse.Body.Bytes(), &seedCreated); err != nil {
+		t.Fatalf("decode seed create response: %v", err)
+	}
+	waitForRunStatus(t, handler, seedCreated.Run.ID, assistant.RunStatusCompleted)
+
+	boundResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "Continue docs-bot work with explicit project binding.",
+		"project_slug":     "docs-bot",
+	})
+	if boundResponse.Code != http.StatusAccepted {
+		t.Fatalf("bound POST /runs status = %d, want %d", boundResponse.Code, http.StatusAccepted)
+	}
+	var boundCreated createRunResponse
+	if err := json.Unmarshal(boundResponse.Body.Bytes(), &boundCreated); err != nil {
+		t.Fatalf("decode bound create response: %v", err)
+	}
+	record := waitForRunStatus(t, handler, boundCreated.Run.ID, assistant.RunStatusCompleted)
+	if record.Run.Project.Slug != "docs-bot" {
+		t.Fatalf("record.Run.Project.Slug = %q, want docs-bot", record.Run.Project.Slug)
+	}
+
+	missingProjectResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/runs", map[string]any{
+		"user_request_raw": "This should fail because project is missing.",
+		"project_slug":     "missing-project",
+	})
+	if missingProjectResponse.Code != http.StatusNotFound {
+		t.Fatalf("POST /runs with missing project status = %d, want %d", missingProjectResponse.Code, http.StatusNotFound)
 	}
 }
 

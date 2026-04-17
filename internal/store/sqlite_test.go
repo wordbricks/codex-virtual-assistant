@@ -404,6 +404,58 @@ func TestSQLiteRepositoryListsChatsAndExpandsChatRecord(t *testing.T) {
 	}
 }
 
+func TestSQLiteRepositoryListRunsByProjectSlug(t *testing.T) {
+	t.Parallel()
+
+	repo := openTestRepository(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.April, 2, 9, 0, 0, 0, time.UTC)
+
+	alphaFirst := assistant.NewRun("Alpha first run", now, 2)
+	alphaFirst.Project = assistant.ProjectContext{Slug: "alpha"}
+	alphaFirst.UpdatedAt = now.Add(10 * time.Second)
+	if err := repo.SaveRun(ctx, alphaFirst); err != nil {
+		t.Fatalf("SaveRun(alphaFirst) error = %v", err)
+	}
+
+	beta := assistant.NewRun("Beta run", now.Add(time.Minute), 2)
+	beta.Project = assistant.ProjectContext{Slug: "beta"}
+	beta.UpdatedAt = now.Add(70 * time.Second)
+	if err := repo.SaveRun(ctx, beta); err != nil {
+		t.Fatalf("SaveRun(beta) error = %v", err)
+	}
+
+	alphaSecond := assistant.NewRun("Alpha second run", now.Add(2*time.Minute), 2)
+	alphaSecond.Project = assistant.ProjectContext{Slug: "alpha"}
+	alphaSecond.UpdatedAt = now.Add(130 * time.Second)
+	if err := repo.SaveRun(ctx, alphaSecond); err != nil {
+		t.Fatalf("SaveRun(alphaSecond) error = %v", err)
+	}
+
+	runs, err := repo.ListRunsByProjectSlug(ctx, "alpha")
+	if err != nil {
+		t.Fatalf("ListRunsByProjectSlug(alpha) error = %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("len(runs) = %d, want 2", len(runs))
+	}
+	if runs[0].ID != alphaFirst.ID || runs[1].ID != alphaSecond.ID {
+		t.Fatalf("runs = %#v, want alpha runs in insertion order", runs)
+	}
+
+	none, err := repo.ListRunsByProjectSlug(ctx, "missing")
+	if err != nil {
+		t.Fatalf("ListRunsByProjectSlug(missing) error = %v", err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("len(none) = %d, want 0", len(none))
+	}
+
+	if _, err := repo.ListRunsByProjectSlug(ctx, "   "); err == nil {
+		t.Fatal("ListRunsByProjectSlug(empty) error = nil, want error")
+	}
+}
+
 func openTestRepository(t *testing.T) *SQLiteRepository {
 	t.Helper()
 

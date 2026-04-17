@@ -385,6 +385,26 @@ ORDER BY created_at ASC, updated_at ASC;
 	return runs, nil
 }
 
+func (r *SQLiteRepository) ListRunsByProjectSlug(ctx context.Context, slug string) ([]assistant.Run, error) {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return nil, errors.New("store: project slug is required")
+	}
+
+	runs, err := r.ListRuns(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	filtered := make([]assistant.Run, 0, len(runs))
+	for _, run := range runs {
+		if strings.TrimSpace(run.Project.Slug) == slug {
+			filtered = append(filtered, run)
+		}
+	}
+	return filtered, nil
+}
+
 func (r *SQLiteRepository) ListRunsByChat(ctx context.Context, chatID string) ([]assistant.Run, error) {
 	rows, err := queryRows[runRow](ctx, r, fmt.Sprintf(`
 SELECT
