@@ -19,7 +19,7 @@ export function AppShell() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <span className="sidebar-brand-icon">C</span>
+          <img className="sidebar-brand-logo" src="/logo.svg" alt="" aria-hidden="true" />
           <div>
             <p className="sidebar-brand-label">Workspace</p>
             <h1>{bootstrap?.product_name ?? "Codex"}</h1>

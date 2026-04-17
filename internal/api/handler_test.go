@@ -670,6 +670,36 @@ func TestRunAPIArtifactURL(t *testing.T) {
 	}
 }
 
+func TestRunAPIServesIndexForSPARoutes(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestAPIHandler(t, &sequenceExecutor{})
+
+	response := doJSONRequest(t, handler, http.MethodGet, "/projects/docs-bot/wiki", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET SPA route status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if contentType := response.Header().Get("Content-Type"); !strings.Contains(contentType, "text/html") {
+		t.Fatalf("Content-Type = %q, want text/html", contentType)
+	}
+	if !strings.Contains(response.Body.String(), `id="root"`) {
+		t.Fatalf("SPA route body = %q, want app index", response.Body.String())
+	}
+
+	headResponse := doJSONRequest(t, handler, http.MethodHead, "/projects/docs-bot/wiki", nil)
+	if headResponse.Code != http.StatusOK {
+		t.Fatalf("HEAD SPA route status = %d, want %d", headResponse.Code, http.StatusOK)
+	}
+	if headResponse.Body.Len() != 0 {
+		t.Fatalf("HEAD SPA route body length = %d, want 0", headResponse.Body.Len())
+	}
+
+	apiResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/not-found", nil)
+	if apiResponse.Code != http.StatusNotFound {
+		t.Fatalf("GET missing API route status = %d, want %d", apiResponse.Code, http.StatusNotFound)
+	}
+}
+
 func TestRunAPIHandleArtifactServesProjectArtifact(t *testing.T) {
 	t.Parallel()
 

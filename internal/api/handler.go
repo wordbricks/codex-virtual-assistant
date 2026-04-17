@@ -126,6 +126,8 @@ func NewHandler(cfg config.Config, runs *assistantapp.RunService, events *EventB
 	mux.HandleFunc("/api/v1/projects/", api.handleProjectBySlug)
 	mux.HandleFunc("/artifacts/", api.handleArtifact)
 	mux.Handle("/assets/", http.StripPrefix("/", http.FileServer(http.FS(staticFS))))
+	mux.Handle("/favicon.svg", http.FileServer(http.FS(staticFS)))
+	mux.Handle("/logo.svg", http.FileServer(http.FS(staticFS)))
 	mux.HandleFunc("/", api.serveIndex)
 	return mux, nil
 }
@@ -772,7 +774,11 @@ func (a *RunAPI) streamRunEvents(w http.ResponseWriter, r *http.Request, runID s
 }
 
 func (a *RunAPI) serveIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.NotFound(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/artifacts/") {
 		http.NotFound(w, r)
 		return
 	}
@@ -782,6 +788,9 @@ func (a *RunAPI) serveIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if r.Method == http.MethodHead {
+		return
+	}
 	_, _ = w.Write(index)
 }
 

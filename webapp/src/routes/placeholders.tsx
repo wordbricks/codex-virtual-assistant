@@ -37,14 +37,14 @@ const pageTypeOrder = [
 ] as const;
 
 const pageTypeIcons: Record<string, string> = {
-  overview: "📘",
-  topic: "🧩",
-  entity: "🏷️",
-  decision: "✅",
-  playbook: "🛠️",
-  source: "🔗",
-  question: "❓",
-  report: "📝",
+  overview: "OV",
+  topic: "TOP",
+  entity: "ENT",
+  decision: "DEC",
+  playbook: "PB",
+  source: "SRC",
+  question: "Q",
+  report: "RUN",
 };
 
 type RunColumnKey = "queued" | "working" | "waiting" | "scheduled" | "completed" | "stopped";
@@ -57,6 +57,18 @@ const runColumns: Array<{ key: RunColumnKey; title: string }> = [
   { key: "completed", title: "Completed" },
   { key: "stopped", title: "Stopped" },
 ];
+
+const runStatHelp = {
+  active: "Queued or currently working runs, including planning, generating, evaluating, scheduling, wiki ingesting, and reporting.",
+  waiting: "Runs paused until user input, approval, or missing context is provided.",
+  scheduled: "Future follow-up runs that have been queued by schedule.",
+  completed: "Runs that finished successfully.",
+  stopped: "Runs that failed, exhausted retry attempts, or were cancelled.",
+  wikiPages: "Markdown wiki pages tracked for this project.",
+} as const;
+
+const wikiPageTypeOptions = ["all", ...pageTypeOrder] as const;
+type WikiPageTypeFilter = (typeof wikiPageTypeOptions)[number];
 
 export function ProjectsHomePlaceholder() {
   const projectsQuery = useQuery({
@@ -119,20 +131,24 @@ export function ProjectsHomePlaceholder() {
               <p className="project-card-desc">{project.description || "No description available."}</p>
               <dl className="project-card-stats">
                 <div>
-                  <dt>Wiki Pages</dt>
+                  <dt title={runStatHelp.wikiPages}>Wiki Pages</dt>
                   <dd>{project.wiki_page_count}</dd>
                 </div>
                 <div>
-                  <dt>Active</dt>
+                  <dt title={runStatHelp.active}>Active</dt>
                   <dd>{detail?.stats.active_runs ?? "—"}</dd>
                 </div>
                 <div>
-                  <dt>Waiting</dt>
+                  <dt title={runStatHelp.waiting}>Waiting</dt>
                   <dd>{detail?.stats.waiting_runs ?? "—"}</dd>
                 </div>
                 <div>
-                  <dt>Completed</dt>
+                  <dt title={runStatHelp.completed}>Completed</dt>
                   <dd>{detail?.stats.completed_runs ?? "—"}</dd>
+                </div>
+                <div>
+                  <dt title={runStatHelp.stopped}>Stopped</dt>
+                  <dd>{detail?.stats.stopped_runs ?? "—"}</dd>
                 </div>
               </dl>
               {detail?.recent_runs?.[0] && (
@@ -229,12 +245,12 @@ export function ProjectOverviewPlaceholder() {
           </header>
 
           <dl className="project-overview-stats">
-            <div><dt>Active</dt><dd>{detailQuery.data.stats.active_runs}</dd></div>
-            <div><dt>Waiting</dt><dd>{detailQuery.data.stats.waiting_runs}</dd></div>
-            <div><dt>Scheduled</dt><dd>{detailQuery.data.stats.scheduled_runs}</dd></div>
-            <div><dt>Completed</dt><dd>{detailQuery.data.stats.completed_runs}</dd></div>
-            <div><dt>Stopped</dt><dd>{detailQuery.data.stats.stopped_runs}</dd></div>
-            <div><dt>Wiki Pages</dt><dd>{detailQuery.data.stats.wiki_page_count}</dd></div>
+            <div><dt title={runStatHelp.active}>Active</dt><dd>{detailQuery.data.stats.active_runs}</dd></div>
+            <div><dt title={runStatHelp.waiting}>Waiting</dt><dd>{detailQuery.data.stats.waiting_runs}</dd></div>
+            <div><dt title={runStatHelp.scheduled}>Scheduled</dt><dd>{detailQuery.data.stats.scheduled_runs}</dd></div>
+            <div><dt title={runStatHelp.completed}>Completed</dt><dd>{detailQuery.data.stats.completed_runs}</dd></div>
+            <div><dt title={runStatHelp.stopped}>Stopped</dt><dd>{detailQuery.data.stats.stopped_runs}</dd></div>
+            <div><dt title={runStatHelp.wikiPages}>Wiki Pages</dt><dd>{detailQuery.data.stats.wiki_page_count}</dd></div>
           </dl>
 
           <div className="project-overview-grid">
@@ -326,6 +342,12 @@ function ProjectWikiReader({ slug, selectedPath }: { slug: string; selectedPath:
     staleTime: 20_000,
   });
 
+  const detailQuery = useQuery({
+    queryKey: ["project-detail", slug],
+    queryFn: () => apiClient.getProjectDetail(slug),
+    staleTime: 20_000,
+  });
+
   const pageQuery = useQuery({
     queryKey: ["wiki-page", slug, selectedPath],
     queryFn: () => apiClient.getWikiPage(slug, selectedPath),
@@ -333,15 +355,37 @@ function ProjectWikiReader({ slug, selectedPath }: { slug: string; selectedPath:
   });
 
   const navigate = useNavigate();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState<WikiPageTypeFilter>("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+
+  const allPages = pagesQuery.data?.pages ?? [];
 
   const pageMetaByPath = useMemo(() => {
     const map = new Map<string, WikiPageMeta>();
-    for (const page of pagesQuery.data?.pages ?? []) map.set(page.path, page);
+    for (const page of allPages) map.set(page.path, page);
     return map;
-  }, [pagesQuery.data?.pages]);
+  }, [allPages]);
 
   const selectedMeta = pageMetaByPath.get(selectedPath) ?? pageQuery.data?.meta;
-  const grouped = useMemo(() => groupPagesByType(pagesQuery.data?.pages ?? []), [pagesQuery.data?.pages]);
+  const wikiStatusOptions = useMemo(() => {
+    const statuses = new Set<string>();
+    for (const page of allPages) {
+      if (page.status) statuses.add(page.status);
+    }
+    return ["all", ...Array.from(statuses).sort()];
+  }, [allPages]);
+  const filteredPages = useMemo(
+    () => filterWikiPages(allPages, {
+      query: searchQuery,
+      pageType: typeFilter,
+      status: statusFilter,
+    }),
+    [allPages, searchQuery, statusFilter, typeFilter],
+  );
+  const grouped = useMemo(() => groupPagesByType(filteredPages), [filteredPages]);
+  const pageTypeCounts = useMemo(() => countBy(allPages, (page) => page.page_type || "overview"), [allPages]);
+  const reportCount = pageTypeCounts.get("report") ?? 0;
 
   const openWikiPath = (path: string) => {
     if (path === "index.md") {
@@ -359,6 +403,68 @@ function ProjectWikiReader({ slug, selectedPath }: { slug: string; selectedPath:
           <h3>{slug}</h3>
         </div>
 
+        <section className="wiki-health-summary" aria-label="Project health summary">
+          <div>
+            <strong>{allPages.length}</strong>
+            <span>Pages</span>
+          </div>
+          <div title={runStatHelp.active}>
+            <strong>{detailQuery.data?.stats.active_runs ?? "—"}</strong>
+            <span>Active</span>
+          </div>
+          <div title={runStatHelp.waiting}>
+            <strong>{detailQuery.data?.stats.waiting_runs ?? "—"}</strong>
+            <span>Waiting</span>
+          </div>
+          <div title={runStatHelp.stopped}>
+            <strong>{detailQuery.data?.stats.stopped_runs ?? "—"}</strong>
+            <span>Stopped</span>
+          </div>
+        </section>
+
+        {reportCount > 0 && (
+          <p className="wiki-report-note">
+            {reportCount} run reports are available. Use filters to keep the navigation focused.
+          </p>
+        )}
+
+        <div className="wiki-filters" aria-label="Wiki filters">
+          <label>
+            <span>Search</span>
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Title, path, status..."
+            />
+          </label>
+          <div className="wiki-filter-row">
+            <label>
+              <span>Type</span>
+              <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as WikiPageTypeFilter)}>
+                {wikiPageTypeOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option === "all" ? "All types" : `${humanize(option)} (${pageTypeCounts.get(option) ?? 0})`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Status</span>
+              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                {wikiStatusOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option === "all" ? "All statuses" : humanize(option)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <p className="wiki-filter-count">
+            Showing {filteredPages.length} of {allPages.length} pages
+          </p>
+        </div>
+
         {pagesQuery.isLoading && <p className="projects-note">Loading pages…</p>}
         {pagesQuery.isError && <p className="projects-note">Failed to load pages.</p>}
 
@@ -366,7 +472,7 @@ function ProjectWikiReader({ slug, selectedPath }: { slug: string; selectedPath:
           {grouped.map((group) => (
             <details key={group.pageType} open className="wiki-group">
               <summary>
-                <span>{pageTypeIcons[group.pageType] ?? "📄"}</span>
+                <span>{pageTypeIcons[group.pageType] ?? "Page"}</span>
                 <span>{humanize(group.pageType)}</span>
                 <span className="wiki-group-count">{group.pages.length}</span>
               </summary>
@@ -443,8 +549,10 @@ function FolderBranch({
           type="button"
           className={`wiki-page-link${page.path === selectedPath ? " is-active" : ""}`}
           onClick={() => onOpenPath(page.path)}
+          title={page.title}
         >
-          {page.title}
+          <span>{compactWikiTitle(page)}</span>
+          {page.status && page.status !== "active" && <small>{humanize(page.status)}</small>}
         </button>
       ))}
     </div>
@@ -924,6 +1032,38 @@ type PageTypeGroup = {
   branch: FolderNode;
 };
 
+function filterWikiPages(
+  pages: WikiPageMeta[],
+  filters: { query: string; pageType: WikiPageTypeFilter; status: string },
+): WikiPageMeta[] {
+  const query = filters.query.trim().toLowerCase();
+  return pages.filter((page) => {
+    if (filters.pageType !== "all" && (page.page_type || "overview") !== filters.pageType) return false;
+    if (filters.status !== "all" && page.status !== filters.status) return false;
+    if (!query) return true;
+
+    const searchable = [
+      page.title,
+      page.path,
+      page.page_type,
+      page.status,
+      page.confidence,
+      ...(page.source_refs ?? []),
+      ...(page.related ?? []),
+    ].join(" ").toLowerCase();
+    return searchable.includes(query);
+  });
+}
+
+function countBy<T>(items: T[], keyFor: (item: T) => string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const key = keyFor(item);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
 function groupPagesByType(pages: WikiPageMeta[]): PageTypeGroup[] {
   const byType = new Map<string, WikiPageMeta[]>();
   for (const page of pages) {
@@ -952,6 +1092,21 @@ function groupPagesByType(pages: WikiPageMeta[]): PageTypeGroup[] {
   });
 
   return groups;
+}
+
+function compactWikiTitle(page: WikiPageMeta): string {
+  const title = page.title || page.path;
+  if (page.page_type === "report") {
+    const match = page.path.match(/run_(\d{8}T\d{6}Z)_([a-z0-9]+)/);
+    if (match) return `Run ${formatRunTimestamp(match[1])} ${match[2].slice(0, 8)}`;
+  }
+  return truncate(title, page.page_type === "topic" ? 92 : 72);
+}
+
+function formatRunTimestamp(value: string): string {
+  const match = value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/);
+  if (!match) return value;
+  return `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}Z`;
 }
 
 function buildFolderTree(pages: WikiPageMeta[]): FolderNode {
