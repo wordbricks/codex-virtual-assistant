@@ -31,7 +31,7 @@ Clone this repository, install prerequisites, build it, and run it locally.
    - Install Node.js 20.19.0 or newer (or Node.js 22.12.0+) for the webapp toolchain.
    - Install sqlite3 and make sure it is on PATH.
    - Install `ffmpeg` and make sure it is on PATH. CVA uses it to turn captured browser frames into the report video replay.
-   - Install the codex CLI and authenticate it so `codex app-server` can run, or install and authenticate Claude Code if you set `ASSISTANT_RUNTIME=claude`.
+   - Install the codex CLI and authenticate it so `codex app-server` can run, or install and authenticate Claude Code if you set `ASSISTANT_RUNTIME=claude` or `ASSISTANT_RUNTIME=zai`.
    - Install the `agent-browser` CLI and browser runtime:
      - npm install -g agent-browser
      - agent-browser install
@@ -150,7 +150,11 @@ go run ./cmd/cva start --yolo
 
 The server uses `codex app-server` as the default execution runtime for planner/generator/evaluator phases. Make sure the `codex` CLI is installed, authenticated, and able to run `codex app-server` on your machine before you start a run from the UI.
 
-To run phases through Claude Code CLI instead, run `cva runtime claude` or set `ASSISTANT_RUNTIME=claude`. CVA invokes Claude in headless mode with `claude --dangerously-skip-permissions -p ... --output-format json`, so Claude tool permission prompts are skipped and the phase must finish with the requested JSON result. Use `cva runtime codex` to switch back. The command persists the choice to `<CVA home>/config.json`; `ASSISTANT_RUNTIME` still overrides the saved value when set.
+To run phases through Claude Code CLI directly, run `cva runtime claude` or set `ASSISTANT_RUNTIME=claude`. CVA invokes Claude in headless mode with `claude --dangerously-skip-permissions -p ... --output-format json`, so Claude tool permission prompts are skipped and the phase must finish with the requested JSON result.
+
+To run through the bundled PTY wrapper instead, run `cva runtime zai` or set `ASSISTANT_RUNTIME=zai`. The `zai` runtime still uses your configured Claude binary, but it routes `-p` calls through the bundled `claude-pty-print` wrapper from this repository and requires the final answer to be a single JSON object in plain text.
+
+Use `cva runtime codex` to switch back. The command persists the choice to `<CVA home>/config.json`; `ASSISTANT_RUNTIME` still overrides the saved value when set.
 
 Install `agent-browser` on the same machine so Codex can execute browser work through the current CLI:
 
@@ -169,7 +173,7 @@ Environment variables:
 - `ASSISTANT_DATABASE_PATH`: SQLite database path, default `<data dir>/assistant.db`
 - `ASSISTANT_ARTIFACT_DIR`: directory for generated artifacts, default `<data dir>/artifacts`
 - `ASSISTANT_MAX_GENERATION_ATTEMPTS`: default generator retry budget, default `3`
-- `ASSISTANT_RUNTIME`: execution provider, `codex` or `claude`, default `codex`
+- `ASSISTANT_RUNTIME`: execution provider, `codex`, `claude`, or `zai`, default `codex`
 - `ASSISTANT_CODEX_BIN`: Codex CLI path, default `codex`
 - `ASSISTANT_CLAUDE_BIN`: Claude Code CLI path, default `claude`
 - `ASSISTANT_CLAUDE_MODEL`: optional Claude model passed to `claude --model`

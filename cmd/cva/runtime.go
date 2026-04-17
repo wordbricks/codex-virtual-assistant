@@ -18,7 +18,7 @@ type runtimeStatus struct {
 
 func cmdRuntime(args []string, jsonMode bool) error {
 	if len(args) > 1 {
-		return fmt.Errorf("usage: cva runtime [codex|claude]")
+		return fmt.Errorf("usage: cva runtime [codex|claude|zai]")
 	}
 
 	cfg, err := config.Load()
@@ -29,7 +29,7 @@ func cmdRuntime(args []string, jsonMode bool) error {
 	if len(args) == 1 {
 		provider := strings.TrimSpace(args[0])
 		if !config.ValidRuntimeProvider(provider) {
-			return fmt.Errorf("runtime provider must be %q or %q", "codex", "claude")
+			return fmt.Errorf("runtime provider must be %q, %q, or %q", "codex", "claude", "zai")
 		}
 		if err := config.WriteRuntimeProvider(cfg.ConfigDir, provider); err != nil {
 			return err
