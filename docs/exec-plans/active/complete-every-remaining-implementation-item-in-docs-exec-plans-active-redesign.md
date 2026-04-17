@@ -28,7 +28,7 @@ The active redesign plan already records product direction, API targets, and fro
 - [x] Milestone 3: Finish backend flat wiki pages API and hard-bound run creation (`GET /api/v1/projects/:slug/wiki/pages`, `POST /api/v1/runs` with explicit `project_slug` override and selector bypass) with tests.
 - [x] Milestone 4: Replace frontend app shell with TanStack Router + TanStack Query and split API client/types out of legacy `App.tsx`.
 - [x] Milestone 5: Implement project-first pages (projects home, project overview, Notion-style wiki reader with tree, breadcrumbs, metadata row, and internal link navigation).
-- [ ] Milestone 6: Implement Linear-style runs board with side drawer detail, remove report overlay and all legacy chat UI including `/chats/:chatId`, then run verification builds/tests.
+- [x] Milestone 6: Implement Linear-style runs board with side drawer detail, remove report overlay and all legacy chat UI including `/chats/:chatId`, then run verification builds/tests.
 
 ## Current progress
 
@@ -92,6 +92,27 @@ The active redesign plan already records product direction, API targets, and fro
 - Added `react-markdown` dependency for rich wiki document rendering.
 - Added styling for project home/overview/wiki layouts and typography in `webapp/src/styles.css`.
 - Verification run: `npm run build` (webapp)
+- Milestone 6 completed:
+- Implemented a Linear-style project runs board in `webapp/src/routes/placeholders.tsx` with:
+- horizontal status columns (`Queued`, `Working`, `Waiting`, `Scheduled`, `Completed`, `Stopped`),
+- compact run cards with status badges, relative time, evaluation/artifact/wiki-change indicators,
+- filter bar for status column and date window,
+- scheduled-runs column backed by `/api/v1/scheduled` and project-parent run resolution.
+- Implemented a run detail side drawer (no full-page run route) containing:
+- run metadata and request/outcome summary,
+- evaluations (including missing requirements),
+- artifacts, wiki changed pages, attempts, timeline events, evidence, tool calls, web steps,
+- wait requests, scheduled follow-ups, and raw event payload view.
+- Added frontend API types/client support for project runs, run record retrieval, and scheduled runs in:
+- `webapp/src/api/types.ts`
+- `webapp/src/api/client.ts`
+- Removed report overlay and legacy chat UI surface:
+- removed `/legacy` route from TanStack Router and sidebar nav link,
+- deleted `webapp/src/legacy/LegacyChatPage.tsx`,
+- deleted legacy `webapp/src/components/assistant-ui/*` components,
+- removed `@assistant-ui/react` and `@assistant-ui/react-markdown` dependencies.
+- Updated `webapp/src/styles.css` to add runs board + drawer styles and remove legacy report overlay styles.
+- Verification run: `npm run build` (webapp)
 
 ## Key decisions
 
@@ -108,7 +129,7 @@ The active redesign plan already records product direction, API targets, and fro
 - Project run status filtering validates against `assistant.AllRunStatuses()` and rejects unknown statuses.
 - `/api/v1/projects/:slug/runs?include_details=true` returns paginated run summaries plus `run_records`; default remains summary-only payload.
 - `POST /api/v1/runs` now accepts optional `project_slug`; when provided, the run is hard-bound to that project and workflow execution bypasses project selector phase.
-- Frontend shell now uses TanStack Router + TanStack Query; legacy chat UI is temporarily accessible at `/legacy` until Milestone 6 removal.
+- Frontend shell now uses TanStack Router + TanStack Query with project-first pages, runs board, and run detail side drawer.
 
 ## Remaining issues / open questions
 

@@ -1,7 +1,6 @@
 import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { AppShell } from "@/App";
 import {
-  LegacyChatRoute,
   ProjectOverviewPlaceholder,
   ProjectsHomePlaceholder,
   ProjectRunsPlaceholder,
@@ -43,19 +42,12 @@ const projectRunsRoute = createRoute({
   component: ProjectRunsPlaceholder,
 });
 
-const legacyChatRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/legacy",
-  component: LegacyChatRoute,
-});
-
 const routeTree = rootRoute.addChildren([
   projectsHomeRoute,
   projectOverviewRoute,
   projectWikiRoute,
   projectWikiPageRoute,
   projectRunsRoute,
-  legacyChatRoute,
 ]);
 
 export const router = createRouter({ routeTree });

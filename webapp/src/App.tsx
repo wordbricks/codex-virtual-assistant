@@ -4,7 +4,6 @@ import { apiClient } from "@/api/client";
 
 const navigationLinks = [
   { to: "/", label: "Projects" },
-  { to: "/legacy", label: "Legacy Chat" },
 ] as const;
 
 export function AppShell() {

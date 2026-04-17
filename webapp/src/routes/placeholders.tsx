@@ -1,11 +1,10 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { apiClient } from "@/api/client";
-import type { ProjectDetailResponse, ProjectSummary, RunStatus, WikiPageMeta } from "@/api/types";
-import { LegacyChatPage } from "@/legacy/LegacyChatPage";
+import type { ProjectDetailResponse, RunRecord, RunStatus, WikiPageMeta } from "@/api/types";
 
 const statusLabel: Record<RunStatus, string> = {
   queued: "Queued",
@@ -47,6 +46,17 @@ const pageTypeIcons: Record<string, string> = {
   question: "❓",
   report: "📝",
 };
+
+type RunColumnKey = "queued" | "working" | "waiting" | "scheduled" | "completed" | "stopped";
+
+const runColumns: Array<{ key: RunColumnKey; title: string }> = [
+  { key: "queued", title: "Queued" },
+  { key: "working", title: "Working" },
+  { key: "waiting", title: "Waiting" },
+  { key: "scheduled", title: "Scheduled" },
+  { key: "completed", title: "Completed" },
+  { key: "stopped", title: "Stopped" },
+];
 
 export function ProjectsHomePlaceholder() {
   const projectsQuery = useQuery({
@@ -511,19 +521,394 @@ function WikiMarkdown({ slug, currentPath, markdown }: { slug: string; currentPa
 
 export function ProjectRunsPlaceholder() {
   const { slug } = useParams({ from: "/projects/$slug/runs" });
+  const [statusFilter, setStatusFilter] = useState<RunColumnKey | "all">("all");
+  const [dateRange, setDateRange] = useState<"24h" | "7d" | "30d" | "all">("7d");
+  const [selectedRunID, setSelectedRunID] = useState("");
+
+  useEffect(() => {
+    setSelectedRunID("");
+  }, [slug]);
+
+  useEffect(() => {
+    if (!selectedRunID) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelectedRunID("");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedRunID]);
+
+  const runsQuery = useQuery({
+    queryKey: ["project-runs-board", slug],
+    queryFn: () => apiClient.listProjectRuns(slug, { page: 1, pageSize: 200, includeDetails: true }),
+    staleTime: 5_000,
+    refetchInterval: 5_000,
+    refetchIntervalInBackground: true,
+  });
+
+  const scheduledQuery = useQuery({
+    queryKey: ["scheduled-runs", "pending"],
+    queryFn: () => apiClient.listScheduledRuns({ status: "pending" }),
+    staleTime: 10_000,
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: true,
+  });
+
+  const runs = runsQuery.data?.runs ?? [];
+  const runRecords = runsQuery.data?.run_records ?? [];
+  const recordByRunID = useMemo(() => {
+    const map = new Map<string, RunRecord>();
+    for (const record of runRecords) map.set(record.run.id, record);
+    return map;
+  }, [runRecords]);
+
+  const projectByParentRunID = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const run of runs) map.set(run.id, run.project.slug);
+    for (const record of runRecords) map.set(record.run.id, record.run.project.slug);
+    return map;
+  }, [runRecords, runs]);
+
+  const pendingScheduled = scheduledQuery.data?.scheduled_runs ?? [];
+  const unknownScheduledParentRunIDs = useMemo(() => {
+    const missing = new Set<string>();
+    for (const scheduledRun of pendingScheduled) {
+      if (projectByParentRunID.has(scheduledRun.parent_run_id)) continue;
+      if (!scheduledRun.parent_run_id) continue;
+      missing.add(scheduledRun.parent_run_id);
+    }
+    return Array.from(missing);
+  }, [pendingScheduled, projectByParentRunID]);
+
+  const parentRunQueries = useQueries({
+    queries: unknownScheduledParentRunIDs.map((runID) => ({
+      queryKey: ["run-record", runID],
+      queryFn: () => apiClient.getRunRecord(runID),
+      staleTime: 15_000,
+      refetchInterval: 15_000,
+      refetchIntervalInBackground: true,
+    })),
+  });
+
+  const fallbackRecordByRunID = useMemo(() => {
+    const map = new Map<string, RunRecord>();
+    for (const query of parentRunQueries) {
+      if (query.data) map.set(query.data.run.id, query.data);
+    }
+    return map;
+  }, [parentRunQueries]);
+
+  const pendingScheduledForProject = useMemo(() => {
+    return pendingScheduled.filter((scheduledRun) => {
+      const knownSlug = projectByParentRunID.get(scheduledRun.parent_run_id);
+      if (knownSlug) return knownSlug === slug;
+      const parent = fallbackRecordByRunID.get(scheduledRun.parent_run_id);
+      return parent?.run.project.slug === slug;
+    });
+  }, [fallbackRecordByRunID, pendingScheduled, projectByParentRunID, slug]);
+
+  const filteredRuns = useMemo(() => {
+    return runs
+      .filter((run) => matchesDateRange(run.updated_at || run.created_at, dateRange))
+      .sort((left, right) => +new Date(right.updated_at || right.created_at) - +new Date(left.updated_at || left.created_at));
+  }, [dateRange, runs]);
+
+  const runsByColumn = useMemo(() => {
+    const grouped: Record<Exclude<RunColumnKey, "scheduled">, typeof filteredRuns> = {
+      queued: [],
+      working: [],
+      waiting: [],
+      completed: [],
+      stopped: [],
+    };
+    for (const run of filteredRuns) grouped[statusToColumn(run.status)].push(run);
+    return grouped;
+  }, [filteredRuns]);
+
+  const filteredScheduled = useMemo(() => {
+    return pendingScheduledForProject
+      .filter((scheduledRun) => matchesDateRange(scheduledRun.scheduled_for || scheduledRun.created_at, dateRange))
+      .sort((left, right) => +new Date(left.scheduled_for) - +new Date(right.scheduled_for));
+  }, [dateRange, pendingScheduledForProject]);
+
+  const selectedRunFromBoard = selectedRunID
+    ? (recordByRunID.get(selectedRunID) ?? fallbackRecordByRunID.get(selectedRunID))
+    : null;
+  const selectedRunQuery = useQuery({
+    queryKey: ["run-record", selectedRunID],
+    queryFn: () => apiClient.getRunRecord(selectedRunID),
+    enabled: Boolean(selectedRunID) && !selectedRunFromBoard,
+    staleTime: 10_000,
+    refetchInterval: selectedRunID ? 5_000 : false,
+    refetchIntervalInBackground: true,
+  });
+  const selectedRun = selectedRunFromBoard ?? selectedRunQuery.data ?? null;
+
+  const visibleColumns = statusFilter === "all" ? runColumns : runColumns.filter((column) => column.key === statusFilter);
+  const waitingForProjectLookups = parentRunQueries.some((query) => query.isLoading);
 
   return (
-    <section className="chat-stage" style={{ padding: "2rem" }}>
-      <header className="chat-header">
-        <h2 className="chat-title">Runs: {slug}</h2>
+    <section className="runs-board-page">
+      <header className="runs-board-header">
+        <div>
+          <p className="projects-kicker">Project Runs</p>
+          <h2>{slug}</h2>
+          <p className="project-overview-subtitle">Track live execution and inspect full run provenance without leaving the board.</p>
+        </div>
+        <div className="project-overview-links">
+          <Link to="/projects/$slug" params={{ slug }}>Overview</Link>
+          <Link to="/projects/$slug/wiki" params={{ slug }}>Wiki</Link>
+        </div>
       </header>
-      <p>Runs board route scaffold is ready for Milestone 6.</p>
+
+      <div className="runs-filter-bar">
+        <label>
+          Status
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as RunColumnKey | "all")}>
+            <option value="all">All Columns</option>
+            {runColumns.map((column) => (
+              <option key={column.key} value={column.key}>{column.title}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Window
+          <select value={dateRange} onChange={(event) => setDateRange(event.target.value as "24h" | "7d" | "30d" | "all")}>
+            <option value="24h">Last 24h</option>
+            <option value="7d">Last 7d</option>
+            <option value="30d">Last 30d</option>
+            <option value="all">All time</option>
+          </select>
+        </label>
+        <button type="button" onClick={() => void runsQuery.refetch()} disabled={runsQuery.isFetching}>
+          {runsQuery.isFetching ? "Refreshing…" : "Refresh"}
+        </button>
+      </div>
+
+      {runsQuery.isError && <p className="projects-note">Failed to load runs: {(runsQuery.error as Error).message}</p>}
+      {scheduledQuery.isError && <p className="projects-note">Failed to load scheduled runs: {(scheduledQuery.error as Error).message}</p>}
+      {waitingForProjectLookups && <p className="projects-note">Resolving scheduled run project ownership…</p>}
+
+      <div className="runs-board-grid">
+        {visibleColumns.map((column) => {
+          const isScheduled = column.key === "scheduled";
+          const runsForColumn = isScheduled ? [] : runsByColumn[column.key];
+          const count = isScheduled ? filteredScheduled.length : runsForColumn.length;
+          return (
+            <section key={column.key} className="runs-column" data-column={column.key}>
+              <header className="runs-column-header">
+                <h3>{column.title}</h3>
+                <span>{count}</span>
+              </header>
+
+              <div className="runs-column-body">
+                {isScheduled &&
+                  filteredScheduled.map((scheduledRun) => {
+                    const parentRecord = recordByRunID.get(scheduledRun.parent_run_id) ?? fallbackRecordByRunID.get(scheduledRun.parent_run_id);
+                    return (
+                      <button
+                        key={scheduledRun.id}
+                        type="button"
+                        className="run-card run-card-scheduled"
+                        onClick={() => parentRecord && setSelectedRunID(parentRecord.run.id)}
+                        disabled={!parentRecord}
+                      >
+                        <p className="run-card-goal">{truncate(scheduledRun.user_request_raw || "Scheduled follow-up", 120)}</p>
+                        <p className="run-card-summary">Scheduled for {formatDateTime(scheduledRun.scheduled_for)}</p>
+                        <div className="run-card-meta">
+                          <span className="status-pill" data-status="scheduling">Scheduled</span>
+                          <span>{relativeTime(scheduledRun.created_at)}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+
+                {!isScheduled &&
+                  runsForColumn.map((run) => {
+                    const record = recordByRunID.get(run.id);
+                    const changedPages = extractChangedPages(record);
+                    const outcome = runOutcomeSummary(record);
+                    return (
+                      <button key={run.id} type="button" className="run-card" onClick={() => setSelectedRunID(run.id)}>
+                        <p className="run-card-goal">{truncate(run.task_spec.goal || run.user_request_raw, 120)}</p>
+                        <p className="run-card-summary">{outcome}</p>
+                        <div className="run-card-meta">
+                          <span className="status-pill" data-status={run.status}>{statusLabel[run.status]}</span>
+                          <span>{relativeTime(run.updated_at || run.created_at)}</span>
+                          {run.waiting_for && <span className="run-pill waiting">Waiting</span>}
+                          {typeof run.latest_evaluation?.score === "number" && <span className="run-pill">Score {run.latest_evaluation.score}</span>}
+                          <span className="run-pill">{record?.artifacts.length ?? 0} artifacts</span>
+                          {changedPages.length > 0 && <span className="run-pill">{changedPages.length} wiki pages</span>}
+                        </div>
+                      </button>
+                    );
+                  })}
+
+                {count === 0 && <p className="runs-column-empty">No runs match this filter.</p>}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+
+      {selectedRunID && (
+        <div className="run-drawer-layer" role="presentation">
+          <button type="button" className="run-drawer-backdrop" aria-label="Close run detail" onClick={() => setSelectedRunID("")} />
+          <aside className="run-drawer" role="dialog" aria-modal="true" aria-label="Run details">
+            <header className="run-drawer-header">
+              <div>
+                <p className="projects-kicker">Run Detail</p>
+                <h3>{selectedRun?.run.id ?? selectedRunID}</h3>
+              </div>
+              <button type="button" className="run-drawer-close" onClick={() => setSelectedRunID("")}>Close</button>
+            </header>
+
+            {selectedRunQuery.isLoading && !selectedRun && <p className="projects-note">Loading run details…</p>}
+            {selectedRunQuery.isError && !selectedRun && (
+              <p className="projects-note">Failed to load run details: {(selectedRunQuery.error as Error).message}</p>
+            )}
+
+            {selectedRun && (
+              <div className="run-drawer-content">
+                <section className="run-detail-section">
+                  <h4>{truncate(selectedRun.run.task_spec.goal || selectedRun.run.user_request_raw, 140)}</h4>
+                  <div className="run-detail-meta">
+                    <span className="status-pill" data-status={selectedRun.run.status}>{statusLabel[selectedRun.run.status]}</span>
+                    <span>Phase: {humanize(selectedRun.run.phase)}</span>
+                    <span>Created: {formatDateTime(selectedRun.run.created_at)}</span>
+                    <span>Updated: {formatDateTime(selectedRun.run.updated_at)}</span>
+                    {selectedRun.run.completed_at && <span>Completed: {formatDateTime(selectedRun.run.completed_at)}</span>}
+                  </div>
+                  <p className="run-detail-user-request">{selectedRun.run.user_request_raw}</p>
+                  <p className="run-card-summary">{runOutcomeSummary(selectedRun)}</p>
+                </section>
+
+                <section className="run-detail-section">
+                  <h5>Evaluation</h5>
+                  {selectedRun.evaluations.length === 0 && <p className="projects-note">No evaluations recorded.</p>}
+                  {selectedRun.evaluations.map((evaluation) => (
+                    <article key={evaluation.id} className="run-detail-entry">
+                      <p><strong>Score:</strong> {evaluation.score} ({evaluation.passed ? "passed" : "needs follow-up"})</p>
+                      <p>{evaluation.summary}</p>
+                      {evaluation.missing_requirements.length > 0 && (
+                        <ul>
+                          {evaluation.missing_requirements.map((item) => <li key={item}>{item}</li>)}
+                        </ul>
+                      )}
+                    </article>
+                  ))}
+                </section>
+
+                <section className="run-detail-section">
+                  <h5>Artifacts</h5>
+                  {selectedRun.artifacts.length === 0 && <p className="projects-note">No artifacts.</p>}
+                  {selectedRun.artifacts.map((artifact) => (
+                    <article key={artifact.id} className="run-detail-entry">
+                      <p><strong>{artifact.title || artifact.kind}</strong> ({artifact.kind})</p>
+                      {artifact.url && <a href={artifact.url} target="_blank" rel="noreferrer">Open artifact</a>}
+                      {artifact.source_url && <a href={artifact.source_url} target="_blank" rel="noreferrer">Source URL</a>}
+                    </article>
+                  ))}
+                </section>
+
+                <section className="run-detail-section">
+                  <h5>Wiki Ingest</h5>
+                  {extractChangedPages(selectedRun).length === 0 && <p className="projects-note">No changed wiki pages captured.</p>}
+                  {extractChangedPages(selectedRun).length > 0 && (
+                    <ul>
+                      {extractChangedPages(selectedRun).map((path) => <li key={path}>{path}</li>)}
+                    </ul>
+                  )}
+                </section>
+
+                <section className="run-detail-section">
+                  <h5>Attempts</h5>
+                  {selectedRun.attempts.length === 0 && <p className="projects-note">No attempts.</p>}
+                  {selectedRun.attempts.map((attempt) => (
+                    <article key={attempt.id} className="run-detail-entry">
+                      <p><strong>{humanize(attempt.role)}</strong> · {formatDateTime(attempt.started_at)}</p>
+                      <p>{attempt.output_summary || attempt.input_summary}</p>
+                    </article>
+                  ))}
+                </section>
+
+                <section className="run-detail-section">
+                  <h5>Timeline</h5>
+                  {selectedRun.events.length === 0 && <p className="projects-note">No timeline events.</p>}
+                  {selectedRun.events.map((event) => (
+                    <article key={event.id} className="run-detail-entry">
+                      <p><strong>{humanize(event.type)}</strong> · {formatDateTime(event.created_at)}</p>
+                      <p>{event.summary}</p>
+                    </article>
+                  ))}
+                </section>
+
+                <section className="run-detail-section">
+                  <h5>Evidence</h5>
+                  {selectedRun.evidence.length === 0 && <p className="projects-note">No evidence records.</p>}
+                  {selectedRun.evidence.map((evidence) => (
+                    <article key={evidence.id} className="run-detail-entry">
+                      <p><strong>{humanize(evidence.kind)}</strong></p>
+                      <p>{evidence.summary}</p>
+                    </article>
+                  ))}
+                </section>
+
+                <section className="run-detail-section">
+                  <h5>Tool Calls</h5>
+                  {selectedRun.tool_calls.length === 0 && <p className="projects-note">No tool calls.</p>}
+                  {selectedRun.tool_calls.map((toolCall) => (
+                    <article key={toolCall.id} className="run-detail-entry">
+                      <p><strong>{toolCall.tool_name}</strong></p>
+                      <p>{toolCall.output_summary || toolCall.input_summary}</p>
+                    </article>
+                  ))}
+                </section>
+
+                <section className="run-detail-section">
+                  <h5>Web Steps</h5>
+                  {selectedRun.web_steps.length === 0 && <p className="projects-note">No web automation steps.</p>}
+                  {selectedRun.web_steps.map((step) => (
+                    <article key={step.id} className="run-detail-entry">
+                      <p><strong>{step.title}</strong> · {formatDateTime(step.occurred_at)}</p>
+                      <p>{step.summary}</p>
+                    </article>
+                  ))}
+                </section>
+
+                <section className="run-detail-section">
+                  <h5>Wait Requests</h5>
+                  {selectedRun.wait_requests.length === 0 && <p className="projects-note">No wait requests.</p>}
+                  {selectedRun.wait_requests.map((request) => (
+                    <article key={request.id} className="run-detail-entry">
+                      <p><strong>{request.title || humanize(request.kind)}</strong></p>
+                      <p>{request.prompt}</p>
+                    </article>
+                  ))}
+                </section>
+
+                <section className="run-detail-section">
+                  <h5>Scheduled Follow-ups</h5>
+                  {selectedRun.scheduled_runs.length === 0 && <p className="projects-note">No scheduled follow-ups.</p>}
+                  {selectedRun.scheduled_runs.map((scheduledRun) => (
+                    <article key={scheduledRun.id} className="run-detail-entry">
+                      <p><strong>{scheduledRun.user_request_raw}</strong></p>
+                      <p>Status: {scheduledRun.status} · {formatDateTime(scheduledRun.scheduled_for)}</p>
+                    </article>
+                  ))}
+                </section>
+
+                <section className="run-detail-section">
+                  <h5>Raw Events</h5>
+                  <pre className="run-detail-raw">{JSON.stringify(selectedRun.events, null, 2)}</pre>
+                </section>
+              </div>
+            )}
+          </aside>
+        </div>
+      )}
     </section>
   );
-}
-
-export function LegacyChatRoute() {
-  return <LegacyChatPage />;
 }
 
 type FolderNode = {
@@ -662,6 +1047,62 @@ function dirname(path: string): string {
   const parts = path.split("/").filter(Boolean);
   parts.pop();
   return parts.join("/");
+}
+
+function statusToColumn(status: RunStatus): Exclude<RunColumnKey, "scheduled"> {
+  if (status === "queued") return "queued";
+  if (status === "waiting") return "waiting";
+  if (status === "completed") return "completed";
+  if (status === "failed" || status === "exhausted" || status === "cancelled") return "stopped";
+  return "working";
+}
+
+function matchesDateRange(value: string | undefined, range: "24h" | "7d" | "30d" | "all"): boolean {
+  if (range === "all") return true;
+  if (!value) return false;
+  const timestamp = +new Date(value);
+  if (!Number.isFinite(timestamp)) return false;
+  const windowMs =
+    range === "24h"
+      ? 24 * 60 * 60 * 1000
+      : range === "7d"
+        ? 7 * 24 * 60 * 60 * 1000
+        : 30 * 24 * 60 * 60 * 1000;
+  return Date.now() - timestamp <= windowMs;
+}
+
+function extractChangedPages(record: RunRecord | undefined): string[] {
+  if (!record) return [];
+  const changed = new Set<string>();
+  for (const event of record.events) {
+    const raw = event.data?.changed_pages;
+    if (Array.isArray(raw)) {
+      for (const value of raw) {
+        if (typeof value === "string" && value.trim()) changed.add(value.trim());
+      }
+    }
+  }
+  return Array.from(changed).sort((left, right) => left.localeCompare(right));
+}
+
+function runOutcomeSummary(record: RunRecord | undefined): string {
+  if (!record) return "Run details are still loading.";
+  const latestEvaluation = [...record.evaluations].sort(
+    (left, right) => +new Date(right.created_at) - +new Date(left.created_at),
+  )[0];
+  if (latestEvaluation?.summary) return truncate(latestEvaluation.summary, 140);
+  const latestEvent = [...record.events].sort(
+    (left, right) => +new Date(right.created_at) - +new Date(left.created_at),
+  )[0];
+  if (latestEvent?.summary) return truncate(latestEvent.summary, 140);
+  return "No outcome summary recorded yet.";
+}
+
+function formatDateTime(value: string | undefined): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(+date)) return "—";
+  return date.toLocaleString();
 }
 
 function truncate(value: string, limit: number): string {

@@ -25,6 +25,8 @@ export type RunStatus =
   | "exhausted"
   | "cancelled";
 
+export type ScheduledRunStatus = "pending" | "triggered" | "cancelled" | "failed";
+
 export type AgentRole =
   | "gate"
   | "answer"
@@ -122,6 +124,30 @@ export type RunRecord = {
     summary: string;
     occurred_at: string;
   }>;
+  wait_requests: Array<{
+    id: string;
+    kind: string;
+    title: string;
+    prompt: string;
+    risk_summary?: string;
+    created_at: string;
+  }>;
+  scheduled_runs: ScheduledRun[];
+};
+
+export type ScheduledRun = {
+  id: string;
+  chat_id: string;
+  parent_run_id: string;
+  user_request_raw: string;
+  max_generation_attempts: number;
+  cron_expr?: string;
+  scheduled_for: string;
+  status: ScheduledRunStatus;
+  run_id?: string;
+  error_message?: string;
+  created_at: string;
+  triggered_at?: string;
 };
 
 export type ChatSummary = {
@@ -173,6 +199,19 @@ export type ProjectDetailResponse = {
   stats: ProjectRunStats;
   recent_runs: Array<RunRecord["run"]>;
   latest_log_entries?: string[];
+};
+
+export type Pagination = {
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+};
+
+export type ProjectRunsResponse = {
+  runs: Array<RunRecord["run"]>;
+  pagination: Pagination;
+  run_records?: RunRecord[];
 };
 
 export type WikiPageMeta = {

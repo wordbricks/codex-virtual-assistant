@@ -3,9 +3,12 @@ import type {
   ChatRecord,
   ChatSummary,
   ProjectDetailResponse,
+  ProjectRunsResponse,
   ProjectSummary,
   RunRecord,
   RunStatus,
+  ScheduledRun,
+  ScheduledRunStatus,
   WikiPageMeta,
   WikiPageResponse,
 } from "@/api/types";
@@ -39,6 +42,33 @@ export const apiClient = {
     fetchJSON<WikiPageResponse>(
       `/api/v1/projects/${encodeURIComponent(slug)}/wiki/page?path=${encodeURIComponent(path)}`,
     ),
+  listProjectRuns: (
+    slug: string,
+    options: {
+      status?: RunStatus;
+      page?: number;
+      pageSize?: number;
+      includeDetails?: boolean;
+    } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (options.status) params.set("status", options.status);
+    if (options.page) params.set("page", String(options.page));
+    if (options.pageSize) params.set("page_size", String(options.pageSize));
+    if (typeof options.includeDetails === "boolean") params.set("include_details", String(options.includeDetails));
+    const query = params.toString();
+    const suffix = query ? `?${query}` : "";
+    return fetchJSON<ProjectRunsResponse>(`/api/v1/projects/${encodeURIComponent(slug)}/runs${suffix}`);
+  },
+  getRunRecord: (runId: string) => fetchJSON<RunRecord>(`/api/v1/runs/${encodeURIComponent(runId)}`),
+  listScheduledRuns: (options: { chatId?: string; status?: ScheduledRunStatus } = {}) => {
+    const params = new URLSearchParams();
+    if (options.chatId) params.set("chat_id", options.chatId);
+    if (options.status) params.set("status", options.status);
+    const query = params.toString();
+    const suffix = query ? `?${query}` : "";
+    return fetchJSON<{ scheduled_runs: ScheduledRun[] }>(`/api/v1/scheduled${suffix}`);
+  },
   listChats: (path: string) => fetchJSON<{ chats: ChatSummary[] }>(path),
   getChat: (path: string, chatId: string) => fetchJSON<ChatRecord>(`${path}/${encodeURIComponent(chatId)}`),
   createRun: (
