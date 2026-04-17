@@ -132,6 +132,15 @@ func TestClaudeHeadlessRunPhaseWithWrapperParsesRawJSON(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
+	claudePath := filepath.Join(dir, "claude")
+	claudeScript := `#!/usr/bin/env bash
+set -euo pipefail
+echo "fake claude should not be invoked directly" >&2
+exit 1
+`
+	if err := os.WriteFile(claudePath, []byte(claudeScript), 0o755); err != nil {
+		t.Fatalf("write fake claude: %v", err)
+	}
 	wrapperPath := filepath.Join(dir, "claude-pty-print")
 	script := `#!/usr/bin/env bash
 set -euo pipefail
@@ -141,7 +150,7 @@ printf '%s\n' '{"summary":"done","output":"Wrapper generated the result.","needs
 		t.Fatalf("write fake wrapper: %v", err)
 	}
 	executor := NewClaudeHeadlessPhaseExecutor(ClaudeHeadlessPhaseExecutorConfig{
-		BinaryPath:       "claude",
+		BinaryPath:       claudePath,
 		UsePrintWrapper:  true,
 		PrintWrapperPath: wrapperPath,
 		Cwd:              dir,
