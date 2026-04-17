@@ -90,31 +90,61 @@ Recommended content:
 
 ### Project wiki
 
-The wiki view should feel closer to a note app than a report drawer.
+The wiki view should feel like **Notion** — a clean, block-based document reader with a sidebar page tree, not a report drawer or raw markdown dump.
+
+Design reference: **Notion**
+
+Key UX cues to adopt from Notion:
+
+- **Sidebar page tree**: collapsible, nested tree navigation on the left with icons per page type (overview, topic, report, log). Pages can be grouped by folder or page type, similar to Notion's sidebar.
+- **Full-width document area**: the main content panel should render markdown as rich, well-spaced blocks — headings, callouts, lists, tables, code blocks — with generous whitespace, not a cramped text view.
+- **Page header with metadata**: each page should have a large title at the top, followed by a property table (status, confidence, source refs, related pages, last updated) rendered as inline tags or a Notion-style property row above the content.
+- **Breadcrumb navigation**: show the path context (Project > Wiki > topics > competitor-analysis.md) at the top.
+- **Internal link preview**: wiki links should be clickable and ideally show a hover preview or at least navigate inline without full page reload.
+- **Cover/icon area** (optional, later): allow projects to set an emoji icon or color accent per wiki page type for visual distinction.
 
 Recommended layout:
 
 ```text
-+------------------+--------------------+-------------+
-| Wiki tree        | Markdown document  | Page meta   |
-| overview.md      |                    | status      |
-| topics/...       |                    | confidence  |
-| reports/...      |                    | source refs |
-+------------------+--------------------+-------------+
++------------------+--------------------------------------+
+| Sidebar          | Document                             |
+| (page tree)      | [breadcrumb]                         |
+|                  | [icon] Page Title                    |
+| overview.md      | status: active | confidence: high    |
+| index.md         |                                      |
+| log.md           | --- rendered markdown blocks ---     |
+| open-questions   |                                      |
+| ▸ topics/        | --- related pages / source refs ---  |
+| ▸ reports/       |                                      |
++------------------+--------------------------------------+
 ```
 
 The first implementation should be read-only and should support:
 
-- page tree grouped by page type and folder,
-- markdown rendering,
-- frontmatter metadata display,
-- internal wiki link navigation,
-- source refs and related links,
+- page tree grouped by page type and folder (collapsible like Notion sidebar),
+- markdown rendering as rich blocks with proper typography,
+- frontmatter metadata displayed as a Notion-style property row,
+- internal wiki link navigation (inline, no full reload),
+- source refs and related links as linked tags,
+- breadcrumb navigation showing page context,
 - quick switching between `overview.md`, `index.md`, `log.md`, `open-questions.md`, `topics/*`, and `reports/*`.
 
 ### Project runs board
 
 Runs should be shown as a kanban-style board because users need to understand project progress at a glance.
+
+Design reference: **Linear**
+
+Key UX cues to adopt from Linear:
+
+- **Horizontal columns with vertical card stacking**: each status group is a vertical column. Cards stack top-to-bottom within each column, ordered by recency or priority.
+- **Compact, information-dense cards**: each card shows the essential info (goal, status badge, time) without expanding. Hover or click reveals detail. Cards should feel lightweight — not full-height report panels.
+- **Color-coded status indicators**: each column header and card status badge should use a distinct color (e.g., blue for Working, yellow for Waiting, green for Completed, red for Stopped, gray for Queued).
+- **Drag-free, read-only board**: unlike Linear's drag-to-move, this board is read-only — runs move between columns automatically based on their backend status. But the visual column layout should match Linear's feel.
+- **Keyboard-navigable**: arrow keys to move between cards, Enter to open detail (stretch goal).
+- **Filtering and grouping**: a top bar with quick filters (status, date range) similar to Linear's filter bar. Initially read-only filters; sorting can come later.
+- **Smooth transitions**: when a run changes status (via SSE), the card should animate from one column to another, not just disappear and reappear.
+- **Column counts**: each column header should show the count of runs in that group, like Linear shows issue counts per status.
 
 Recommended columns:
 
@@ -134,18 +164,18 @@ Status grouping:
 - `Completed`: `completed`
 - `Stopped`: `failed`, `exhausted`, `cancelled`
 
-Each run card should show:
+Each run card should show (Linear-style compact layout):
 
-- goal or user request,
-- status,
-- phase,
+- goal or user request (truncated to 2 lines max),
+- status badge (color-coded),
+- phase label,
 - project slug,
-- created/updated/completed time,
-- latest evaluation score and summary when available,
-- whether the run is waiting for input,
-- artifact count,
-- changed wiki pages when available,
-- short outcome summary.
+- relative time (e.g., "2h ago", "just now"),
+- latest evaluation score as a small progress indicator when available,
+- waiting-for-input indicator (yellow dot or icon),
+- artifact count as a small badge,
+- changed wiki pages count when available,
+- short outcome summary (1 line, truncated).
 
 ### Run detail
 
@@ -336,27 +366,30 @@ Implement:
 - recent runs,
 - project-scoped new run composer.
 
-### Milestone 5: Build wiki reader
+### Milestone 5: Build wiki reader (Notion-style)
 
-Implement:
+Implement a Notion-inspired wiki reader:
 
-- wiki page list/tree,
-- markdown page renderer,
-- metadata panel,
-- internal wiki link navigation,
+- collapsible sidebar page tree with icons per page type,
+- full-width markdown page renderer with rich block typography,
+- Notion-style property row for frontmatter metadata (status, confidence, source refs),
+- breadcrumb navigation showing page context,
+- internal wiki link navigation (inline, no full reload),
 - loading/error/empty states.
 
 The first pass should stay read-only.
 
-### Milestone 6: Build runs kanban board
+### Milestone 6: Build runs kanban board (Linear-style)
 
-Implement:
+Implement a Linear-inspired kanban board:
 
-- status grouping,
-- run cards,
+- horizontal columns with vertical card stacking per status group,
+- compact, information-dense run cards with color-coded status badges,
+- column headers with run counts,
 - scheduled run column data,
-- active run polling/SSE refresh,
-- run detail drawer or route.
+- active run polling/SSE refresh with smooth card transitions between columns,
+- quick filter bar (status, date range),
+- run detail drawer or route on card click.
 
 The board should make terminal outcomes visually obvious.
 
@@ -383,29 +416,46 @@ Options:
 - SQLite remains the raw provenance and audit store.
 - Wiki editing is deferred; first pass is read-only.
 - `no_project` should be treated as Inbox/Unsorted, not as a normal project.
-- Existing chat APIs should remain during migration.
 - Kanban board status columns should group noisy internal phases into user-comprehensible workflow states.
 - Project-scoped new runs should explicitly bind to the selected project.
+- **Routing**: TanStack Router (type-safe, file-based routing).
+- **Server state**: TanStack Query (caching, background refetch, SSE integration).
+- **Project-scoped run creation**: hard bind — skip the project selector entirely, explicit `project_slug` always wins.
+- **Run detail**: side drawer (Linear-style) that slides in over the kanban board. No separate full-page route.
+- **Wiki pages API**: flat list response — frontend builds the tree from page paths.
+- **Report overlay**: replace entirely with the new run detail drawer. Remove old overlay code.
+- **Legacy chat route**: drop `/chats/:chatId` entirely. No backward-compatible chat route.
+- **Implementation strategy**: backend-first — finish all backend APIs with tests, then build the frontend.
 
-## Remaining issues / open questions
+## Remaining open questions
 
-- Should project-scoped run creation bypass project selection entirely, or should it provide the selected project as a strong hint while still allowing the selector to reject it?
-- Should the wiki page list API return full folder tree structure or a flat list with enough metadata for the frontend to group it?
 - Should scheduled runs be stored with explicit project slug, or should they continue inheriting project context from their parent run?
 - Should changed wiki pages be persisted in a dedicated table/event payload, or inferred from wiki ingest artifacts/events?
-- Should the run detail page replace the current supervisor report overlay entirely, or should the overlay remain as a compact summary?
 
 ## Suggested implementation order
 
-1. Add project-scoped backend aggregates and tests.
-2. Split frontend API/types from `App.tsx`.
-3. Add project routes and project shell.
-4. Build projects home and project overview.
-5. Build wiki reader.
-6. Build project runs board.
-7. Add run detail drawer/page.
-8. Add project-scoped run creation.
-9. Keep legacy chat route working until the new project-first UI is stable.
+### Phase 1: Backend (all APIs and tests)
+
+1. Add project-scoped run queries (`ListRunsByProjectSlug`).
+2. Add project detail aggregate API (`GET /api/v1/projects/:slug`).
+3. Add project runs API (`GET /api/v1/projects/:slug/runs`).
+4. Add wiki pages API (`GET /api/v1/projects/:slug/wiki/pages`) — flat list response.
+5. Add project-scoped run creation — hard bind with `project_slug`, skip selector.
+
+### Phase 2: Frontend scaffolding
+
+6. Install TanStack Router + TanStack Query.
+7. Split types and API client out of `App.tsx` into `api/client.ts` and `api/types.ts`.
+8. Set up route tree: `/`, `/projects/:slug`, `/projects/:slug/wiki/*`, `/projects/:slug/runs`.
+9. Remove legacy chat UI, report overlay, and `/chats/:chatId` route.
+
+### Phase 3: Frontend pages
+
+10. Build projects home.
+11. Build project overview.
+12. Build wiki reader (Notion-style).
+13. Build runs kanban board (Linear-style).
+14. Build run detail drawer.
 
 ## Links to related documents
 
