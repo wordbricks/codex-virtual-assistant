@@ -36,17 +36,6 @@ const pageTypeOrder = [
   "report",
 ] as const;
 
-const pageTypeIcons: Record<string, string> = {
-  overview: "OV",
-  topic: "TOP",
-  entity: "ENT",
-  decision: "DEC",
-  playbook: "PB",
-  source: "SRC",
-  question: "Q",
-  report: "RUN",
-};
-
 type RunColumnKey = "queued" | "working" | "waiting" | "scheduled" | "completed" | "stopped";
 
 const runColumns: Array<{ key: RunColumnKey; title: string }> = [
@@ -472,7 +461,6 @@ function ProjectWikiReader({ slug, selectedPath }: { slug: string; selectedPath:
           {grouped.map((group) => (
             <details key={group.pageType} open className="wiki-group">
               <summary>
-                <span>{pageTypeIcons[group.pageType] ?? "Page"}</span>
                 <span>{humanize(group.pageType)}</span>
                 <span className="wiki-group-count">{group.pages.length}</span>
               </summary>
