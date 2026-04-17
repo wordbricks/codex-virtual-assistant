@@ -2,7 +2,7 @@
 
 ## Goal / scope
 
-Complete all remaining implementation work defined in [docs/exec-plans/active/redesign-cva-web-project-first.md](/Users/dev/git/codex-virtual-assistant/.worktrees/redesign-cva-web-project-first/docs/exec-plans/active/redesign-cva-web-project-first.md), including backend and frontend phases.
+Complete all remaining implementation work defined in [docs/exec-plans/completed/redesign-cva-web-project-first.md](redesign-cva-web-project-first.md), including backend and frontend phases.
 
 In scope:
 
@@ -138,7 +138,7 @@ The active redesign plan already records product direction, API targets, and fro
 
 ## Links to related documents
 
-- [AGENTS.md](/Users/dev/git/codex-virtual-assistant/.worktrees/redesign-cva-web-project-first/AGENTS.md)
-- [README.md](/Users/dev/git/codex-virtual-assistant/.worktrees/redesign-cva-web-project-first/README.md)
-- [docs/PLANS.md](/Users/dev/git/codex-virtual-assistant/.worktrees/redesign-cva-web-project-first/docs/PLANS.md)
-- [docs/exec-plans/active/redesign-cva-web-project-first.md](/Users/dev/git/codex-virtual-assistant/.worktrees/redesign-cva-web-project-first/docs/exec-plans/active/redesign-cva-web-project-first.md)
+- [AGENTS.md](../../../AGENTS.md)
+- [README.md](../../../README.md)
+- [docs/PLANS.md](../../PLANS.md)
+- [docs/exec-plans/completed/redesign-cva-web-project-first.md](redesign-cva-web-project-first.md)
