@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
+	"github.com/siisee11/CodexVirtualAssistant/internal/config"
 )
 
 func TestBuildPlannerPromptDeclaresStrictJSONContract(t *testing.T) {
@@ -26,6 +27,14 @@ func TestBuildPlannerPromptDeclaresStrictJSONContract(t *testing.T) {
 			OverviewSummary: "We already track SaaS competitor pricing and past comparisons.",
 			IndexSummary:    "topics/pricing.md and reports/run-1.md are relevant.",
 		},
+		AutomationSafety: config.AutomationSafetyConfig{
+			Defaults: map[string]config.AutomationSafetyPolicyOverride{
+				"browser_high_risk_engagement": {},
+			},
+			Projects: map[string]config.AutomationSafetyProjectOverride{
+				"competitor-pricing": {ProfileOverride: assistant.AutomationSafetyProfileBrowserReadOnly},
+			},
+		},
 	})
 
 	if !strings.Contains(bundle.System, "strict JSON object") {
@@ -37,11 +46,17 @@ func TestBuildPlannerPromptDeclaresStrictJSONContract(t *testing.T) {
 	if !strings.Contains(bundle.System, "schedule_plan") {
 		t.Fatalf("System prompt = %q, want schedule_plan guidance", bundle.System)
 	}
+	if !strings.Contains(bundle.System, "automation_safety") {
+		t.Fatalf("System prompt = %q, want automation_safety guidance", bundle.System)
+	}
 	if !strings.Contains(bundle.User, "Default max generation attempts: 4") {
 		t.Fatalf("User prompt = %q, want attempt count", bundle.User)
 	}
 	if !strings.Contains(bundle.User, "Project wiki context") || !strings.Contains(bundle.User, "Overview: We already track SaaS competitor pricing") {
 		t.Fatalf("User prompt = %q, want wiki context summary", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "Automation safety config context") || !strings.Contains(bundle.User, "Project override for competitor-pricing") {
+		t.Fatalf("User prompt = %q, want automation safety config context", bundle.User)
 	}
 }
 
@@ -272,7 +287,9 @@ func TestDecodePlannerOutputNormalizesTaskSpec(t *testing.T) {
 		"done_definition":[],
 		"evidence_required":[],
 		"risk_flags":["public-web-research"],
-		"max_generation_attempts":0
+		"automation_safety":null,
+		"max_generation_attempts":0,
+		"schedule_plan":null
 	}`)
 
 	spec, err := DecodePlannerOutput(raw, PlannerInput{
@@ -480,4 +497,104 @@ func TestDecodeReportOutputBuildsDeliveryResult(t *testing.T) {
 	if output.DeliveryStatus != "sent" || output.ReportPayload == "" {
 		t.Fatalf("output = %#v, want sent payload", output)
 	}
+}
+
+func TestDecodePlannerOutputAppliesAutomationSafetyInferenceAndConfigOverride(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{
+		"goal":"Reply to onboarding outreach comments",
+		"deliverables":["Two safe responses"],
+		"constraints":[],
+		"tools_allowed":["agent-browser"],
+		"tools_required":["agent-browser"],
+		"done_definition":["Prepare responses"],
+		"evidence_required":["Captured URLs"],
+		"risk_flags":["external-side-effect"],
+		"automation_safety":null,
+		"max_generation_attempts":2,
+		"schedule_plan":null
+	}`)
+
+	input := PlannerInput{
+		UserRequestRaw:        "Reply to public comments and connection requests for outreach.",
+		MaxGenerationAttempts: 3,
+		Project: assistant.ProjectContext{
+			Slug: "growth-ops",
+		},
+		AutomationSafety: config.AutomationSafetyConfig{
+			Defaults: map[string]config.AutomationSafetyPolicyOverride{
+				"browser_high_risk_engagement": {
+					RateLimits: config.AutomationSafetyRateLimitsOverride{
+						MaxAccountChangingActionsPerRun: intPtr(2),
+						MaxRepliesPer24h:                intPtr(12),
+					},
+				},
+			},
+			Projects: map[string]config.AutomationSafetyProjectOverride{
+				"growth-ops": {
+					ProfileOverride: assistant.AutomationSafetyProfileBrowserHighRiskEngagement,
+					AutomationSafetyPolicyOverride: config.AutomationSafetyPolicyOverride{
+						RateLimits: config.AutomationSafetyRateLimitsOverride{
+							MaxAccountChangingActionsPerRun: intPtr(1),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	spec, err := DecodePlannerOutput(raw, input)
+	if err != nil {
+		t.Fatalf("DecodePlannerOutput() error = %v", err)
+	}
+	if spec.AutomationSafety == nil {
+		t.Fatal("AutomationSafety = nil, want inferred and resolved policy")
+	}
+	if spec.AutomationSafety.Profile != assistant.AutomationSafetyProfileBrowserHighRiskEngagement {
+		t.Fatalf("Profile = %q, want browser_high_risk_engagement", spec.AutomationSafety.Profile)
+	}
+	if spec.AutomationSafety.Enforcement != assistant.AutomationSafetyEnforcementEngineBlocking {
+		t.Fatalf("Enforcement = %q, want engine_blocking", spec.AutomationSafety.Enforcement)
+	}
+	if spec.AutomationSafety.RateLimits.MaxAccountChangingActionsPerRun != 1 {
+		t.Fatalf("MaxAccountChangingActionsPerRun = %d, want 1", spec.AutomationSafety.RateLimits.MaxAccountChangingActionsPerRun)
+	}
+}
+
+func TestDecodePlannerOutputInfersReadOnlyForBrowserObservation(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{
+		"goal":"Capture screenshots of pricing pages",
+		"deliverables":["Screenshot set"],
+		"constraints":[],
+		"tools_allowed":["agent-browser"],
+		"tools_required":["agent-browser"],
+		"done_definition":["Capture screenshots"],
+		"evidence_required":["Image evidence"],
+		"risk_flags":[],
+		"automation_safety":null,
+		"max_generation_attempts":2,
+		"schedule_plan":null
+	}`)
+
+	spec, err := DecodePlannerOutput(raw, PlannerInput{
+		UserRequestRaw:        "Open the pages and take screenshots for QA review.",
+		MaxGenerationAttempts: 2,
+		Project:               assistant.ProjectContext{Slug: "qa-web"},
+	})
+	if err != nil {
+		t.Fatalf("DecodePlannerOutput() error = %v", err)
+	}
+	if spec.AutomationSafety == nil {
+		t.Fatal("AutomationSafety = nil, want inferred read-only policy")
+	}
+	if spec.AutomationSafety.Profile != assistant.AutomationSafetyProfileBrowserReadOnly {
+		t.Fatalf("Profile = %q, want browser_read_only", spec.AutomationSafety.Profile)
+	}
+}
+
+func intPtr(value int) *int {
+	return &value
 }

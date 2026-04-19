@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
+	"github.com/siisee11/CodexVirtualAssistant/internal/config"
 )
 
 type Bundle struct {
@@ -19,6 +20,7 @@ type PlannerInput struct {
 	MaxGenerationAttempts int
 	Project               assistant.ProjectContext
 	Wiki                  assistant.WikiContext
+	AutomationSafety      config.AutomationSafetyConfig
 }
 
 type ContractInput struct {
@@ -45,16 +47,17 @@ type ProjectSelectorInput struct {
 }
 
 type PlannerOutput struct {
-	Goal                  string                  `json:"goal"`
-	Deliverables          []string                `json:"deliverables"`
-	Constraints           []string                `json:"constraints"`
-	ToolsAllowed          []string                `json:"tools_allowed"`
-	ToolsRequired         []string                `json:"tools_required"`
-	DoneDefinition        []string                `json:"done_definition"`
-	EvidenceRequired      []string                `json:"evidence_required"`
-	RiskFlags             []string                `json:"risk_flags"`
-	MaxGenerationAttempts int                     `json:"max_generation_attempts"`
-	SchedulePlan          *assistant.SchedulePlan `json:"schedule_plan"`
+	Goal                  string                            `json:"goal"`
+	Deliverables          []string                          `json:"deliverables"`
+	Constraints           []string                          `json:"constraints"`
+	ToolsAllowed          []string                          `json:"tools_allowed"`
+	ToolsRequired         []string                          `json:"tools_required"`
+	DoneDefinition        []string                          `json:"done_definition"`
+	EvidenceRequired      []string                          `json:"evidence_required"`
+	RiskFlags             []string                          `json:"risk_flags"`
+	AutomationSafety      *assistant.AutomationSafetyPolicy `json:"automation_safety"`
+	MaxGenerationAttempts int                               `json:"max_generation_attempts"`
+	SchedulePlan          *assistant.SchedulePlan           `json:"schedule_plan"`
 }
 
 type GateOutput struct {
@@ -206,15 +209,20 @@ The JSON object must contain exactly these keys:
 - done_definition
 - evidence_required
 - risk_flags
+- automation_safety
 - max_generation_attempts
- - schedule_plan
+- schedule_plan
+Use automation_safety=null when the run is not browser automation or has no automation-safety policy requirements.
+When browser automation is relevant, prefer a structured automation_safety object with profile and enforcement, plus optional mode_policy/rate_limits/pattern_rules/text_reuse_policy/cooldown_policy.
+Valid automation safety profiles are: none, browser_read_only, browser_mutating, browser_high_risk_engagement.
+Treat social growth, outreach messaging, public comments or replies, follows or connection requests, marketplace inquiries, community engagement, recruiting/networking messages, likes, endorsements, reviews, and repeated application/inquiry submission workflows as high-risk engagement candidates.
 Use schedule_plan=null when all work should happen immediately.
 If the request includes future or time-distributed work, keep immediate work in the normal TaskSpec fields and place only the deferred work in schedule_plan.entries.
 Each schedule_plan entry must contain scheduled_for and prompt.
 Prefer "agent-browser" for browser work and keep deliverables and done_definition concrete and evaluator-verifiable.`),
 		User: strings.TrimSpace(fmt.Sprintf(
 			"%s\n\nUser request:\n%s\n\nDefault max generation attempts: %d\n\nProduce a normalized TaskSpec JSON object.",
-			projectPlannerContext(input.Project, input.Wiki),
+			projectPlannerContext(input.Project, input.Wiki, input.AutomationSafety),
 			strings.TrimSpace(input.UserRequestRaw),
 			defaultAttempts,
 		)),
@@ -348,6 +356,10 @@ func DecodePlannerOutput(raw []byte, input PlannerInput) (assistant.TaskSpec, er
 		return assistant.TaskSpec{}, fmt.Errorf("decode planner output: %w", err)
 	}
 
+	inferredProfile := inferAutomationSafetyProfile(input, output)
+	resolver := config.Config{AutomationSafety: input.AutomationSafety}
+	resolvedPolicy := resolver.ResolveAutomationSafetyPolicy(output.AutomationSafety, inferredProfile, input.Project.Slug)
+
 	return assistant.NormalizeTaskSpec(assistant.TaskSpecDraft{
 		Goal:                  output.Goal,
 		UserRequestRaw:        input.UserRequestRaw,
@@ -358,6 +370,7 @@ func DecodePlannerOutput(raw []byte, input PlannerInput) (assistant.TaskSpec, er
 		DoneDefinition:        output.DoneDefinition,
 		EvidenceRequired:      output.EvidenceRequired,
 		RiskFlags:             output.RiskFlags,
+		AutomationSafety:      resolvedPolicy,
 		MaxGenerationAttempts: output.MaxGenerationAttempts,
 		SchedulePlan:          output.SchedulePlan,
 	}, input.UserRequestRaw, input.MaxGenerationAttempts)
@@ -589,25 +602,137 @@ func DecodeSchedulerOutput(raw []byte) ([]assistant.ScheduleEntry, error) {
 	return output.Entries, nil
 }
 
-func projectPlannerContext(project assistant.ProjectContext, wiki assistant.WikiContext) string {
+func inferAutomationSafetyProfile(input PlannerInput, output PlannerOutput) assistant.AutomationSafetyProfile {
+	request := strings.ToLower(strings.TrimSpace(input.UserRequestRaw + " " + output.Goal + " " + strings.Join(output.Deliverables, " ")))
+	browserUsed := usesAgentBrowser(output.ToolsAllowed, output.ToolsRequired)
+
+	if !browserUsed {
+		return assistant.AutomationSafetyProfileNone
+	}
+
+	highRiskTokens := []string{
+		"growth", "outreach", "public comment", "public comments", "reply", "replies", "follow", "follows",
+		"connection request", "connection requests", "marketplace inquiry", "marketplace inquiries",
+		"community engagement", "recruiting", "networking", "like", "likes", "endorse", "endorsement",
+		"dm", "invite", "invites", "application submission", "apply",
+	}
+	mutationTokens := []string{
+		"post", "publish", "submit", "send", "message", "messages", "comment", "reply", "follow",
+		"connect", "like", "endorse", "update preference", "save preference", "application",
+	}
+
+	riskFlags := make([]string, 0, len(output.RiskFlags))
+	for _, flag := range output.RiskFlags {
+		riskFlags = append(riskFlags, strings.ToLower(strings.TrimSpace(flag)))
+	}
+
+	inferred := assistant.AutomationSafetyProfileBrowserReadOnly
+	if containsAnyToken(request, highRiskTokens...) {
+		inferred = assistant.AutomationSafetyProfileBrowserHighRiskEngagement
+	} else if containsAnyToken(request, mutationTokens...) || containsAnyToken(strings.Join(riskFlags, " "), "external-side-effect") {
+		inferred = assistant.AutomationSafetyProfileBrowserMutating
+	}
+
+	if output.AutomationSafety != nil && output.AutomationSafety.Profile != "" {
+		inferred = maxAutomationSafetyProfile(inferred, output.AutomationSafety.Profile)
+	}
+
+	return inferred
+}
+
+func usesAgentBrowser(toolsAllowed, toolsRequired []string) bool {
+	for _, tool := range toolsAllowed {
+		if strings.EqualFold(strings.TrimSpace(tool), "agent-browser") {
+			return true
+		}
+	}
+	for _, tool := range toolsRequired {
+		if strings.EqualFold(strings.TrimSpace(tool), "agent-browser") {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAnyToken(value string, fragments ...string) bool {
+	for _, fragment := range fragments {
+		if strings.Contains(value, strings.ToLower(strings.TrimSpace(fragment))) {
+			return true
+		}
+	}
+	return false
+}
+
+func maxAutomationSafetyProfile(left, right assistant.AutomationSafetyProfile) assistant.AutomationSafetyProfile {
+	if automationSafetyProfileRank(right) > automationSafetyProfileRank(left) {
+		return right
+	}
+	return left
+}
+
+func automationSafetyProfileRank(profile assistant.AutomationSafetyProfile) int {
+	switch profile {
+	case assistant.AutomationSafetyProfileNone:
+		return 0
+	case assistant.AutomationSafetyProfileBrowserReadOnly:
+		return 1
+	case assistant.AutomationSafetyProfileBrowserMutating:
+		return 2
+	case assistant.AutomationSafetyProfileBrowserHighRiskEngagement:
+		return 3
+	default:
+		return -1
+	}
+}
+
+func projectPlannerContext(project assistant.ProjectContext, wiki assistant.WikiContext, safety config.AutomationSafetyConfig) string {
 	builder := &strings.Builder{}
 	if strings.TrimSpace(project.Slug) == "" {
 		fmt.Fprintf(builder, "Project context:\n- No project selected yet.")
-		return builder.String()
+	} else {
+		fmt.Fprintf(
+			builder,
+			"Project context:\n- Slug: %s\n- Name: %s\n- Purpose: %s\n- Workspace: %s",
+			project.Slug,
+			firstNonEmpty(project.Name, project.Slug),
+			project.Description,
+			project.WorkspaceDir,
+		)
+		if strings.TrimSpace(project.WikiDir) != "" {
+			fmt.Fprintf(builder, "\n- Wiki: %s", project.WikiDir)
+		}
 	}
-	fmt.Fprintf(
-		builder,
-		"Project context:\n- Slug: %s\n- Name: %s\n- Purpose: %s\n- Workspace: %s",
-		project.Slug,
-		firstNonEmpty(project.Name, project.Slug),
-		project.Description,
-		project.WorkspaceDir,
-	)
-	if strings.TrimSpace(project.WikiDir) != "" {
-		fmt.Fprintf(builder, "\n- Wiki: %s", project.WikiDir)
-	}
+
 	appendWikiSummary(builder, wiki)
+	appendAutomationSafetyPlannerContext(builder, project.Slug, safety)
 	return builder.String()
+}
+
+func appendAutomationSafetyPlannerContext(builder *strings.Builder, projectSlug string, safety config.AutomationSafetyConfig) {
+	fmt.Fprintf(builder, "\n\nAutomation safety config context:\n")
+	if len(safety.Defaults) == 0 {
+		fmt.Fprintf(builder, "- Global defaults: none configured.\n")
+	} else {
+		profiles := make([]string, 0, len(safety.Defaults))
+		for profile := range safety.Defaults {
+			profiles = append(profiles, profile)
+		}
+		fmt.Fprintf(builder, "- Global defaults configured for profiles: %s.\n", strings.Join(profiles, ", "))
+	}
+
+	slug := strings.TrimSpace(projectSlug)
+	if slug == "" {
+		fmt.Fprintf(builder, "- Project override: unavailable (project slug not set).")
+		return
+	}
+	if override, ok := safety.Projects[slug]; ok {
+		fmt.Fprintf(builder, "- Project override for %s: configured.", slug)
+		if override.ProfileOverride != "" {
+			fmt.Fprintf(builder, " profile_override=%s.", override.ProfileOverride)
+		}
+		return
+	}
+	fmt.Fprintf(builder, "- Project override for %s: none configured.", slug)
 }
 
 func firstNonEmpty(values ...string) string {

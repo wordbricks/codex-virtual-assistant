@@ -135,6 +135,7 @@ func (e *HeuristicPhaseExecutor) runPlanner(request CodexPhaseRequest) (CodexPha
 		"done_definition":         spec.DoneDefinition,
 		"evidence_required":       spec.EvidenceRequired,
 		"risk_flags":              spec.RiskFlags,
+		"automation_safety":       spec.AutomationSafety,
 		"max_generation_attempts": spec.MaxGenerationAttempts,
 		"schedule_plan":           spec.SchedulePlan,
 	})

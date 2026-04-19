@@ -9,6 +9,7 @@ import (
 
 	"github.com/siisee11/CodexVirtualAssistant/internal/agentmessage"
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
+	"github.com/siisee11/CodexVirtualAssistant/internal/config"
 	"github.com/siisee11/CodexVirtualAssistant/internal/policy/gan"
 	"github.com/siisee11/CodexVirtualAssistant/internal/prompting"
 	"github.com/siisee11/CodexVirtualAssistant/internal/store"
@@ -45,14 +46,15 @@ type WikiManager interface {
 }
 
 type RunEngine struct {
-	repo      Repository
-	runtime   Runtime
-	observer  Observer
-	policy    gan.Policy
-	projects  ProjectManager
-	wiki      WikiManager
-	messenger agentmessage.Service
-	now       func() time.Time
+	repo             Repository
+	runtime          Runtime
+	observer         Observer
+	policy           gan.Policy
+	projects         ProjectManager
+	wiki             WikiManager
+	messenger        agentmessage.Service
+	automationSafety config.AutomationSafetyConfig
+	now              func() time.Time
 }
 
 func NewRunEngine(repo Repository, runtime Runtime, observer Observer, policy gan.Policy, projects ProjectManager, wikiManager WikiManager, messenger agentmessage.Service, now func() time.Time) *RunEngine {
@@ -72,6 +74,10 @@ func NewRunEngine(repo Repository, runtime Runtime, observer Observer, policy ga
 		messenger: messenger,
 		now:       now,
 	}
+}
+
+func (e *RunEngine) SetAutomationSafetyConfig(cfg config.AutomationSafetyConfig) {
+	e.automationSafety = cfg
 }
 
 func (e *RunEngine) Start(ctx context.Context, run assistant.Run) error {
@@ -583,6 +589,7 @@ func (e *RunEngine) executePlanner(ctx context.Context, record *store.RunRecord,
 		MaxGenerationAttempts: record.Run.MaxGenerationAttempts,
 		Project:               record.Run.Project,
 		Wiki:                  e.loadWikiContext(record.Run.Project),
+		AutomationSafety:      e.automationSafety,
 	})
 
 	attempt, response, err := e.executeAttempt(ctx, record.Run, record.Attempts, assistant.AttemptRolePlanner, prompt, "", resumeInput, record.Run.Project.WorkspaceDir)
@@ -596,6 +603,8 @@ func (e *RunEngine) executePlanner(ctx context.Context, record *store.RunRecord,
 	spec, err := prompting.DecodePlannerOutput([]byte(response.Output), prompting.PlannerInput{
 		UserRequestRaw:        record.Run.UserRequestRaw,
 		MaxGenerationAttempts: record.Run.MaxGenerationAttempts,
+		Project:               record.Run.Project,
+		AutomationSafety:      e.automationSafety,
 	})
 	if err != nil {
 		return e.failRun(ctx, record.Run, fmt.Sprintf("Planner output could not be decoded: %v", err), err)
