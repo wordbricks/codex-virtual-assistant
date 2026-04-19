@@ -153,6 +153,17 @@ func TestBuildGeneratorPromptPrefersExplicitStatePersistence(t *testing.T) {
 	bundle := BuildGeneratorPrompt(GeneratorInput{
 		Run: assistant.Run{
 			UserRequestRaw: "Use https://example.com/source and save results to the target list.",
+			TaskSpec: assistant.TaskSpec{
+				AutomationSafety: &assistant.AutomationSafetyPolicy{
+					Profile:     assistant.AutomationSafetyProfileBrowserHighRiskEngagement,
+					Enforcement: assistant.AutomationSafetyEnforcementEngineBlocking,
+					ModePolicy: assistant.AutomationSafetyModePolicy{
+						AllowNoActionSuccess:     true,
+						RequireNoActionEvidence:  true,
+						NoActionEvidenceRequired: []string{"Observed context", "Skipped action", "Skip reason", "Safer next step"},
+					},
+				},
+			},
 		},
 	})
 
@@ -201,8 +212,23 @@ func TestBuildGeneratorPromptPrefersExplicitStatePersistence(t *testing.T) {
 	if !strings.Contains(strings.ToLower(bundle.System), "webm") {
 		t.Fatalf("System prompt = %q, want WebM recording guidance", bundle.System)
 	}
+	if !strings.Contains(bundle.System, "Treat no-action as a valid terminal path only when the policy allows it") {
+		t.Fatalf("System prompt = %q, want no-action policy handling", bundle.System)
+	}
+	if !strings.Contains(bundle.System, "record the observed context, skipped mutating action, safety reason for skipping, and a safer next step") {
+		t.Fatalf("System prompt = %q, want no-action evidence semantics", bundle.System)
+	}
+	if !strings.Contains(bundle.System, "Preserve enough browser action detail for downstream safety metrics") {
+		t.Fatalf("System prompt = %q, want action detail preservation guidance", bundle.System)
+	}
 	if !strings.Contains(bundle.User, "Original user request: Use https://example.com/source and save results to the target list.") {
 		t.Fatalf("User prompt = %q, want original user request context", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "Automation safety policy context:") || !strings.Contains(bundle.User, "- profile: browser_high_risk_engagement") {
+		t.Fatalf("User prompt = %q, want automation safety policy context", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "- require no-action evidence: true") || !strings.Contains(bundle.User, "- no-action evidence requirements: Observed context; Skipped action; Skip reason; Safer next step") {
+		t.Fatalf("User prompt = %q, want explicit no-action evidence requirements", bundle.User)
 	}
 }
 
@@ -217,6 +243,15 @@ func TestBuildContractPromptDeclaresStrictJSONContract(t *testing.T) {
 				Deliverables:     []string{"Pricing table"},
 				DoneDefinition:   []string{"Produce the pricing table"},
 				EvidenceRequired: []string{"Source URLs"},
+				AutomationSafety: &assistant.AutomationSafetyPolicy{
+					Profile:     assistant.AutomationSafetyProfileBrowserHighRiskEngagement,
+					Enforcement: assistant.AutomationSafetyEnforcementEngineBlocking,
+					ModePolicy: assistant.AutomationSafetyModePolicy{
+						AllowNoActionSuccess:     true,
+						RequireNoActionEvidence:  true,
+						NoActionEvidenceRequired: []string{"Observed context", "Skipped action", "Skip reason", "Safer next step"},
+					},
+				},
 			},
 		},
 	})
@@ -227,8 +262,20 @@ func TestBuildContractPromptDeclaresStrictJSONContract(t *testing.T) {
 	if !strings.Contains(bundle.System, "strict JSON object") {
 		t.Fatalf("System prompt = %q, want strict JSON instruction", bundle.System)
 	}
+	if !strings.Contains(bundle.System, "translate it into explicit acceptance_criteria and evidence_required entries") {
+		t.Fatalf("System prompt = %q, want automation safety contract guidance", bundle.System)
+	}
+	if !strings.Contains(bundle.System, "mode_policy.allow_no_action_success=true") || !strings.Contains(bundle.System, "mode_policy.require_no_action_evidence=true") {
+		t.Fatalf("System prompt = %q, want no-action and evidence policy semantics", bundle.System)
+	}
 	if !strings.Contains(bundle.User, "Original user request: Take the cafes from https://www.diningcode.com/list.dc?query=foo and save them into Naver Map.") {
 		t.Fatalf("User prompt = %q, want original user request context", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "Automation safety policy context:") || !strings.Contains(bundle.User, "- profile: browser_high_risk_engagement") {
+		t.Fatalf("User prompt = %q, want automation safety policy context", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "- no-action evidence requirements: Observed context; Skipped action; Skip reason; Safer next step") {
+		t.Fatalf("User prompt = %q, want no-action evidence details", bundle.User)
 	}
 }
 

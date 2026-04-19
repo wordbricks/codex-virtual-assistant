@@ -27,7 +27,7 @@ The active plan requires a reusable policy model that remains off for ordinary r
 - [x] Milestone 1: Add automation safety policy model to `TaskSpec`/assistant types (profiles, enforcement, limits, no-action evidence requirements) with compatibility and validation.
 - [x] Milestone 2: Extend config loading/validation to support automation-safety defaults and per-project overrides, including merge precedence.
 - [x] Milestone 3: Integrate policy into planner prompt/context and plan decoding so profile inference + override application produce normalized policy.
-- [ ] Milestone 4: Thread normalized policy into contract and generator prompts, including no-action handling and required evidence semantics.
+- [x] Milestone 4: Thread normalized policy into contract and generator prompts, including no-action handling and required evidence semantics.
 - [ ] Milestone 5: Implement browser action logging plus recent-activity metrics needed by behavioral checks.
 - [ ] Milestone 6: Integrate policy checks into evaluator and scheduler flows/prompts, with hard-limit enforcement only for `browser_high_risk_engagement`.
 - [ ] Milestone 7: Add/update tests and documentation for policy fields, config overrides, prompt integration, metrics, and enforcement behavior.
@@ -36,7 +36,8 @@ The active plan requires a reusable policy model that remains off for ordinary r
 
 - Milestone 1 complete.
 - Milestone 2 complete.
-- Milestone 3 completed in this iteration.
+- Milestone 3 complete.
+- Milestone 4 completed in this iteration.
 - Planner prompt contract now includes `automation_safety` in strict JSON planner output schema and adds explicit profile/enforcement guidance for browser mutating and high-risk engagement classification.
 - Planner user context now includes automation-safety config context (global defaults + project override visibility) to expose structured config policy inputs during planning.
 - Planner decode path now:
@@ -46,6 +47,10 @@ The active plan requires a reusable policy model that remains off for ordinary r
 - Engine/app wiring now injects automation-safety config into planner prompt and decode flow.
 - App-server planner output JSON schema and local heuristic planner output were updated to include `automation_safety` so runtime contracts remain aligned.
 - Added/updated planner tests for prompt contract/context and decode inference + config-override behavior.
+- Contract prompt user context now includes normalized automation-safety policy details and contract system guidance now requires policy-derived acceptance criteria/evidence, including no-action semantics when configured.
+- Generator prompt now includes normalized automation-safety policy context and explicit instructions for policy-gated no-action terminal paths and required no-action evidence details.
+- Generator prompt now explicitly requires preserving browser action detail needed for later safety metrics calculations (action type, target/source context, state-change, timing/spacing context).
+- Added/updated prompt tests to verify contract/generator policy propagation plus no-action evidence semantics.
 - Full test suite passed: `go test ./...`.
 
 ## Key decisions
@@ -60,7 +65,6 @@ The active plan requires a reusable policy model that remains off for ordinary r
 
 ## Remaining issues / open questions
 
-- Milestone 4: thread normalized policy into contract and generator prompts, including explicit no-action handling and required no-action evidence semantics.
 - Milestone 5: implement browser action logging and recent-activity metrics for deterministic behavioral checks.
 - Milestone 6: integrate evaluator/scheduler policy checks and limit hard blocking to `browser_high_risk_engagement`.
 - Milestone 7: complete docs/test coverage updates for prompt propagation, metrics, and enforcement outcomes.

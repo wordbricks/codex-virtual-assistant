@@ -237,6 +237,7 @@ func BuildContractPrompt(input ContractInput) Bundle {
 	fmt.Fprintf(builder, "Constraints: %s\n", strings.Join(input.Run.TaskSpec.Constraints, "; "))
 	fmt.Fprintf(builder, "Done definition: %s\n", strings.Join(input.Run.TaskSpec.DoneDefinition, "; "))
 	fmt.Fprintf(builder, "Evidence required: %s\n", strings.Join(input.Run.TaskSpec.EvidenceRequired, "; "))
+	appendAutomationSafetyPromptContext(builder, input.Run.TaskSpec.AutomationSafety)
 	if input.Run.TaskSpec.AcceptanceContract != nil && strings.TrimSpace(input.Run.TaskSpec.AcceptanceContract.RevisionNotes) != "" {
 		fmt.Fprintf(builder, "Previous contract revision notes: %s\n", input.Run.TaskSpec.AcceptanceContract.RevisionNotes)
 	}
@@ -258,6 +259,9 @@ The JSON object must contain exactly these keys:
 - revision_notes
 Use decision="agreed" only when the contract is concrete enough for generation to start.
 Use decision="revise" when the contract still needs tightening and explain the gap in revision_notes.
+When automation safety policy context is present, translate it into explicit acceptance_criteria and evidence_required entries.
+If mode_policy.allow_no_action_success=true, include a criterion that no-action completion is acceptable when mutating action is unsafe.
+If mode_policy.require_no_action_evidence=true, include evidence requirements for observed context, skipped action, skip reason, and safer next step.
 Use decision="fail" only when the task cannot be contracted safely from the available information.`),
 		User: strings.TrimSpace(builder.String()),
 	}
@@ -414,11 +418,12 @@ func BuildGeneratorPrompt(input GeneratorInput) Bundle {
 	fmt.Fprintf(builder, "Original user request: %s\n", strings.TrimSpace(input.Run.UserRequestRaw))
 	fmt.Fprintf(builder, "Goal: %s\n", input.Run.TaskSpec.Goal)
 	appendContractContext(builder, input.Run.TaskSpec)
+	appendAutomationSafetyPromptContext(builder, input.Run.TaskSpec.AutomationSafety)
 	if input.PriorCritique != "" {
 		fmt.Fprintf(builder, "Evaluator critique to address: %s\n", input.PriorCritique)
 	}
 	return Bundle{
-		System: "You are the generator for a WTL GAN-policy based assistant. Complete the real work and retain evidence. When browser work uses agent-browser, run it in foreground/headed mode by default and prefer the current command pattern, for example: agent-browser open <url> --headed, then agent-browser snapshot -i --json before interacting. If a project-specific browser profile and CDP port are available, prefer that profile over saved auth state files and over --auto-connect. Before launching a new Chrome window, first health-check the project CDP endpoint with curl -sS http://localhost:<port>/json/version. If that health check succeeds, do not launch a new Chrome window and do not call agent-browser connect; instead, reuse the existing project Chrome session by passing --cdp <port> directly on every agent-browser command, for example: agent-browser --cdp <port> open about:blank, then agent-browser --cdp <port> snapshot -i --json. Only if the health check fails should you launch Chrome with that profile and fixed remote debugging port. If an agent-browser command that uses --cdp <port> times out even though the CDP health check succeeded, treat that as a stale agent-browser session issue: then run agent-browser close once, retry the same --cdp <port> command, and avoid launching another Chrome window unless the CDP health check stops responding. Reuse the same project profile across runs so login state persists in the profile directory. Persist auth with explicit state files instead. Use explicit auth state files only as a secondary export/import mechanism, and do not rely on --session-name for auth persistence. Use --auto-connect only when the task must attach to the user's already-running Chrome session and a project-specific browser profile cannot be used. If --auto-connect succeeds, immediately save a fresh auth state to a project-local path, then continue future navigation by opening a blank page, running agent-browser state load <path>, and only then opening the target URL. After a successful state save, do not keep relying on --auto-connect in the same task unless the saved state fails and login must be recovered again. When reusing saved state, prefer opening a blank page, running agent-browser state load <path>, and only then opening the target URL instead of relying on --state during the initial open command. When using --auto-connect to attach to a real Google Chrome session, Chrome may show an 'Allow remote debugging?' dialog. If an attach attempt or the first browser command times out during that flow, do not assume the attempt failed. Ask the user to click Allow in Chrome, return a wait_request for approval, and retry after the user confirms approval. If you produce or export a browser recording during the task, prefer recording or re-encoding it as WebM instead of MP4 whenever the tool supports that choice.",
+		System: "You are the generator for a WTL GAN-policy based assistant. Complete the real work and retain evidence. Obey any automation safety policy context provided in the task input. Treat no-action as a valid terminal path only when the policy allows it. If no-action is taken and the policy requires no-action evidence, record the observed context, skipped mutating action, safety reason for skipping, and a safer next step. Preserve enough browser action detail for downstream safety metrics, including action type, target/source context, whether external account state changed, and timing/spacing context for mutating actions. When browser work uses agent-browser, run it in foreground/headed mode by default and prefer the current command pattern, for example: agent-browser open <url> --headed, then agent-browser snapshot -i --json before interacting. If a project-specific browser profile and CDP port are available, prefer that profile over saved auth state files and over --auto-connect. Before launching a new Chrome window, first health-check the project CDP endpoint with curl -sS http://localhost:<port>/json/version. If that health check succeeds, do not launch a new Chrome window and do not call agent-browser connect; instead, reuse the existing project Chrome session by passing --cdp <port> directly on every agent-browser command, for example: agent-browser --cdp <port> open about:blank, then agent-browser --cdp <port> snapshot -i --json. Only if the health check fails should you launch Chrome with that profile and fixed remote debugging port. If an agent-browser command that uses --cdp <port> times out even though the CDP health check succeeded, treat that as a stale agent-browser session issue: then run agent-browser close once, retry the same --cdp <port> command, and avoid launching another Chrome window unless the CDP health check stops responding. Reuse the same project profile across runs so login state persists in the profile directory. Persist auth with explicit state files instead. Use explicit auth state files only as a secondary export/import mechanism, and do not rely on --session-name for auth persistence. Use --auto-connect only when the task must attach to the user's already-running Chrome session and a project-specific browser profile cannot be used. If --auto-connect succeeds, immediately save a fresh auth state to a project-local path, then continue future navigation by opening a blank page, running agent-browser state load <path>, and only then opening the target URL. After a successful state save, do not keep relying on --auto-connect in the same task unless the saved state fails and login must be recovered again. When reusing saved state, prefer opening a blank page, running agent-browser state load <path>, and only then opening the target URL instead of relying on --state during the initial open command. When using --auto-connect to attach to a real Google Chrome session, Chrome may show an 'Allow remote debugging?' dialog. If an attach attempt or the first browser command times out during that flow, do not assume the attempt failed. Ask the user to click Allow in Chrome, return a wait_request for approval, and retry after the user confirms approval. If you produce or export a browser recording during the task, prefer recording or re-encoding it as WebM instead of MP4 whenever the tool supports that choice.",
 		User:   strings.TrimSpace(builder.String()),
 	}
 }
@@ -733,6 +738,82 @@ func appendAutomationSafetyPlannerContext(builder *strings.Builder, projectSlug 
 		return
 	}
 	fmt.Fprintf(builder, "- Project override for %s: none configured.", slug)
+}
+
+func appendAutomationSafetyPromptContext(builder *strings.Builder, policy *assistant.AutomationSafetyPolicy) {
+	fmt.Fprintf(builder, "Automation safety policy context:\n")
+	if policy == nil {
+		fmt.Fprintf(builder, "- none.\n")
+		return
+	}
+
+	fmt.Fprintf(builder, "- profile: %s\n", policy.Profile)
+	fmt.Fprintf(builder, "- enforcement: %s\n", policy.Enforcement)
+
+	if len(policy.ModePolicy.AllowedSessionModes) > 0 {
+		fmt.Fprintf(builder, "- allowed session modes: %s\n", strings.Join(policy.ModePolicy.AllowedSessionModes, ", "))
+	}
+	fmt.Fprintf(builder, "- allow no-action success: %t\n", policy.ModePolicy.AllowNoActionSuccess)
+	fmt.Fprintf(builder, "- require no-action evidence: %t\n", policy.ModePolicy.RequireNoActionEvidence)
+	if len(policy.ModePolicy.NoActionEvidenceRequired) > 0 {
+		fmt.Fprintf(builder, "- no-action evidence requirements: %s\n", strings.Join(policy.ModePolicy.NoActionEvidenceRequired, "; "))
+	}
+
+	rateLimits := make([]string, 0, 3)
+	if policy.RateLimits.MaxAccountChangingActionsPerRun > 0 {
+		rateLimits = append(
+			rateLimits,
+			fmt.Sprintf("max_account_changing_actions_per_run=%d", policy.RateLimits.MaxAccountChangingActionsPerRun),
+		)
+	}
+	if policy.RateLimits.MaxRepliesPer24h > 0 {
+		rateLimits = append(rateLimits, fmt.Sprintf("max_replies_per_24h=%d", policy.RateLimits.MaxRepliesPer24h))
+	}
+	if policy.RateLimits.MinSpacingMinutes > 0 {
+		rateLimits = append(rateLimits, fmt.Sprintf("min_spacing_minutes=%d", policy.RateLimits.MinSpacingMinutes))
+	}
+	if len(rateLimits) > 0 {
+		fmt.Fprintf(builder, "- rate limits: %s\n", strings.Join(rateLimits, ", "))
+	}
+
+	patternRules := make([]string, 0, 3)
+	if policy.PatternRules.DisallowDefaultActionTrios {
+		patternRules = append(patternRules, "disallow_default_action_trios")
+	}
+	if policy.PatternRules.DisallowFixedShortFollowup {
+		patternRules = append(patternRules, "disallow_fixed_short_followups")
+	}
+	if policy.PatternRules.RequireSourceDiversity {
+		patternRules = append(patternRules, "require_source_diversity")
+	}
+	if len(patternRules) > 0 {
+		fmt.Fprintf(builder, "- pattern rules: %s\n", strings.Join(patternRules, ", "))
+	}
+
+	textReuse := make([]string, 0, 3)
+	if policy.TextReuse.RejectHighSimilarity {
+		textReuse = append(textReuse, "reject_high_similarity")
+	}
+	if policy.TextReuse.AvoidRepeatedSelfIntro {
+		textReuse = append(textReuse, "avoid_repeated_self_intro")
+	}
+	if policy.TextReuse.RequireTextVariantSupport {
+		textReuse = append(textReuse, "require_text_variant_support")
+	}
+	if len(textReuse) > 0 {
+		fmt.Fprintf(builder, "- text reuse policy: %s\n", strings.Join(textReuse, ", "))
+	}
+
+	cooldown := make([]string, 0, 2)
+	if policy.CooldownPolicy.ForceReadOnlyAfterDenseActivity {
+		cooldown = append(cooldown, "force_read_only_after_dense_activity")
+	}
+	if policy.CooldownPolicy.PreferLongerCooldownAfterBlockedRuns {
+		cooldown = append(cooldown, "prefer_longer_cooldown_after_blocked_runs")
+	}
+	if len(cooldown) > 0 {
+		fmt.Fprintf(builder, "- cooldown policy: %s\n", strings.Join(cooldown, ", "))
+	}
 }
 
 func firstNonEmpty(values ...string) string {
