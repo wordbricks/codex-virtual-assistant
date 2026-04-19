@@ -3,6 +3,7 @@ package assistant
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -75,6 +76,63 @@ const (
 	ContractStatusDraft  ContractStatus = "draft"
 	ContractStatusAgreed ContractStatus = "agreed"
 )
+
+type AutomationSafetyProfile string
+
+const (
+	AutomationSafetyProfileNone                      AutomationSafetyProfile = "none"
+	AutomationSafetyProfileBrowserReadOnly           AutomationSafetyProfile = "browser_read_only"
+	AutomationSafetyProfileBrowserMutating           AutomationSafetyProfile = "browser_mutating"
+	AutomationSafetyProfileBrowserHighRiskEngagement AutomationSafetyProfile = "browser_high_risk_engagement"
+)
+
+type AutomationSafetyEnforcement string
+
+const (
+	AutomationSafetyEnforcementAdvisory          AutomationSafetyEnforcement = "advisory"
+	AutomationSafetyEnforcementEvaluatorEnforced AutomationSafetyEnforcement = "evaluator_enforced"
+	AutomationSafetyEnforcementEngineBlocking    AutomationSafetyEnforcement = "engine_blocking"
+)
+
+type AutomationSafetyModePolicy struct {
+	AllowedSessionModes      []string `json:"allowed_session_modes,omitempty"`
+	AllowNoActionSuccess     bool     `json:"allow_no_action_success,omitempty"`
+	RequireNoActionEvidence  bool     `json:"require_no_action_evidence,omitempty"`
+	NoActionEvidenceRequired []string `json:"no_action_evidence_required,omitempty"`
+}
+
+type AutomationSafetyRateLimits struct {
+	MaxAccountChangingActionsPerRun int `json:"max_account_changing_actions_per_run,omitempty"`
+	MaxRepliesPer24h                int `json:"max_replies_per_24h,omitempty"`
+	MinSpacingMinutes               int `json:"min_spacing_minutes,omitempty"`
+}
+
+type AutomationSafetyPatternRules struct {
+	DisallowDefaultActionTrios bool `json:"disallow_default_action_trios,omitempty"`
+	DisallowFixedShortFollowup bool `json:"disallow_fixed_short_followups,omitempty"`
+	RequireSourceDiversity     bool `json:"require_source_diversity,omitempty"`
+}
+
+type AutomationSafetyTextReusePolicy struct {
+	RejectHighSimilarity      bool `json:"reject_high_similarity,omitempty"`
+	AvoidRepeatedSelfIntro    bool `json:"avoid_repeated_self_intro,omitempty"`
+	RequireTextVariantSupport bool `json:"require_text_variant_support,omitempty"`
+}
+
+type AutomationSafetyCooldownPolicy struct {
+	ForceReadOnlyAfterDenseActivity      bool `json:"force_read_only_after_dense_activity,omitempty"`
+	PreferLongerCooldownAfterBlockedRuns bool `json:"prefer_longer_cooldown_after_blocked_runs,omitempty"`
+}
+
+type AutomationSafetyPolicy struct {
+	Profile        AutomationSafetyProfile         `json:"profile"`
+	Enforcement    AutomationSafetyEnforcement     `json:"enforcement"`
+	ModePolicy     AutomationSafetyModePolicy      `json:"mode_policy,omitempty"`
+	RateLimits     AutomationSafetyRateLimits      `json:"rate_limits,omitempty"`
+	PatternRules   AutomationSafetyPatternRules    `json:"pattern_rules,omitempty"`
+	TextReuse      AutomationSafetyTextReusePolicy `json:"text_reuse_policy,omitempty"`
+	CooldownPolicy AutomationSafetyCooldownPolicy  `json:"cooldown_policy,omitempty"`
+}
 
 type AcceptanceContract struct {
 	Status             ContractStatus `json:"status"`
@@ -194,18 +252,19 @@ type Chat struct {
 }
 
 type TaskSpec struct {
-	Goal                  string              `json:"goal"`
-	UserRequestRaw        string              `json:"user_request_raw"`
-	Deliverables          []string            `json:"deliverables"`
-	Constraints           []string            `json:"constraints"`
-	ToolsAllowed          []string            `json:"tools_allowed"`
-	ToolsRequired         []string            `json:"tools_required"`
-	DoneDefinition        []string            `json:"done_definition"`
-	EvidenceRequired      []string            `json:"evidence_required"`
-	RiskFlags             []string            `json:"risk_flags"`
-	MaxGenerationAttempts int                 `json:"max_generation_attempts"`
-	SchedulePlan          *SchedulePlan       `json:"schedule_plan,omitempty"`
-	AcceptanceContract    *AcceptanceContract `json:"acceptance_contract,omitempty"`
+	Goal                  string                  `json:"goal"`
+	UserRequestRaw        string                  `json:"user_request_raw"`
+	Deliverables          []string                `json:"deliverables"`
+	Constraints           []string                `json:"constraints"`
+	ToolsAllowed          []string                `json:"tools_allowed"`
+	ToolsRequired         []string                `json:"tools_required"`
+	DoneDefinition        []string                `json:"done_definition"`
+	EvidenceRequired      []string                `json:"evidence_required"`
+	RiskFlags             []string                `json:"risk_flags"`
+	AutomationSafety      *AutomationSafetyPolicy `json:"automation_safety,omitempty"`
+	MaxGenerationAttempts int                     `json:"max_generation_attempts"`
+	SchedulePlan          *SchedulePlan           `json:"schedule_plan,omitempty"`
+	AcceptanceContract    *AcceptanceContract     `json:"acceptance_contract,omitempty"`
 }
 
 type Attempt struct {
@@ -270,13 +329,57 @@ type ToolCall struct {
 }
 
 type WebStep struct {
-	ID         string    `json:"id"`
-	RunID      string    `json:"run_id"`
-	AttemptID  string    `json:"attempt_id"`
-	Title      string    `json:"title"`
-	URL        string    `json:"url,omitempty"`
-	Summary    string    `json:"summary"`
-	OccurredAt time.Time `json:"occurred_at"`
+	ID            string    `json:"id"`
+	RunID         string    `json:"run_id"`
+	AttemptID     string    `json:"attempt_id"`
+	Title         string    `json:"title"`
+	URL           string    `json:"url,omitempty"`
+	Summary       string    `json:"summary"`
+	ActionName    string    `json:"action_name,omitempty"`
+	ActionTarget  string    `json:"action_target,omitempty"`
+	ActionRef     string    `json:"action_ref,omitempty"`
+	ActionValue   string    `json:"action_value,omitempty"`
+	ActionSession string    `json:"action_session,omitempty"`
+	OccurredAt    time.Time `json:"occurred_at"`
+}
+
+type BrowserActionType string
+
+const (
+	BrowserActionTypeUnknown  BrowserActionType = "unknown"
+	BrowserActionTypeRead     BrowserActionType = "read"
+	BrowserActionTypeNavigate BrowserActionType = "navigate"
+	BrowserActionTypeInput    BrowserActionType = "input"
+	BrowserActionTypeSubmit   BrowserActionType = "submit"
+	BrowserActionTypeReply    BrowserActionType = "reply"
+	BrowserActionTypeEngage   BrowserActionType = "engage"
+)
+
+type BrowserActionRecord struct {
+	ID                  string            `json:"id"`
+	RunID               string            `json:"run_id"`
+	AttemptID           string            `json:"attempt_id"`
+	ProjectSlug         string            `json:"project_slug,omitempty"`
+	ActionType          BrowserActionType `json:"action_type"`
+	ActionName          string            `json:"action_name"`
+	TargetContext       string            `json:"target_context,omitempty"`
+	SourceContext       string            `json:"source_context,omitempty"`
+	SourceURL           string            `json:"source_url,omitempty"`
+	AccountStateChanged bool              `json:"account_state_changed"`
+	TextFingerprint     string            `json:"text_fingerprint,omitempty"`
+	OccurredAt          time.Time         `json:"occurred_at"`
+}
+
+type BrowserRecentActivityMetrics struct {
+	WindowStart                 time.Time `json:"window_start"`
+	WindowEnd                   time.Time `json:"window_end"`
+	TotalActionCount            int       `json:"total_action_count"`
+	MutatingActionCount         int       `json:"mutating_action_count"`
+	ReplyActionCount            int       `json:"reply_action_count"`
+	RecentMutationDensity       float64   `json:"recent_mutation_density"`
+	SourcePathConcentration     float64   `json:"source_path_concentration"`
+	RepeatedActionSequenceScore float64   `json:"repeated_action_sequence_score"`
+	TextReuseRiskScore          float64   `json:"text_reuse_risk_score"`
 }
 
 type WaitRequest struct {
@@ -368,6 +471,11 @@ func (s TaskSpec) Validate() error {
 	case s.MaxGenerationAttempts <= 0:
 		return errors.New("task spec max generation attempts must be positive")
 	default:
+		if s.AutomationSafety != nil {
+			if err := s.AutomationSafety.Validate(); err != nil {
+				return fmt.Errorf("task spec automation safety invalid: %w", err)
+			}
+		}
 		if s.SchedulePlan != nil {
 			if err := s.SchedulePlan.Validate(); err != nil {
 				return fmt.Errorf("task spec schedule plan invalid: %w", err)
@@ -380,6 +488,67 @@ func (s TaskSpec) Validate() error {
 		}
 		return nil
 	}
+}
+
+func (p AutomationSafetyPolicy) Validate() error {
+	switch p.Profile {
+	case AutomationSafetyProfileNone,
+		AutomationSafetyProfileBrowserReadOnly,
+		AutomationSafetyProfileBrowserMutating,
+		AutomationSafetyProfileBrowserHighRiskEngagement:
+	default:
+		return errors.New("automation safety profile is invalid")
+	}
+
+	switch p.Enforcement {
+	case AutomationSafetyEnforcementAdvisory,
+		AutomationSafetyEnforcementEvaluatorEnforced,
+		AutomationSafetyEnforcementEngineBlocking:
+	default:
+		return errors.New("automation safety enforcement is invalid")
+	}
+
+	if p.Enforcement == AutomationSafetyEnforcementEngineBlocking &&
+		p.Profile != AutomationSafetyProfileBrowserHighRiskEngagement {
+		return errors.New("automation safety engine_blocking is only valid for browser_high_risk_engagement")
+	}
+
+	for _, mode := range p.ModePolicy.AllowedSessionModes {
+		switch mode {
+		case "read_only", "single_action", "reply_only":
+		default:
+			return fmt.Errorf("automation safety session mode %q is invalid", mode)
+		}
+	}
+
+	for _, requirement := range p.ModePolicy.NoActionEvidenceRequired {
+		if strings.TrimSpace(requirement) == "" {
+			return errors.New("automation safety no-action evidence requirement must be non-empty")
+		}
+	}
+	if p.ModePolicy.RequireNoActionEvidence && len(p.ModePolicy.NoActionEvidenceRequired) == 0 {
+		return errors.New("automation safety no-action evidence requirements are required when require_no_action_evidence is true")
+	}
+
+	if p.RateLimits.MaxAccountChangingActionsPerRun < 0 ||
+		p.RateLimits.MaxRepliesPer24h < 0 ||
+		p.RateLimits.MinSpacingMinutes < 0 {
+		return errors.New("automation safety rate limits cannot be negative")
+	}
+
+	if p.Profile == AutomationSafetyProfileBrowserHighRiskEngagement {
+		if p.RateLimits.MaxAccountChangingActionsPerRun == 0 {
+			return errors.New("automation safety max_account_changing_actions_per_run is required for high-risk engagement")
+		}
+		if p.RateLimits.MaxRepliesPer24h == 0 {
+			return errors.New("automation safety max_replies_per_24h is required for high-risk engagement")
+		}
+		if p.RateLimits.MinSpacingMinutes == 0 {
+			return errors.New("automation safety min_spacing_minutes is required for high-risk engagement")
+		}
+	}
+
+	return nil
 }
 
 func (c AcceptanceContract) Validate() error {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
+	"github.com/siisee11/CodexVirtualAssistant/internal/config"
 )
 
 func TestBuildPlannerPromptDeclaresStrictJSONContract(t *testing.T) {
@@ -26,6 +27,14 @@ func TestBuildPlannerPromptDeclaresStrictJSONContract(t *testing.T) {
 			OverviewSummary: "We already track SaaS competitor pricing and past comparisons.",
 			IndexSummary:    "topics/pricing.md and reports/run-1.md are relevant.",
 		},
+		AutomationSafety: config.AutomationSafetyConfig{
+			Defaults: map[string]config.AutomationSafetyPolicyOverride{
+				"browser_high_risk_engagement": {},
+			},
+			Projects: map[string]config.AutomationSafetyProjectOverride{
+				"competitor-pricing": {ProfileOverride: assistant.AutomationSafetyProfileBrowserReadOnly},
+			},
+		},
 	})
 
 	if !strings.Contains(bundle.System, "strict JSON object") {
@@ -37,11 +46,17 @@ func TestBuildPlannerPromptDeclaresStrictJSONContract(t *testing.T) {
 	if !strings.Contains(bundle.System, "schedule_plan") {
 		t.Fatalf("System prompt = %q, want schedule_plan guidance", bundle.System)
 	}
+	if !strings.Contains(bundle.System, "automation_safety") {
+		t.Fatalf("System prompt = %q, want automation_safety guidance", bundle.System)
+	}
 	if !strings.Contains(bundle.User, "Default max generation attempts: 4") {
 		t.Fatalf("User prompt = %q, want attempt count", bundle.User)
 	}
 	if !strings.Contains(bundle.User, "Project wiki context") || !strings.Contains(bundle.User, "Overview: We already track SaaS competitor pricing") {
 		t.Fatalf("User prompt = %q, want wiki context summary", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "Automation safety config context") || !strings.Contains(bundle.User, "Project override for competitor-pricing") {
+		t.Fatalf("User prompt = %q, want automation safety config context", bundle.User)
 	}
 }
 
@@ -138,6 +153,17 @@ func TestBuildGeneratorPromptPrefersExplicitStatePersistence(t *testing.T) {
 	bundle := BuildGeneratorPrompt(GeneratorInput{
 		Run: assistant.Run{
 			UserRequestRaw: "Use https://example.com/source and save results to the target list.",
+			TaskSpec: assistant.TaskSpec{
+				AutomationSafety: &assistant.AutomationSafetyPolicy{
+					Profile:     assistant.AutomationSafetyProfileBrowserHighRiskEngagement,
+					Enforcement: assistant.AutomationSafetyEnforcementEngineBlocking,
+					ModePolicy: assistant.AutomationSafetyModePolicy{
+						AllowNoActionSuccess:     true,
+						RequireNoActionEvidence:  true,
+						NoActionEvidenceRequired: []string{"Observed context", "Skipped action", "Skip reason", "Safer next step"},
+					},
+				},
+			},
 		},
 	})
 
@@ -186,8 +212,23 @@ func TestBuildGeneratorPromptPrefersExplicitStatePersistence(t *testing.T) {
 	if !strings.Contains(strings.ToLower(bundle.System), "webm") {
 		t.Fatalf("System prompt = %q, want WebM recording guidance", bundle.System)
 	}
+	if !strings.Contains(bundle.System, "Treat no-action as a valid terminal path only when the policy allows it") {
+		t.Fatalf("System prompt = %q, want no-action policy handling", bundle.System)
+	}
+	if !strings.Contains(bundle.System, "record the observed context, skipped mutating action, safety reason for skipping, and a safer next step") {
+		t.Fatalf("System prompt = %q, want no-action evidence semantics", bundle.System)
+	}
+	if !strings.Contains(bundle.System, "Preserve enough browser action detail for downstream safety metrics") {
+		t.Fatalf("System prompt = %q, want action detail preservation guidance", bundle.System)
+	}
 	if !strings.Contains(bundle.User, "Original user request: Use https://example.com/source and save results to the target list.") {
 		t.Fatalf("User prompt = %q, want original user request context", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "Automation safety policy context:") || !strings.Contains(bundle.User, "- profile: browser_high_risk_engagement") {
+		t.Fatalf("User prompt = %q, want automation safety policy context", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "- require no-action evidence: true") || !strings.Contains(bundle.User, "- no-action evidence requirements: Observed context; Skipped action; Skip reason; Safer next step") {
+		t.Fatalf("User prompt = %q, want explicit no-action evidence requirements", bundle.User)
 	}
 }
 
@@ -202,6 +243,15 @@ func TestBuildContractPromptDeclaresStrictJSONContract(t *testing.T) {
 				Deliverables:     []string{"Pricing table"},
 				DoneDefinition:   []string{"Produce the pricing table"},
 				EvidenceRequired: []string{"Source URLs"},
+				AutomationSafety: &assistant.AutomationSafetyPolicy{
+					Profile:     assistant.AutomationSafetyProfileBrowserHighRiskEngagement,
+					Enforcement: assistant.AutomationSafetyEnforcementEngineBlocking,
+					ModePolicy: assistant.AutomationSafetyModePolicy{
+						AllowNoActionSuccess:     true,
+						RequireNoActionEvidence:  true,
+						NoActionEvidenceRequired: []string{"Observed context", "Skipped action", "Skip reason", "Safer next step"},
+					},
+				},
 			},
 		},
 	})
@@ -212,8 +262,20 @@ func TestBuildContractPromptDeclaresStrictJSONContract(t *testing.T) {
 	if !strings.Contains(bundle.System, "strict JSON object") {
 		t.Fatalf("System prompt = %q, want strict JSON instruction", bundle.System)
 	}
+	if !strings.Contains(bundle.System, "translate it into explicit acceptance_criteria and evidence_required entries") {
+		t.Fatalf("System prompt = %q, want automation safety contract guidance", bundle.System)
+	}
+	if !strings.Contains(bundle.System, "mode_policy.allow_no_action_success=true") || !strings.Contains(bundle.System, "mode_policy.require_no_action_evidence=true") {
+		t.Fatalf("System prompt = %q, want no-action and evidence policy semantics", bundle.System)
+	}
 	if !strings.Contains(bundle.User, "Original user request: Take the cafes from https://www.diningcode.com/list.dc?query=foo and save them into Naver Map.") {
 		t.Fatalf("User prompt = %q, want original user request context", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "Automation safety policy context:") || !strings.Contains(bundle.User, "- profile: browser_high_risk_engagement") {
+		t.Fatalf("User prompt = %q, want automation safety policy context", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "- no-action evidence requirements: Observed context; Skipped action; Skip reason; Safer next step") {
+		t.Fatalf("User prompt = %q, want no-action evidence details", bundle.User)
 	}
 }
 
@@ -272,7 +334,9 @@ func TestDecodePlannerOutputNormalizesTaskSpec(t *testing.T) {
 		"done_definition":[],
 		"evidence_required":[],
 		"risk_flags":["public-web-research"],
-		"max_generation_attempts":0
+		"automation_safety":null,
+		"max_generation_attempts":0,
+		"schedule_plan":null
 	}`)
 
 	spec, err := DecodePlannerOutput(raw, PlannerInput{
@@ -302,6 +366,16 @@ func TestBuildAndDecodeSchedulerPrompt(t *testing.T) {
 			UserRequestRaw: "Research hospitals and call them later.",
 			TaskSpec: assistant.TaskSpec{
 				Goal: "Research hospitals",
+				AutomationSafety: &assistant.AutomationSafetyPolicy{
+					Profile:     assistant.AutomationSafetyProfileBrowserHighRiskEngagement,
+					Enforcement: assistant.AutomationSafetyEnforcementEngineBlocking,
+					RateLimits: assistant.AutomationSafetyRateLimits{
+						MinSpacingMinutes: 20,
+					},
+					PatternRules: assistant.AutomationSafetyPatternRules{
+						DisallowFixedShortFollowup: true,
+					},
+				},
 				SchedulePlan: &assistant.SchedulePlan{
 					Entries: []assistant.ScheduleEntry{
 						{ScheduledFor: "13:00", Prompt: "Call the first hospital."},
@@ -311,6 +385,13 @@ func TestBuildAndDecodeSchedulerPrompt(t *testing.T) {
 		},
 		Artifacts: []assistant.Artifact{{Title: "Hospital shortlist", Kind: assistant.ArtifactKindReport, MIMEType: "text/markdown"}},
 		Evidence:  []assistant.Evidence{{Summary: "Saint Mary Hospital listed oncology intake at +1-555-0100."}},
+		RecentActivity: &assistant.BrowserRecentActivityMetrics{
+			WindowStart:           time.Date(2026, time.April, 2, 13, 0, 0, 0, time.UTC),
+			WindowEnd:             time.Date(2026, time.April, 3, 13, 0, 0, 0, time.UTC),
+			MutatingActionCount:   2,
+			ReplyActionCount:      1,
+			RecentMutationDensity: 0.0833,
+		},
 	})
 
 	if !strings.Contains(bundle.System, "Finalize the deferred execution prompts") {
@@ -318,6 +399,15 @@ func TestBuildAndDecodeSchedulerPrompt(t *testing.T) {
 	}
 	if !strings.Contains(bundle.User, "Planned schedule entries") {
 		t.Fatalf("User prompt = %q, want schedule entry context", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "Recent browser activity metrics:") || !strings.Contains(bundle.User, "mutating_action_count=2") {
+		t.Fatalf("User prompt = %q, want recent activity metric context", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "Automation safety policy context:") || !strings.Contains(bundle.User, "- profile: browser_high_risk_engagement") {
+		t.Fatalf("User prompt = %q, want scheduler automation safety context", bundle.User)
+	}
+	if !strings.Contains(bundle.System, "avoid fixed short follow-up loops") {
+		t.Fatalf("System prompt = %q, want scheduler automation safety instruction", bundle.System)
 	}
 
 	entries, err := DecodeSchedulerOutput([]byte(`{"entries":[{"scheduled_for":"2026-04-03T13:00:00Z","prompt":"Call Saint Mary Hospital at +1-555-0100."}]}`))
@@ -418,15 +508,38 @@ func TestBuildEvaluatorPromptIncludesOriginalUserRequest(t *testing.T) {
 		Run: assistant.Run{
 			UserRequestRaw: "Verify the saved list against https://example.com/source.",
 			TaskSpec: assistant.TaskSpec{
-				Goal:             "Verify the saved list",
+				Goal: "Verify the saved list",
+				AutomationSafety: &assistant.AutomationSafetyPolicy{
+					Profile:     assistant.AutomationSafetyProfileBrowserMutating,
+					Enforcement: assistant.AutomationSafetyEnforcementEvaluatorEnforced,
+				},
 				DoneDefinition:   []string{"Compare the saved list to the source"},
 				EvidenceRequired: []string{"Source URL", "Saved-list screenshot"},
 			},
+		},
+		RecentActivity: &assistant.BrowserRecentActivityMetrics{
+			WindowStart:                 time.Date(2026, time.April, 2, 0, 0, 0, 0, time.UTC),
+			WindowEnd:                   time.Date(2026, time.April, 3, 0, 0, 0, 0, time.UTC),
+			TotalActionCount:            4,
+			MutatingActionCount:         2,
+			SourcePathConcentration:     0.5,
+			TextReuseRiskScore:          0.25,
+			RecentMutationDensity:       0.0833,
+			RepeatedActionSequenceScore: 0.25,
 		},
 	})
 
 	if !strings.Contains(bundle.User, "Original user request: Verify the saved list against https://example.com/source.") {
 		t.Fatalf("User prompt = %q, want original user request context", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "Recent browser activity metrics:") || !strings.Contains(bundle.User, "total_action_count=4") {
+		t.Fatalf("User prompt = %q, want recent activity metric context", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "Automation safety policy context:") || !strings.Contains(bundle.User, "- profile: browser_mutating") {
+		t.Fatalf("User prompt = %q, want evaluator automation safety context", bundle.User)
+	}
+	if !strings.Contains(bundle.System, "any automation safety policy context") {
+		t.Fatalf("System prompt = %q, want evaluator automation safety guidance", bundle.System)
 	}
 }
 
@@ -480,4 +593,104 @@ func TestDecodeReportOutputBuildsDeliveryResult(t *testing.T) {
 	if output.DeliveryStatus != "sent" || output.ReportPayload == "" {
 		t.Fatalf("output = %#v, want sent payload", output)
 	}
+}
+
+func TestDecodePlannerOutputAppliesAutomationSafetyInferenceAndConfigOverride(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{
+		"goal":"Reply to onboarding outreach comments",
+		"deliverables":["Two safe responses"],
+		"constraints":[],
+		"tools_allowed":["agent-browser"],
+		"tools_required":["agent-browser"],
+		"done_definition":["Prepare responses"],
+		"evidence_required":["Captured URLs"],
+		"risk_flags":["external-side-effect"],
+		"automation_safety":null,
+		"max_generation_attempts":2,
+		"schedule_plan":null
+	}`)
+
+	input := PlannerInput{
+		UserRequestRaw:        "Reply to public comments and connection requests for outreach.",
+		MaxGenerationAttempts: 3,
+		Project: assistant.ProjectContext{
+			Slug: "growth-ops",
+		},
+		AutomationSafety: config.AutomationSafetyConfig{
+			Defaults: map[string]config.AutomationSafetyPolicyOverride{
+				"browser_high_risk_engagement": {
+					RateLimits: config.AutomationSafetyRateLimitsOverride{
+						MaxAccountChangingActionsPerRun: intPtr(2),
+						MaxRepliesPer24h:                intPtr(12),
+					},
+				},
+			},
+			Projects: map[string]config.AutomationSafetyProjectOverride{
+				"growth-ops": {
+					ProfileOverride: assistant.AutomationSafetyProfileBrowserHighRiskEngagement,
+					AutomationSafetyPolicyOverride: config.AutomationSafetyPolicyOverride{
+						RateLimits: config.AutomationSafetyRateLimitsOverride{
+							MaxAccountChangingActionsPerRun: intPtr(1),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	spec, err := DecodePlannerOutput(raw, input)
+	if err != nil {
+		t.Fatalf("DecodePlannerOutput() error = %v", err)
+	}
+	if spec.AutomationSafety == nil {
+		t.Fatal("AutomationSafety = nil, want inferred and resolved policy")
+	}
+	if spec.AutomationSafety.Profile != assistant.AutomationSafetyProfileBrowserHighRiskEngagement {
+		t.Fatalf("Profile = %q, want browser_high_risk_engagement", spec.AutomationSafety.Profile)
+	}
+	if spec.AutomationSafety.Enforcement != assistant.AutomationSafetyEnforcementEngineBlocking {
+		t.Fatalf("Enforcement = %q, want engine_blocking", spec.AutomationSafety.Enforcement)
+	}
+	if spec.AutomationSafety.RateLimits.MaxAccountChangingActionsPerRun != 1 {
+		t.Fatalf("MaxAccountChangingActionsPerRun = %d, want 1", spec.AutomationSafety.RateLimits.MaxAccountChangingActionsPerRun)
+	}
+}
+
+func TestDecodePlannerOutputInfersReadOnlyForBrowserObservation(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{
+		"goal":"Capture screenshots of pricing pages",
+		"deliverables":["Screenshot set"],
+		"constraints":[],
+		"tools_allowed":["agent-browser"],
+		"tools_required":["agent-browser"],
+		"done_definition":["Capture screenshots"],
+		"evidence_required":["Image evidence"],
+		"risk_flags":[],
+		"automation_safety":null,
+		"max_generation_attempts":2,
+		"schedule_plan":null
+	}`)
+
+	spec, err := DecodePlannerOutput(raw, PlannerInput{
+		UserRequestRaw:        "Open the pages and take screenshots for QA review.",
+		MaxGenerationAttempts: 2,
+		Project:               assistant.ProjectContext{Slug: "qa-web"},
+	})
+	if err != nil {
+		t.Fatalf("DecodePlannerOutput() error = %v", err)
+	}
+	if spec.AutomationSafety == nil {
+		t.Fatal("AutomationSafety = nil, want inferred read-only policy")
+	}
+	if spec.AutomationSafety.Profile != assistant.AutomationSafetyProfileBrowserReadOnly {
+		t.Fatalf("Profile = %q, want browser_read_only", spec.AutomationSafety.Profile)
+	}
+}
+
+func intPtr(value int) *int {
+	return &value
 }

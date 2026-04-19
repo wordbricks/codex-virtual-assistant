@@ -107,6 +107,21 @@ type webStepRow struct {
 	OccurredAt string `json:"occurred_at"`
 }
 
+type browserActionRow struct {
+	ID                  string `json:"id"`
+	RunID               string `json:"run_id"`
+	AttemptID           string `json:"attempt_id"`
+	ProjectSlug         string `json:"project_slug"`
+	ActionType          string `json:"action_type"`
+	ActionName          string `json:"action_name"`
+	TargetContext       string `json:"target_context"`
+	SourceContext       string `json:"source_context"`
+	SourceURL           string `json:"source_url"`
+	AccountStateChanged int    `json:"account_state_changed"`
+	TextFingerprint     string `json:"text_fingerprint"`
+	OccurredAt          string `json:"occurred_at"`
+}
+
 type waitRequestRow struct {
 	ID          string `json:"id"`
 	RunID       string `json:"run_id"`
@@ -332,6 +347,27 @@ func (r webStepRow) toAssistantWebStep() (assistant.WebStep, error) {
 		URL:        r.URL,
 		Summary:    r.Summary,
 		OccurredAt: occurredAt,
+	}, nil
+}
+
+func (r browserActionRow) toAssistantBrowserAction() (assistant.BrowserActionRecord, error) {
+	occurredAt, err := parseTime(r.OccurredAt)
+	if err != nil {
+		return assistant.BrowserActionRecord{}, err
+	}
+	return assistant.BrowserActionRecord{
+		ID:                  r.ID,
+		RunID:               r.RunID,
+		AttemptID:           r.AttemptID,
+		ProjectSlug:         r.ProjectSlug,
+		ActionType:          assistant.BrowserActionType(r.ActionType),
+		ActionName:          r.ActionName,
+		TargetContext:       r.TargetContext,
+		SourceContext:       r.SourceContext,
+		SourceURL:           r.SourceURL,
+		AccountStateChanged: r.AccountStateChanged == 1,
+		TextFingerprint:     r.TextFingerprint,
+		OccurredAt:          occurredAt,
 	}, nil
 }
 

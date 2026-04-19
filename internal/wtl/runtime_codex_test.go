@@ -69,6 +69,9 @@ func TestCodexRuntimeMapsToolAndBrowserEvidence(t *testing.T) {
 	if len(response.WebSteps) != 1 {
 		t.Fatalf("len(WebSteps) = %d, want 1", len(response.WebSteps))
 	}
+	if response.WebSteps[0].ActionName != "open" || response.WebSteps[0].ActionTarget != "pricing page" {
+		t.Fatalf("WebSteps[0] = %#v, want action metadata propagated", response.WebSteps[0])
+	}
 	if len(response.Evidence) != 3 {
 		t.Fatalf("len(Evidence) = %d, want 3", len(response.Evidence))
 	}

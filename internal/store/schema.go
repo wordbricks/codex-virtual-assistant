@@ -113,6 +113,23 @@ CREATE TABLE IF NOT EXISTS web_steps (
 	FOREIGN KEY (attempt_id) REFERENCES attempts(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS browser_actions (
+	id TEXT PRIMARY KEY,
+	run_id TEXT NOT NULL,
+	attempt_id TEXT NOT NULL,
+	project_slug TEXT NOT NULL,
+	action_type TEXT NOT NULL,
+	action_name TEXT NOT NULL,
+	target_context TEXT NOT NULL DEFAULT '',
+	source_context TEXT NOT NULL DEFAULT '',
+	source_url TEXT NOT NULL DEFAULT '',
+	account_state_changed INTEGER NOT NULL,
+	text_fingerprint TEXT NOT NULL DEFAULT '',
+	occurred_at TEXT NOT NULL,
+	FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE,
+	FOREIGN KEY (attempt_id) REFERENCES attempts(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS wait_requests (
 	id TEXT PRIMARY KEY,
 	run_id TEXT NOT NULL,
@@ -148,6 +165,8 @@ CREATE INDEX IF NOT EXISTS idx_evidences_run_id_created_at ON evidences(run_id, 
 CREATE INDEX IF NOT EXISTS idx_evaluations_run_id_created_at ON evaluations(run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_run_id_started_at ON tool_calls(run_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_web_steps_run_id_occurred_at ON web_steps(run_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_browser_actions_run_id_occurred_at ON browser_actions(run_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_browser_actions_project_occurred_at ON browser_actions(project_slug, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_wait_requests_run_id_created_at ON wait_requests(run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_scheduled_runs_status_scheduled_for ON scheduled_runs(status, scheduled_for);
 CREATE INDEX IF NOT EXISTS idx_scheduled_runs_parent_run_id ON scheduled_runs(parent_run_id, scheduled_for);

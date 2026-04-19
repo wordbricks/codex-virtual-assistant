@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
+	"github.com/siisee11/CodexVirtualAssistant/internal/config"
 )
 
 type Bundle struct {
@@ -19,6 +20,7 @@ type PlannerInput struct {
 	MaxGenerationAttempts int
 	Project               assistant.ProjectContext
 	Wiki                  assistant.WikiContext
+	AutomationSafety      config.AutomationSafetyConfig
 }
 
 type ContractInput struct {
@@ -45,16 +47,17 @@ type ProjectSelectorInput struct {
 }
 
 type PlannerOutput struct {
-	Goal                  string                  `json:"goal"`
-	Deliverables          []string                `json:"deliverables"`
-	Constraints           []string                `json:"constraints"`
-	ToolsAllowed          []string                `json:"tools_allowed"`
-	ToolsRequired         []string                `json:"tools_required"`
-	DoneDefinition        []string                `json:"done_definition"`
-	EvidenceRequired      []string                `json:"evidence_required"`
-	RiskFlags             []string                `json:"risk_flags"`
-	MaxGenerationAttempts int                     `json:"max_generation_attempts"`
-	SchedulePlan          *assistant.SchedulePlan `json:"schedule_plan"`
+	Goal                  string                            `json:"goal"`
+	Deliverables          []string                          `json:"deliverables"`
+	Constraints           []string                          `json:"constraints"`
+	ToolsAllowed          []string                          `json:"tools_allowed"`
+	ToolsRequired         []string                          `json:"tools_required"`
+	DoneDefinition        []string                          `json:"done_definition"`
+	EvidenceRequired      []string                          `json:"evidence_required"`
+	RiskFlags             []string                          `json:"risk_flags"`
+	AutomationSafety      *assistant.AutomationSafetyPolicy `json:"automation_safety"`
+	MaxGenerationAttempts int                               `json:"max_generation_attempts"`
+	SchedulePlan          *assistant.SchedulePlan           `json:"schedule_plan"`
 }
 
 type GateOutput struct {
@@ -85,16 +88,18 @@ type AnswerOutput struct {
 }
 
 type EvaluatorInput struct {
-	Run       assistant.Run
-	Attempt   assistant.Attempt
-	Artifacts []assistant.Artifact
-	Evidence  []assistant.Evidence
+	Run            assistant.Run
+	Attempt        assistant.Attempt
+	Artifacts      []assistant.Artifact
+	Evidence       []assistant.Evidence
+	RecentActivity *assistant.BrowserRecentActivityMetrics
 }
 
 type SchedulerInput struct {
-	Run       assistant.Run
-	Artifacts []assistant.Artifact
-	Evidence  []assistant.Evidence
+	Run            assistant.Run
+	Artifacts      []assistant.Artifact
+	Evidence       []assistant.Evidence
+	RecentActivity *assistant.BrowserRecentActivityMetrics
 }
 
 type SchedulerOutput struct {
@@ -206,15 +211,20 @@ The JSON object must contain exactly these keys:
 - done_definition
 - evidence_required
 - risk_flags
+- automation_safety
 - max_generation_attempts
- - schedule_plan
+- schedule_plan
+Use automation_safety=null when the run is not browser automation or has no automation-safety policy requirements.
+When browser automation is relevant, prefer a structured automation_safety object with profile and enforcement, plus optional mode_policy/rate_limits/pattern_rules/text_reuse_policy/cooldown_policy.
+Valid automation safety profiles are: none, browser_read_only, browser_mutating, browser_high_risk_engagement.
+Treat social growth, outreach messaging, public comments or replies, follows or connection requests, marketplace inquiries, community engagement, recruiting/networking messages, likes, endorsements, reviews, and repeated application/inquiry submission workflows as high-risk engagement candidates.
 Use schedule_plan=null when all work should happen immediately.
 If the request includes future or time-distributed work, keep immediate work in the normal TaskSpec fields and place only the deferred work in schedule_plan.entries.
 Each schedule_plan entry must contain scheduled_for and prompt.
 Prefer "agent-browser" for browser work and keep deliverables and done_definition concrete and evaluator-verifiable.`),
 		User: strings.TrimSpace(fmt.Sprintf(
 			"%s\n\nUser request:\n%s\n\nDefault max generation attempts: %d\n\nProduce a normalized TaskSpec JSON object.",
-			projectPlannerContext(input.Project, input.Wiki),
+			projectPlannerContext(input.Project, input.Wiki, input.AutomationSafety),
 			strings.TrimSpace(input.UserRequestRaw),
 			defaultAttempts,
 		)),
@@ -229,6 +239,7 @@ func BuildContractPrompt(input ContractInput) Bundle {
 	fmt.Fprintf(builder, "Constraints: %s\n", strings.Join(input.Run.TaskSpec.Constraints, "; "))
 	fmt.Fprintf(builder, "Done definition: %s\n", strings.Join(input.Run.TaskSpec.DoneDefinition, "; "))
 	fmt.Fprintf(builder, "Evidence required: %s\n", strings.Join(input.Run.TaskSpec.EvidenceRequired, "; "))
+	appendAutomationSafetyPromptContext(builder, input.Run.TaskSpec.AutomationSafety)
 	if input.Run.TaskSpec.AcceptanceContract != nil && strings.TrimSpace(input.Run.TaskSpec.AcceptanceContract.RevisionNotes) != "" {
 		fmt.Fprintf(builder, "Previous contract revision notes: %s\n", input.Run.TaskSpec.AcceptanceContract.RevisionNotes)
 	}
@@ -250,6 +261,9 @@ The JSON object must contain exactly these keys:
 - revision_notes
 Use decision="agreed" only when the contract is concrete enough for generation to start.
 Use decision="revise" when the contract still needs tightening and explain the gap in revision_notes.
+When automation safety policy context is present, translate it into explicit acceptance_criteria and evidence_required entries.
+If mode_policy.allow_no_action_success=true, include a criterion that no-action completion is acceptable when mutating action is unsafe.
+If mode_policy.require_no_action_evidence=true, include evidence requirements for observed context, skipped action, skip reason, and safer next step.
 Use decision="fail" only when the task cannot be contracted safely from the available information.`),
 		User: strings.TrimSpace(builder.String()),
 	}
@@ -348,6 +362,10 @@ func DecodePlannerOutput(raw []byte, input PlannerInput) (assistant.TaskSpec, er
 		return assistant.TaskSpec{}, fmt.Errorf("decode planner output: %w", err)
 	}
 
+	inferredProfile := inferAutomationSafetyProfile(input, output)
+	resolver := config.Config{AutomationSafety: input.AutomationSafety}
+	resolvedPolicy := resolver.ResolveAutomationSafetyPolicy(output.AutomationSafety, inferredProfile, input.Project.Slug)
+
 	return assistant.NormalizeTaskSpec(assistant.TaskSpecDraft{
 		Goal:                  output.Goal,
 		UserRequestRaw:        input.UserRequestRaw,
@@ -358,6 +376,7 @@ func DecodePlannerOutput(raw []byte, input PlannerInput) (assistant.TaskSpec, er
 		DoneDefinition:        output.DoneDefinition,
 		EvidenceRequired:      output.EvidenceRequired,
 		RiskFlags:             output.RiskFlags,
+		AutomationSafety:      resolvedPolicy,
 		MaxGenerationAttempts: output.MaxGenerationAttempts,
 		SchedulePlan:          output.SchedulePlan,
 	}, input.UserRequestRaw, input.MaxGenerationAttempts)
@@ -401,11 +420,12 @@ func BuildGeneratorPrompt(input GeneratorInput) Bundle {
 	fmt.Fprintf(builder, "Original user request: %s\n", strings.TrimSpace(input.Run.UserRequestRaw))
 	fmt.Fprintf(builder, "Goal: %s\n", input.Run.TaskSpec.Goal)
 	appendContractContext(builder, input.Run.TaskSpec)
+	appendAutomationSafetyPromptContext(builder, input.Run.TaskSpec.AutomationSafety)
 	if input.PriorCritique != "" {
 		fmt.Fprintf(builder, "Evaluator critique to address: %s\n", input.PriorCritique)
 	}
 	return Bundle{
-		System: "You are the generator for a WTL GAN-policy based assistant. Complete the real work and retain evidence. When browser work uses agent-browser, run it in foreground/headed mode by default and prefer the current command pattern, for example: agent-browser open <url> --headed, then agent-browser snapshot -i --json before interacting. If a project-specific browser profile and CDP port are available, prefer that profile over saved auth state files and over --auto-connect. Before launching a new Chrome window, first health-check the project CDP endpoint with curl -sS http://localhost:<port>/json/version. If that health check succeeds, do not launch a new Chrome window and do not call agent-browser connect; instead, reuse the existing project Chrome session by passing --cdp <port> directly on every agent-browser command, for example: agent-browser --cdp <port> open about:blank, then agent-browser --cdp <port> snapshot -i --json. Only if the health check fails should you launch Chrome with that profile and fixed remote debugging port. If an agent-browser command that uses --cdp <port> times out even though the CDP health check succeeded, treat that as a stale agent-browser session issue: then run agent-browser close once, retry the same --cdp <port> command, and avoid launching another Chrome window unless the CDP health check stops responding. Reuse the same project profile across runs so login state persists in the profile directory. Persist auth with explicit state files instead. Use explicit auth state files only as a secondary export/import mechanism, and do not rely on --session-name for auth persistence. Use --auto-connect only when the task must attach to the user's already-running Chrome session and a project-specific browser profile cannot be used. If --auto-connect succeeds, immediately save a fresh auth state to a project-local path, then continue future navigation by opening a blank page, running agent-browser state load <path>, and only then opening the target URL. After a successful state save, do not keep relying on --auto-connect in the same task unless the saved state fails and login must be recovered again. When reusing saved state, prefer opening a blank page, running agent-browser state load <path>, and only then opening the target URL instead of relying on --state during the initial open command. When using --auto-connect to attach to a real Google Chrome session, Chrome may show an 'Allow remote debugging?' dialog. If an attach attempt or the first browser command times out during that flow, do not assume the attempt failed. Ask the user to click Allow in Chrome, return a wait_request for approval, and retry after the user confirms approval. If you produce or export a browser recording during the task, prefer recording or re-encoding it as WebM instead of MP4 whenever the tool supports that choice.",
+		System: "You are the generator for a WTL GAN-policy based assistant. Complete the real work and retain evidence. Obey any automation safety policy context provided in the task input. Treat no-action as a valid terminal path only when the policy allows it. If no-action is taken and the policy requires no-action evidence, record the observed context, skipped mutating action, safety reason for skipping, and a safer next step. Preserve enough browser action detail for downstream safety metrics, including action type, target/source context, whether external account state changed, and timing/spacing context for mutating actions. When browser work uses agent-browser, run it in foreground/headed mode by default and prefer the current command pattern, for example: agent-browser open <url> --headed, then agent-browser snapshot -i --json before interacting. If a project-specific browser profile and CDP port are available, prefer that profile over saved auth state files and over --auto-connect. Before launching a new Chrome window, first health-check the project CDP endpoint with curl -sS http://localhost:<port>/json/version. If that health check succeeds, do not launch a new Chrome window and do not call agent-browser connect; instead, reuse the existing project Chrome session by passing --cdp <port> directly on every agent-browser command, for example: agent-browser --cdp <port> open about:blank, then agent-browser --cdp <port> snapshot -i --json. Only if the health check fails should you launch Chrome with that profile and fixed remote debugging port. If an agent-browser command that uses --cdp <port> times out even though the CDP health check succeeded, treat that as a stale agent-browser session issue: then run agent-browser close once, retry the same --cdp <port> command, and avoid launching another Chrome window unless the CDP health check stops responding. Reuse the same project profile across runs so login state persists in the profile directory. Persist auth with explicit state files instead. Use explicit auth state files only as a secondary export/import mechanism, and do not rely on --session-name for auth persistence. Use --auto-connect only when the task must attach to the user's already-running Chrome session and a project-specific browser profile cannot be used. If --auto-connect succeeds, immediately save a fresh auth state to a project-local path, then continue future navigation by opening a blank page, running agent-browser state load <path>, and only then opening the target URL. After a successful state save, do not keep relying on --auto-connect in the same task unless the saved state fails and login must be recovered again. When reusing saved state, prefer opening a blank page, running agent-browser state load <path>, and only then opening the target URL instead of relying on --state during the initial open command. When using --auto-connect to attach to a real Google Chrome session, Chrome may show an 'Allow remote debugging?' dialog. If an attach attempt or the first browser command times out during that flow, do not assume the attempt failed. Ask the user to click Allow in Chrome, return a wait_request for approval, and retry after the user confirms approval. If you produce or export a browser recording during the task, prefer recording or re-encoding it as WebM instead of MP4 whenever the tool supports that choice.",
 		User:   strings.TrimSpace(builder.String()),
 	}
 }
@@ -415,10 +435,12 @@ func BuildEvaluatorPrompt(input EvaluatorInput) Bundle {
 	fmt.Fprintf(builder, "Original user request: %s\n", strings.TrimSpace(input.Run.UserRequestRaw))
 	fmt.Fprintf(builder, "Goal: %s\n", input.Run.TaskSpec.Goal)
 	appendContractContext(builder, input.Run.TaskSpec)
+	appendAutomationSafetyPromptContext(builder, input.Run.TaskSpec.AutomationSafety)
 	fmt.Fprintf(builder, "Artifacts submitted: %d\n", len(input.Artifacts))
 	fmt.Fprintf(builder, "Evidence items submitted: %d\n", len(input.Evidence))
+	appendRecentActivityMetrics(builder, input.RecentActivity)
 	return Bundle{
-		System: "You are the evaluator for a WTL GAN-policy based assistant. Judge completion strictly against the accepted contract and return strict JSON with passed, score, summary, missing_requirements, incorrect_claims, evidence_checked, and next_action_for_generator.",
+		System: "You are the evaluator for a WTL GAN-policy based assistant. Judge completion strictly against the accepted contract and any automation safety policy context. For browser_mutating runs, treat safety violations as failed evaluations with actionable next_action_for_generator guidance. For browser_high_risk_engagement runs, deterministic hard-limit violations and missing required no-action evidence must not pass. Return strict JSON with passed, score, summary, missing_requirements, incorrect_claims, evidence_checked, and next_action_for_generator.",
 		User:   strings.TrimSpace(builder.String()),
 	}
 }
@@ -469,6 +491,7 @@ func BuildSchedulerPrompt(input SchedulerInput) Bundle {
 	builder := &strings.Builder{}
 	fmt.Fprintf(builder, "Original user request: %s\n", strings.TrimSpace(input.Run.UserRequestRaw))
 	fmt.Fprintf(builder, "Goal: %s\n", strings.TrimSpace(input.Run.TaskSpec.Goal))
+	appendAutomationSafetyPromptContext(builder, input.Run.TaskSpec.AutomationSafety)
 	if input.Run.TaskSpec.SchedulePlan != nil {
 		fmt.Fprintf(builder, "Planned schedule entries:\n")
 		for _, entry := range input.Run.TaskSpec.SchedulePlan.Entries {
@@ -477,12 +500,14 @@ func BuildSchedulerPrompt(input SchedulerInput) Bundle {
 	}
 	appendArtifactHighlights(builder, input.Artifacts, 6)
 	appendEvidenceHighlights(builder, input.Evidence, 10)
+	appendRecentActivityMetrics(builder, input.RecentActivity)
 
 	return Bundle{
 		System: strings.TrimSpace(`
 You are the scheduler phase for a WTL GAN-policy based assistant.
 Finalize the deferred execution prompts using concrete details already discovered during the run.
 Resolve template placeholders into specific names, phone numbers, URLs, or other facts when the evidence supports them.
+Honor automation safety policy context. For high-risk browser engagement, avoid fixed short follow-up loops and prefer safer spacing when risk indicators are elevated.
 Return one strict JSON object and nothing else.
 Do not wrap the JSON in markdown fences.
 The JSON object must contain exactly these keys:
@@ -589,25 +614,213 @@ func DecodeSchedulerOutput(raw []byte) ([]assistant.ScheduleEntry, error) {
 	return output.Entries, nil
 }
 
-func projectPlannerContext(project assistant.ProjectContext, wiki assistant.WikiContext) string {
+func inferAutomationSafetyProfile(input PlannerInput, output PlannerOutput) assistant.AutomationSafetyProfile {
+	request := strings.ToLower(strings.TrimSpace(input.UserRequestRaw + " " + output.Goal + " " + strings.Join(output.Deliverables, " ")))
+	browserUsed := usesAgentBrowser(output.ToolsAllowed, output.ToolsRequired)
+
+	if !browserUsed {
+		return assistant.AutomationSafetyProfileNone
+	}
+
+	highRiskTokens := []string{
+		"growth", "outreach", "public comment", "public comments", "reply", "replies", "follow", "follows",
+		"connection request", "connection requests", "marketplace inquiry", "marketplace inquiries",
+		"community engagement", "recruiting", "networking", "like", "likes", "endorse", "endorsement",
+		"dm", "invite", "invites", "application submission", "apply",
+	}
+	mutationTokens := []string{
+		"post", "publish", "submit", "send", "message", "messages", "comment", "reply", "follow",
+		"connect", "like", "endorse", "update preference", "save preference", "application",
+	}
+
+	riskFlags := make([]string, 0, len(output.RiskFlags))
+	for _, flag := range output.RiskFlags {
+		riskFlags = append(riskFlags, strings.ToLower(strings.TrimSpace(flag)))
+	}
+
+	inferred := assistant.AutomationSafetyProfileBrowserReadOnly
+	if containsAnyToken(request, highRiskTokens...) {
+		inferred = assistant.AutomationSafetyProfileBrowserHighRiskEngagement
+	} else if containsAnyToken(request, mutationTokens...) || containsAnyToken(strings.Join(riskFlags, " "), "external-side-effect") {
+		inferred = assistant.AutomationSafetyProfileBrowserMutating
+	}
+
+	if output.AutomationSafety != nil && output.AutomationSafety.Profile != "" {
+		inferred = maxAutomationSafetyProfile(inferred, output.AutomationSafety.Profile)
+	}
+
+	return inferred
+}
+
+func usesAgentBrowser(toolsAllowed, toolsRequired []string) bool {
+	for _, tool := range toolsAllowed {
+		if strings.EqualFold(strings.TrimSpace(tool), "agent-browser") {
+			return true
+		}
+	}
+	for _, tool := range toolsRequired {
+		if strings.EqualFold(strings.TrimSpace(tool), "agent-browser") {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAnyToken(value string, fragments ...string) bool {
+	for _, fragment := range fragments {
+		if strings.Contains(value, strings.ToLower(strings.TrimSpace(fragment))) {
+			return true
+		}
+	}
+	return false
+}
+
+func maxAutomationSafetyProfile(left, right assistant.AutomationSafetyProfile) assistant.AutomationSafetyProfile {
+	if automationSafetyProfileRank(right) > automationSafetyProfileRank(left) {
+		return right
+	}
+	return left
+}
+
+func automationSafetyProfileRank(profile assistant.AutomationSafetyProfile) int {
+	switch profile {
+	case assistant.AutomationSafetyProfileNone:
+		return 0
+	case assistant.AutomationSafetyProfileBrowserReadOnly:
+		return 1
+	case assistant.AutomationSafetyProfileBrowserMutating:
+		return 2
+	case assistant.AutomationSafetyProfileBrowserHighRiskEngagement:
+		return 3
+	default:
+		return -1
+	}
+}
+
+func projectPlannerContext(project assistant.ProjectContext, wiki assistant.WikiContext, safety config.AutomationSafetyConfig) string {
 	builder := &strings.Builder{}
 	if strings.TrimSpace(project.Slug) == "" {
 		fmt.Fprintf(builder, "Project context:\n- No project selected yet.")
-		return builder.String()
+	} else {
+		fmt.Fprintf(
+			builder,
+			"Project context:\n- Slug: %s\n- Name: %s\n- Purpose: %s\n- Workspace: %s",
+			project.Slug,
+			firstNonEmpty(project.Name, project.Slug),
+			project.Description,
+			project.WorkspaceDir,
+		)
+		if strings.TrimSpace(project.WikiDir) != "" {
+			fmt.Fprintf(builder, "\n- Wiki: %s", project.WikiDir)
+		}
 	}
-	fmt.Fprintf(
-		builder,
-		"Project context:\n- Slug: %s\n- Name: %s\n- Purpose: %s\n- Workspace: %s",
-		project.Slug,
-		firstNonEmpty(project.Name, project.Slug),
-		project.Description,
-		project.WorkspaceDir,
-	)
-	if strings.TrimSpace(project.WikiDir) != "" {
-		fmt.Fprintf(builder, "\n- Wiki: %s", project.WikiDir)
-	}
+
 	appendWikiSummary(builder, wiki)
+	appendAutomationSafetyPlannerContext(builder, project.Slug, safety)
 	return builder.String()
+}
+
+func appendAutomationSafetyPlannerContext(builder *strings.Builder, projectSlug string, safety config.AutomationSafetyConfig) {
+	fmt.Fprintf(builder, "\n\nAutomation safety config context:\n")
+	if len(safety.Defaults) == 0 {
+		fmt.Fprintf(builder, "- Global defaults: none configured.\n")
+	} else {
+		profiles := make([]string, 0, len(safety.Defaults))
+		for profile := range safety.Defaults {
+			profiles = append(profiles, profile)
+		}
+		fmt.Fprintf(builder, "- Global defaults configured for profiles: %s.\n", strings.Join(profiles, ", "))
+	}
+
+	slug := strings.TrimSpace(projectSlug)
+	if slug == "" {
+		fmt.Fprintf(builder, "- Project override: unavailable (project slug not set).")
+		return
+	}
+	if override, ok := safety.Projects[slug]; ok {
+		fmt.Fprintf(builder, "- Project override for %s: configured.", slug)
+		if override.ProfileOverride != "" {
+			fmt.Fprintf(builder, " profile_override=%s.", override.ProfileOverride)
+		}
+		return
+	}
+	fmt.Fprintf(builder, "- Project override for %s: none configured.", slug)
+}
+
+func appendAutomationSafetyPromptContext(builder *strings.Builder, policy *assistant.AutomationSafetyPolicy) {
+	fmt.Fprintf(builder, "Automation safety policy context:\n")
+	if policy == nil {
+		fmt.Fprintf(builder, "- none.\n")
+		return
+	}
+
+	fmt.Fprintf(builder, "- profile: %s\n", policy.Profile)
+	fmt.Fprintf(builder, "- enforcement: %s\n", policy.Enforcement)
+
+	if len(policy.ModePolicy.AllowedSessionModes) > 0 {
+		fmt.Fprintf(builder, "- allowed session modes: %s\n", strings.Join(policy.ModePolicy.AllowedSessionModes, ", "))
+	}
+	fmt.Fprintf(builder, "- allow no-action success: %t\n", policy.ModePolicy.AllowNoActionSuccess)
+	fmt.Fprintf(builder, "- require no-action evidence: %t\n", policy.ModePolicy.RequireNoActionEvidence)
+	if len(policy.ModePolicy.NoActionEvidenceRequired) > 0 {
+		fmt.Fprintf(builder, "- no-action evidence requirements: %s\n", strings.Join(policy.ModePolicy.NoActionEvidenceRequired, "; "))
+	}
+
+	rateLimits := make([]string, 0, 3)
+	if policy.RateLimits.MaxAccountChangingActionsPerRun > 0 {
+		rateLimits = append(
+			rateLimits,
+			fmt.Sprintf("max_account_changing_actions_per_run=%d", policy.RateLimits.MaxAccountChangingActionsPerRun),
+		)
+	}
+	if policy.RateLimits.MaxRepliesPer24h > 0 {
+		rateLimits = append(rateLimits, fmt.Sprintf("max_replies_per_24h=%d", policy.RateLimits.MaxRepliesPer24h))
+	}
+	if policy.RateLimits.MinSpacingMinutes > 0 {
+		rateLimits = append(rateLimits, fmt.Sprintf("min_spacing_minutes=%d", policy.RateLimits.MinSpacingMinutes))
+	}
+	if len(rateLimits) > 0 {
+		fmt.Fprintf(builder, "- rate limits: %s\n", strings.Join(rateLimits, ", "))
+	}
+
+	patternRules := make([]string, 0, 3)
+	if policy.PatternRules.DisallowDefaultActionTrios {
+		patternRules = append(patternRules, "disallow_default_action_trios")
+	}
+	if policy.PatternRules.DisallowFixedShortFollowup {
+		patternRules = append(patternRules, "disallow_fixed_short_followups")
+	}
+	if policy.PatternRules.RequireSourceDiversity {
+		patternRules = append(patternRules, "require_source_diversity")
+	}
+	if len(patternRules) > 0 {
+		fmt.Fprintf(builder, "- pattern rules: %s\n", strings.Join(patternRules, ", "))
+	}
+
+	textReuse := make([]string, 0, 3)
+	if policy.TextReuse.RejectHighSimilarity {
+		textReuse = append(textReuse, "reject_high_similarity")
+	}
+	if policy.TextReuse.AvoidRepeatedSelfIntro {
+		textReuse = append(textReuse, "avoid_repeated_self_intro")
+	}
+	if policy.TextReuse.RequireTextVariantSupport {
+		textReuse = append(textReuse, "require_text_variant_support")
+	}
+	if len(textReuse) > 0 {
+		fmt.Fprintf(builder, "- text reuse policy: %s\n", strings.Join(textReuse, ", "))
+	}
+
+	cooldown := make([]string, 0, 2)
+	if policy.CooldownPolicy.ForceReadOnlyAfterDenseActivity {
+		cooldown = append(cooldown, "force_read_only_after_dense_activity")
+	}
+	if policy.CooldownPolicy.PreferLongerCooldownAfterBlockedRuns {
+		cooldown = append(cooldown, "prefer_longer_cooldown_after_blocked_runs")
+	}
+	if len(cooldown) > 0 {
+		fmt.Fprintf(builder, "- cooldown policy: %s\n", strings.Join(cooldown, ", "))
+	}
 }
 
 func firstNonEmpty(values ...string) string {
@@ -755,6 +968,22 @@ func appendEvidenceHighlights(builder *strings.Builder, evidence []assistant.Evi
 		item := evidence[idx]
 		fmt.Fprintf(builder, "- [%s] %s\n", item.Kind, firstNonEmpty(item.Summary, item.Detail))
 	}
+}
+
+func appendRecentActivityMetrics(builder *strings.Builder, metrics *assistant.BrowserRecentActivityMetrics) {
+	if metrics == nil {
+		fmt.Fprintf(builder, "Recent browser activity metrics: unavailable.\n")
+		return
+	}
+	fmt.Fprintf(builder, "Recent browser activity metrics:\n")
+	fmt.Fprintf(builder, "- window: %s to %s\n", metrics.WindowStart.Format(time.RFC3339), metrics.WindowEnd.Format(time.RFC3339))
+	fmt.Fprintf(builder, "- total_action_count=%d\n", metrics.TotalActionCount)
+	fmt.Fprintf(builder, "- mutating_action_count=%d\n", metrics.MutatingActionCount)
+	fmt.Fprintf(builder, "- reply_action_count=%d\n", metrics.ReplyActionCount)
+	fmt.Fprintf(builder, "- recent_mutation_density=%.4f\n", metrics.RecentMutationDensity)
+	fmt.Fprintf(builder, "- source_path_concentration=%.4f\n", metrics.SourcePathConcentration)
+	fmt.Fprintf(builder, "- repeated_action_sequence_score=%.4f\n", metrics.RepeatedActionSequenceScore)
+	fmt.Fprintf(builder, "- text_reuse_risk_score=%.4f\n", metrics.TextReuseRiskScore)
 }
 
 func appendToolCallHighlights(builder *strings.Builder, toolCalls []assistant.ToolCall, limit int) {

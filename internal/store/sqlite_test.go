@@ -140,6 +140,24 @@ func TestSQLiteRepositoryRoundTripsRunRecord(t *testing.T) {
 		t.Fatalf("AddWebStep() error = %v", err)
 	}
 
+	browserAction := assistant.BrowserActionRecord{
+		ID:                  assistant.NewID("browser_action", now),
+		RunID:               run.ID,
+		AttemptID:           attempt.ID,
+		ProjectSlug:         "competitor-pricing",
+		ActionType:          assistant.BrowserActionTypeReply,
+		ActionName:          "reply",
+		TargetContext:       "pricing-thread",
+		SourceContext:       "example.com/pricing",
+		SourceURL:           "https://example.com/pricing",
+		AccountStateChanged: true,
+		TextFingerprint:     "fp-1",
+		OccurredAt:          now.Add(59 * time.Second),
+	}
+	if err := repo.AddBrowserAction(ctx, browserAction); err != nil {
+		t.Fatalf("AddBrowserAction() error = %v", err)
+	}
+
 	waitRequest := assistant.WaitRequest{
 		ID:          assistant.NewID("wait", now),
 		RunID:       run.ID,
@@ -188,7 +206,7 @@ func TestSQLiteRepositoryRoundTripsRunRecord(t *testing.T) {
 	if record.Run.WaitingFor == nil || record.Run.WaitingFor.ID != waitRequest.ID {
 		t.Fatalf("WaitingFor = %#v, want %q", record.Run.WaitingFor, waitRequest.ID)
 	}
-	if len(record.Events) != 1 || len(record.Attempts) != 1 || len(record.Artifacts) != 1 || len(record.Evidence) != 1 || len(record.Evaluations) != 1 || len(record.ToolCalls) != 1 || len(record.WebSteps) != 1 || len(record.WaitRequests) != 1 {
+	if len(record.Events) != 1 || len(record.Attempts) != 1 || len(record.Artifacts) != 1 || len(record.Evidence) != 1 || len(record.Evaluations) != 1 || len(record.ToolCalls) != 1 || len(record.WebSteps) != 1 || len(record.BrowserActions) != 1 || len(record.WaitRequests) != 1 {
 		t.Fatalf("unexpected record counts: %#v", record)
 	}
 }
@@ -478,4 +496,74 @@ func openTestRepository(t *testing.T) *SQLiteRepository {
 
 func ptrTimeStore(v time.Time) *time.Time {
 	return &v
+}
+
+func TestSQLiteRepositoryListsBrowserActionsByProjectAndWindow(t *testing.T) {
+	t.Parallel()
+
+	repo := openTestRepository(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.April, 19, 12, 0, 0, 0, time.UTC)
+
+	run := assistant.NewRun("Collect browser action records.", now, 2)
+	run.Project = assistant.ProjectContext{Slug: "community-growth", Name: "Community Growth"}
+	if err := repo.SaveRun(ctx, run); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+
+	attempt := assistant.Attempt{
+		ID:            assistant.NewID("attempt", now),
+		RunID:         run.ID,
+		Sequence:      1,
+		Role:          assistant.AttemptRoleGenerator,
+		InputSummary:  "Generate actions",
+		OutputSummary: "Done",
+		StartedAt:     now,
+	}
+	if err := repo.AddAttempt(ctx, attempt); err != nil {
+		t.Fatalf("AddAttempt() error = %v", err)
+	}
+
+	actions := []assistant.BrowserActionRecord{
+		{
+			ID:                  assistant.NewID("browser_action", now),
+			RunID:               run.ID,
+			AttemptID:           attempt.ID,
+			ProjectSlug:         run.Project.Slug,
+			ActionType:          assistant.BrowserActionTypeReply,
+			ActionName:          "reply",
+			SourceContext:       "example.com/post/1",
+			AccountStateChanged: true,
+			TextFingerprint:     "fp-1",
+			OccurredAt:          now.Add(-2 * time.Hour),
+		},
+		{
+			ID:                  assistant.NewID("browser_action", now.Add(time.Minute)),
+			RunID:               run.ID,
+			AttemptID:           attempt.ID,
+			ProjectSlug:         run.Project.Slug,
+			ActionType:          assistant.BrowserActionTypeReply,
+			ActionName:          "reply",
+			SourceContext:       "example.com/post/1",
+			AccountStateChanged: true,
+			TextFingerprint:     "fp-2",
+			OccurredAt:          now.Add(-26 * time.Hour),
+		},
+	}
+	for _, action := range actions {
+		if err := repo.AddBrowserAction(ctx, action); err != nil {
+			t.Fatalf("AddBrowserAction() error = %v", err)
+		}
+	}
+
+	listed, err := repo.ListBrowserActionsByProject(ctx, run.Project.Slug, now.Add(-24*time.Hour), now)
+	if err != nil {
+		t.Fatalf("ListBrowserActionsByProject() error = %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("len(listed) = %d, want 1", len(listed))
+	}
+	if listed[0].OccurredAt.After(now) || listed[0].OccurredAt.Before(now.Add(-24*time.Hour)) {
+		t.Fatalf("OccurredAt = %s, want inside rolling 24-hour window", listed[0].OccurredAt.Format(time.RFC3339Nano))
+	}
 }

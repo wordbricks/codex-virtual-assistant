@@ -178,3 +178,63 @@ func containsRunPhase(values []RunPhase, want RunPhase) bool {
 	}
 	return false
 }
+
+func TestTaskSpecValidateRejectsInvalidAutomationSafetyPolicy(t *testing.T) {
+	t.Parallel()
+
+	spec := NewDefaultTaskSpec("Collect QA screenshots for release notes.", 2)
+	spec.AutomationSafety = &AutomationSafetyPolicy{
+		Profile:     AutomationSafetyProfileBrowserReadOnly,
+		Enforcement: AutomationSafetyEnforcementEngineBlocking,
+	}
+
+	if err := spec.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want automation safety enforcement/profile validation error")
+	}
+}
+
+func TestTaskSpecValidateRejectsHighRiskPolicyMissingLimits(t *testing.T) {
+	t.Parallel()
+
+	spec := NewDefaultTaskSpec("Respond to inbound forum replies.", 2)
+	spec.AutomationSafety = &AutomationSafetyPolicy{
+		Profile:     AutomationSafetyProfileBrowserHighRiskEngagement,
+		Enforcement: AutomationSafetyEnforcementEngineBlocking,
+		ModePolicy: AutomationSafetyModePolicy{
+			AllowNoActionSuccess:    true,
+			RequireNoActionEvidence: true,
+			NoActionEvidenceRequired: []string{
+				"Observed elevated risk signals.",
+			},
+		},
+	}
+
+	if err := spec.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want high-risk rate limit validation error")
+	}
+}
+
+func TestTaskSpecValidateAcceptsValidAutomationSafetyPolicy(t *testing.T) {
+	t.Parallel()
+
+	spec := NewDefaultTaskSpec("Handle one inbound marketplace response.", 2)
+	spec.AutomationSafety = &AutomationSafetyPolicy{
+		Profile:     AutomationSafetyProfileBrowserHighRiskEngagement,
+		Enforcement: AutomationSafetyEnforcementEngineBlocking,
+		ModePolicy: AutomationSafetyModePolicy{
+			AllowedSessionModes:      []string{"read_only", "single_action"},
+			AllowNoActionSuccess:     true,
+			RequireNoActionEvidence:  true,
+			NoActionEvidenceRequired: []string{"Observed risk and deferred mutation."},
+		},
+		RateLimits: AutomationSafetyRateLimits{
+			MaxAccountChangingActionsPerRun: 2,
+			MaxRepliesPer24h:                12,
+			MinSpacingMinutes:               20,
+		},
+	}
+
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}

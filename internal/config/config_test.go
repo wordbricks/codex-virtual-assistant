@@ -1,9 +1,13 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
 )
 
 func TestLoadFromEnvUsesDefaults(t *testing.T) {
@@ -321,4 +325,130 @@ func TestProjectArtifactDirUsesProjectsDir(t *testing.T) {
 	if got := cfg.ProjectArtifactDir(""); got != "/tmp/cva/workspace/projects/no_project/artifacts" {
 		t.Fatalf("ProjectArtifactDir(\"\") = %q", got)
 	}
+}
+
+func TestReadFileConfigRejectsInvalidAutomationSafetyDefaultProfile(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	payload := `{"automation_safety":{"defaults":{"not-a-profile":{"enforcement":"advisory"}}}}`
+	if err := os.WriteFile(path, []byte(payload), 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
+	_, err := ReadFileConfig(path)
+	if err == nil {
+		t.Fatal("ReadFileConfig() error = nil, want invalid automation safety profile error")
+	}
+	if !strings.Contains(err.Error(), "automation safety") {
+		t.Fatalf("ReadFileConfig() error = %v, want automation safety context", err)
+	}
+}
+
+func TestReadFileConfigRejectsInvalidAutomationSafetyEnforcement(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	payload := `{"automation_safety":{"projects":{"demo":{"profile_override":"browser_mutating","enforcement":"invalid"}}}}`
+	if err := os.WriteFile(path, []byte(payload), 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
+	_, err := ReadFileConfig(path)
+	if err == nil {
+		t.Fatal("ReadFileConfig() error = nil, want invalid enforcement error")
+	}
+	if !strings.Contains(err.Error(), "enforcement") {
+		t.Fatalf("ReadFileConfig() error = %v, want enforcement context", err)
+	}
+}
+
+func TestResolveAutomationSafetyPolicyAppliesMergePrecedence(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		AutomationSafety: AutomationSafetyConfig{
+			Defaults: map[string]AutomationSafetyPolicyOverride{
+				string(assistant.AutomationSafetyProfileBrowserHighRiskEngagement): {
+					RateLimits: AutomationSafetyRateLimitsOverride{
+						MaxAccountChangingActionsPerRun: intPtr(2),
+						MaxRepliesPer24h:                intPtr(12),
+						MinSpacingMinutes:               intPtr(25),
+					},
+					ModePolicy: AutomationSafetyModePolicyOverride{
+						AllowNoActionSuccess: boolPtr(true),
+					},
+				},
+			},
+			Projects: map[string]AutomationSafetyProjectOverride{
+				"proj-a": {
+					ProfileOverride: assistant.AutomationSafetyProfileBrowserHighRiskEngagement,
+					AutomationSafetyPolicyOverride: AutomationSafetyPolicyOverride{
+						RateLimits: AutomationSafetyRateLimitsOverride{
+							MaxAccountChangingActionsPerRun: intPtr(1),
+						},
+						ModePolicy: AutomationSafetyModePolicyOverride{
+							RequireNoActionEvidence: boolPtr(true),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	engineDefault := &assistant.AutomationSafetyPolicy{
+		Profile: assistant.AutomationSafetyProfileBrowserMutating,
+		ModePolicy: assistant.AutomationSafetyModePolicy{
+			AllowNoActionSuccess: false,
+		},
+		RateLimits: assistant.AutomationSafetyRateLimits{
+			MaxAccountChangingActionsPerRun: 4,
+			MaxRepliesPer24h:                30,
+			MinSpacingMinutes:               10,
+		},
+	}
+
+	policy := cfg.ResolveAutomationSafetyPolicy(engineDefault, assistant.AutomationSafetyProfileBrowserMutating, "proj-a")
+	if policy == nil {
+		t.Fatal("ResolveAutomationSafetyPolicy() = nil, want merged policy")
+	}
+	if policy.Profile != assistant.AutomationSafetyProfileBrowserHighRiskEngagement {
+		t.Fatalf("Profile = %q, want browser_high_risk_engagement", policy.Profile)
+	}
+	if policy.Enforcement != assistant.AutomationSafetyEnforcementEngineBlocking {
+		t.Fatalf("Enforcement = %q, want engine_blocking", policy.Enforcement)
+	}
+	if policy.RateLimits.MaxAccountChangingActionsPerRun != 1 {
+		t.Fatalf("MaxAccountChangingActionsPerRun = %d, want 1", policy.RateLimits.MaxAccountChangingActionsPerRun)
+	}
+	if policy.RateLimits.MaxRepliesPer24h != 12 {
+		t.Fatalf("MaxRepliesPer24h = %d, want 12", policy.RateLimits.MaxRepliesPer24h)
+	}
+	if policy.RateLimits.MinSpacingMinutes != 25 {
+		t.Fatalf("MinSpacingMinutes = %d, want 25", policy.RateLimits.MinSpacingMinutes)
+	}
+	if !policy.ModePolicy.AllowNoActionSuccess {
+		t.Fatal("AllowNoActionSuccess = false, want true from defaults")
+	}
+	if !policy.ModePolicy.RequireNoActionEvidence {
+		t.Fatal("RequireNoActionEvidence = false, want true from project override")
+	}
+}
+
+func TestResolveAutomationSafetyPolicyReturnsNilWithoutInputs(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{}
+	policy := cfg.ResolveAutomationSafetyPolicy(nil, "", "")
+	if policy != nil {
+		t.Fatalf("ResolveAutomationSafetyPolicy() = %#v, want nil", policy)
+	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func intPtr(value int) *int {
+	return &value
 }

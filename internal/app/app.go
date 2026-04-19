@@ -84,6 +84,7 @@ func NewWithExecutorAndMessenger(cfg config.Config, executor wtl.CodexPhaseExecu
 	}
 	runtime := wtl.NewCodexRuntime(executor, cfg.DefaultModel, time.Now)
 	engine := wtl.NewRunEngine(repo, runtime, events, policy, projectManager, wikiService, messenger, time.Now)
+	engine.SetAutomationSafetyConfig(cfg.AutomationSafety)
 	runs := assistantapp.NewRunService(context.Background(), repo, engine, policy, time.Now)
 	backgroundScheduler := scheduler.New(repo, runs, events, cfg.SchedulerInterval, time.Now)
 

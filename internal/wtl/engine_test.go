@@ -435,6 +435,186 @@ func TestRunEngineCreatesScheduledRunsBeforeReporting(t *testing.T) {
 	}
 }
 
+func TestEvaluateAutomationSafetyComplianceSoftForBrowserMutating(t *testing.T) {
+	t.Parallel()
+
+	policy := &assistant.AutomationSafetyPolicy{
+		Profile:     assistant.AutomationSafetyProfileBrowserMutating,
+		Enforcement: assistant.AutomationSafetyEnforcementEvaluatorEnforced,
+		RateLimits: assistant.AutomationSafetyRateLimits{
+			MaxAccountChangingActionsPerRun: 1,
+		},
+	}
+	actions := []assistant.BrowserActionRecord{
+		{ActionType: assistant.BrowserActionTypeSubmit, AccountStateChanged: true, OccurredAt: time.Date(2026, time.April, 3, 12, 0, 0, 0, time.UTC)},
+		{ActionType: assistant.BrowserActionTypeReply, AccountStateChanged: true, OccurredAt: time.Date(2026, time.April, 3, 12, 1, 0, 0, time.UTC)},
+	}
+	metrics := &assistant.BrowserRecentActivityMetrics{ReplyActionCount: 2}
+
+	result := evaluateAutomationSafetyCompliance(policy, actions, nil, metrics, true)
+	if len(result.Findings) == 0 {
+		t.Fatal("Findings = 0, want soft automation safety findings")
+	}
+	if len(result.HardFindings) == 0 {
+		t.Fatal("HardFindings = 0, want deterministic finding details")
+	}
+	if result.HardBlock {
+		t.Fatal("HardBlock = true, want false for browser_mutating evaluator_enforced policy")
+	}
+}
+
+func TestEvaluateAutomationSafetyComplianceHardBlocksNoActionWithoutEvidence(t *testing.T) {
+	t.Parallel()
+
+	policy := &assistant.AutomationSafetyPolicy{
+		Profile:     assistant.AutomationSafetyProfileBrowserHighRiskEngagement,
+		Enforcement: assistant.AutomationSafetyEnforcementEngineBlocking,
+		ModePolicy: assistant.AutomationSafetyModePolicy{
+			AllowNoActionSuccess:     true,
+			RequireNoActionEvidence:  true,
+			NoActionEvidenceRequired: []string{"observed context", "skipped action", "safety reason", "safer next step"},
+		},
+		RateLimits: assistant.AutomationSafetyRateLimits{
+			MaxAccountChangingActionsPerRun: 2,
+			MaxRepliesPer24h:                12,
+			MinSpacingMinutes:               20,
+		},
+	}
+
+	result := evaluateAutomationSafetyCompliance(policy, nil, nil, nil, true)
+	if len(result.Findings) == 0 {
+		t.Fatal("Findings = 0, want missing no-action evidence finding")
+	}
+	if !result.HardBlock {
+		t.Fatal("HardBlock = false, want true for high-risk no-action evidence violation")
+	}
+	if !strings.Contains(strings.ToLower(result.HardBlockSummary()), "no-action") {
+		t.Fatalf("HardBlockSummary = %q, want no-action evidence detail", result.HardBlockSummary())
+	}
+}
+
+func TestValidateSchedulerAutomationSafetyBlocksWhenReplyCapReached(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.April, 5, 10, 0, 0, 0, time.UTC)
+	policy := &assistant.AutomationSafetyPolicy{
+		Profile:     assistant.AutomationSafetyProfileBrowserHighRiskEngagement,
+		Enforcement: assistant.AutomationSafetyEnforcementEngineBlocking,
+		RateLimits: assistant.AutomationSafetyRateLimits{
+			MaxRepliesPer24h: 12,
+		},
+	}
+	metrics := &assistant.BrowserRecentActivityMetrics{
+		ReplyActionCount: 12,
+	}
+
+	summary := validateSchedulerAutomationSafety(policy, metrics, now, []time.Time{now.Add(30 * time.Minute)})
+	if strings.TrimSpace(summary) == "" {
+		t.Fatal("summary is empty, want scheduler hard-limit block")
+	}
+	if !strings.Contains(strings.ToLower(summary), "max_replies_per_24h") {
+		t.Fatalf("summary = %q, want reply-cap reason", summary)
+	}
+}
+func TestRunEngineHardFailsHighRiskWhenMutationLimitExceeded(t *testing.T) {
+	t.Parallel()
+
+	repo, dataDir := openEngineTestRepository(t)
+	now := time.Date(2026, time.April, 4, 9, 0, 0, 0, time.UTC)
+	safetyJSON := `{"profile":"browser_high_risk_engagement","enforcement":"engine_blocking","mode_policy":{"allow_no_action_success":true,"require_no_action_evidence":true,"no_action_evidence_required":["observed context","skipped action","safety reason","safer next step"]},"rate_limits":{"max_account_changing_actions_per_run":1,"max_replies_per_24h":12,"min_spacing_minutes":20}}`
+	runtime := &scriptedRuntime{
+		steps: map[assistant.AttemptRole][]runtimeStep{
+			assistant.AttemptRoleGate: {
+				{response: PhaseResponse{Summary: "Gate routed to workflow.", Output: gateJSON("workflow", "This request needs browser execution.")}},
+			},
+			assistant.AttemptRoleProjectSelector: {
+				{response: PhaseResponse{Summary: "Selected project.", Output: selectorJSON("community-outreach", "Community Outreach", "Engage community safely.")}},
+			},
+			assistant.AttemptRolePlanner: {
+				{response: PhaseResponse{Summary: "Planner complete.", Output: plannerJSONWithAutomationSafety("Engage community safely", []string{"Engagement summary"}, safetyJSON, nil)}},
+			},
+			assistant.AttemptRoleContractor: {
+				{response: PhaseResponse{Summary: "Contract agreed.", Output: contractJSON("agreed", []string{"Engagement summary"}, []string{"Respect safety limits"}, "")}},
+			},
+			assistant.AttemptRoleGenerator: {
+				{response: PhaseResponse{Summary: "Generator attempted outreach.", WebSteps: []assistant.WebStep{
+					{Title: "Sent first reply", URL: "https://example.com/thread/1", Summary: "Posted one reply.", ActionName: "reply", ActionTarget: "thread-1", ActionValue: "Thanks!", OccurredAt: now.Add(1 * time.Minute)},
+					{Title: "Submitted follow-up", URL: "https://example.com/thread/2", Summary: "Posted another reply.", ActionName: "submit", ActionTarget: "thread-2", ActionValue: "Following up", OccurredAt: now.Add(2 * time.Minute)},
+				}}},
+			},
+			assistant.AttemptRoleEvaluator: {
+				{response: PhaseResponse{Summary: "Evaluator passed.", Output: evaluatorJSON(true, 92, "Nominal task looked complete.", nil, "")}},
+			},
+		},
+	}
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 2}), newEngineTestProjectManager(t, dataDir), newEngineTestWikiService(dataDir), fakeMessenger(), fixedClock(now))
+
+	run := assistant.NewRun("Reply to two community posts.", now, 2)
+	if err := engine.Start(context.Background(), run); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	record, err := repo.GetRunRecord(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("GetRunRecord() error = %v", err)
+	}
+	if record.Run.Status != assistant.RunStatusFailed {
+		t.Fatalf("Run.Status = %q, want %q", record.Run.Status, assistant.RunStatusFailed)
+	}
+	if len(record.Evaluations) != 1 {
+		t.Fatalf("len(Evaluations) = %d, want 1", len(record.Evaluations))
+	}
+	if record.Evaluations[0].Passed {
+		t.Fatalf("evaluation = %#v, want failed automation-safety evaluation", record.Evaluations[0])
+	}
+	if !strings.Contains(strings.ToLower(record.Evaluations[0].Summary), "automation safety") {
+		t.Fatalf("evaluation summary = %q, want automation safety finding", record.Evaluations[0].Summary)
+	}
+	if len(record.ScheduledRuns) != 0 {
+		t.Fatalf("len(ScheduledRuns) = %d, want 0 after hard fail", len(record.ScheduledRuns))
+	}
+}
+
+func TestRunEngineHardFailsHighRiskSchedulerFixedShortFollowups(t *testing.T) {
+	t.Parallel()
+
+	repo, dataDir := openEngineTestRepository(t)
+	now := time.Date(2026, time.April, 5, 11, 0, 0, 0, time.UTC)
+	firstFollowUp := now.Add(5 * time.Minute).UTC().Format(time.RFC3339)
+	secondFollowUp := now.Add(10 * time.Minute).UTC().Format(time.RFC3339)
+	safetyJSON := `{"profile":"browser_high_risk_engagement","enforcement":"engine_blocking","rate_limits":{"max_account_changing_actions_per_run":2,"max_replies_per_24h":12,"min_spacing_minutes":20},"pattern_rules":{"disallow_fixed_short_followups":true}}`
+	runtime := &orderedRuntime{
+		steps: []orderedRuntimeStep{
+			{role: assistant.AttemptRoleGate, response: PhaseResponse{Summary: "Gate routed to workflow.", Output: gateJSON("workflow", "Needs deferred follow-up.")}},
+			{role: assistant.AttemptRoleProjectSelector, response: PhaseResponse{Summary: "Project selected.", Output: selectorJSON("community-followup", "Community Follow-Up", "Handle follow-up engagement.")}},
+			{role: assistant.AttemptRolePlanner, response: PhaseResponse{Summary: "Planner complete.", Output: plannerJSONWithAutomationSafety("Plan follow-up engagement", []string{"Follow-up plan"}, safetyJSON, []assistant.ScheduleEntry{{ScheduledFor: "+30m", Prompt: "Follow up later."}})}},
+			{role: assistant.AttemptRoleContractor, response: PhaseResponse{Summary: "Contract agreed.", Output: contractJSON("agreed", []string{"Follow-up plan"}, []string{"Schedule safe follow-up"}, "")}},
+			{role: assistant.AttemptRoleGenerator, response: PhaseResponse{Summary: "Generator complete.", WebSteps: []assistant.WebStep{{Title: "Posted one reply", URL: "https://example.com/thread/9", Summary: "Posted one reply.", ActionName: "reply", ActionTarget: "thread-9", OccurredAt: now.Add(1 * time.Minute)}}}},
+			{role: assistant.AttemptRoleEvaluator, response: PhaseResponse{Summary: "Evaluator passed.", Output: evaluatorJSON(true, 95, "Task completed.", nil, "")}},
+			{role: assistant.AttemptRoleScheduler, response: PhaseResponse{Summary: "Scheduler emitted fixed short loop.", Output: schedulerJSON([]assistant.ScheduleEntry{{ScheduledFor: firstFollowUp, Prompt: "Reply again."}, {ScheduledFor: secondFollowUp, Prompt: "Reply once more."}})}},
+		},
+	}
+	engine := NewRunEngine(repo, runtime, &capturingObserver{}, gan.New(gan.Config{MaxGenerationAttempts: 1}), newEngineTestProjectManager(t, dataDir), newEngineTestWikiService(dataDir), fakeMessenger(), fixedClock(now))
+
+	run := assistant.NewRun("Schedule high-risk follow-up replies.", now, 1)
+	if err := engine.Start(context.Background(), run); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	record, err := repo.GetRunRecord(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("GetRunRecord() error = %v", err)
+	}
+	if record.Run.Status != assistant.RunStatusFailed {
+		t.Fatalf("Run.Status = %q, want %q", record.Run.Status, assistant.RunStatusFailed)
+	}
+	if len(record.ScheduledRuns) != 0 {
+		t.Fatalf("len(ScheduledRuns) = %d, want 0 after scheduler hard block", len(record.ScheduledRuns))
+	}
+	if got := record.Attempts[len(record.Attempts)-1].Role; got != assistant.AttemptRoleScheduler {
+		t.Fatalf("last attempt role = %q, want %q", got, assistant.AttemptRoleScheduler)
+	}
+}
 func TestRunEngineReportCanEnterWaiting(t *testing.T) {
 	t.Parallel()
 
@@ -692,6 +872,26 @@ func plannerJSONWithSchedule(goal string, deliverables []string, entries []assis
 	return fmt.Sprintf(`{"goal":%q,"deliverables":["%s"],"constraints":[],"tools_allowed":["agent-browser"],"tools_required":["agent-browser"],"done_definition":["Produce the requested deliverables"],"evidence_required":["Capture source evidence"],"risk_flags":[],"max_generation_attempts":2,"schedule_plan":%s}`, goal, stringsJoin(deliverables), scheduleJSON)
 }
 
+func plannerJSONWithAutomationSafety(goal string, deliverables []string, automationSafetyJSON string, entries []assistant.ScheduleEntry) string {
+	scheduleJSON := "null"
+	if len(entries) > 0 {
+		parts := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			parts = append(parts, fmt.Sprintf(`{"scheduled_for":%q,"prompt":%q}`, entry.ScheduledFor, entry.Prompt))
+		}
+		scheduleJSON = fmt.Sprintf(`{"entries":[%s]}`, strings.Join(parts, ","))
+	}
+	automationSafetyJSON = strings.TrimSpace(automationSafetyJSON)
+	if automationSafetyJSON == "" {
+		automationSafetyJSON = "null"
+	}
+	return fmt.Sprintf(`{"goal":%q,"deliverables":["%s"],"constraints":[],"tools_allowed":["agent-browser"],"tools_required":["agent-browser"],"done_definition":["Produce the requested deliverables"],"evidence_required":["Capture source evidence"],"risk_flags":["external-side-effect"],"automation_safety":%s,"max_generation_attempts":2,"schedule_plan":%s}`,
+		goal,
+		stringsJoin(deliverables),
+		automationSafetyJSON,
+		scheduleJSON,
+	)
+}
 func contractJSON(decision string, deliverables []string, acceptanceCriteria []string, revisionNotes string) string {
 	return fmt.Sprintf(`{"decision":%q,"summary":"Contract review completed.","deliverables":["%s"],"acceptance_criteria":["%s"],"evidence_required":["Capture source evidence"],"constraints":[],"out_of_scope":[],"revision_notes":%q}`, decision, stringsJoin(deliverables), stringsJoin(acceptanceCriteria), revisionNotes)
 }

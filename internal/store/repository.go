@@ -16,16 +16,17 @@ import (
 var ErrNotFound = errors.New("store: not found")
 
 type RunRecord struct {
-	Run           assistant.Run            `json:"run"`
-	Events        []assistant.RunEvent     `json:"events"`
-	Attempts      []assistant.Attempt      `json:"attempts"`
-	Artifacts     []assistant.Artifact     `json:"artifacts"`
-	Evidence      []assistant.Evidence     `json:"evidence"`
-	Evaluations   []assistant.Evaluation   `json:"evaluations"`
-	ToolCalls     []assistant.ToolCall     `json:"tool_calls"`
-	WebSteps      []assistant.WebStep      `json:"web_steps"`
-	WaitRequests  []assistant.WaitRequest  `json:"wait_requests"`
-	ScheduledRuns []assistant.ScheduledRun `json:"scheduled_runs"`
+	Run            assistant.Run                   `json:"run"`
+	Events         []assistant.RunEvent            `json:"events"`
+	Attempts       []assistant.Attempt             `json:"attempts"`
+	Artifacts      []assistant.Artifact            `json:"artifacts"`
+	Evidence       []assistant.Evidence            `json:"evidence"`
+	Evaluations    []assistant.Evaluation          `json:"evaluations"`
+	ToolCalls      []assistant.ToolCall            `json:"tool_calls"`
+	WebSteps       []assistant.WebStep             `json:"web_steps"`
+	BrowserActions []assistant.BrowserActionRecord `json:"browser_actions"`
+	WaitRequests   []assistant.WaitRequest         `json:"wait_requests"`
+	ScheduledRuns  []assistant.ScheduledRun        `json:"scheduled_runs"`
 }
 
 type ChatRecord struct {
@@ -228,6 +229,39 @@ func (r *SQLiteRepository) AddWebStep(ctx context.Context, webStep assistant.Web
 INSERT INTO web_steps (id, run_id, attempt_id, title, url, summary, occurred_at)
 VALUES (%s, %s, %s, %s, %s, %s, %s);
 `, sqlText(webStep.ID), sqlText(webStep.RunID), sqlText(webStep.AttemptID), sqlText(webStep.Title), sqlText(webStep.URL), sqlText(webStep.Summary), sqlTime(webStep.OccurredAt))
+	return r.exec(ctx, script)
+}
+
+func (r *SQLiteRepository) AddBrowserAction(ctx context.Context, action assistant.BrowserActionRecord) error {
+	script := fmt.Sprintf(`
+INSERT INTO browser_actions (
+	id,
+	run_id,
+	attempt_id,
+	project_slug,
+	action_type,
+	action_name,
+	target_context,
+	source_context,
+	source_url,
+	account_state_changed,
+	text_fingerprint,
+	occurred_at
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+`,
+		sqlText(action.ID),
+		sqlText(action.RunID),
+		sqlText(action.AttemptID),
+		sqlText(action.ProjectSlug),
+		sqlText(string(action.ActionType)),
+		sqlText(action.ActionName),
+		sqlText(action.TargetContext),
+		sqlText(action.SourceContext),
+		sqlText(action.SourceURL),
+		sqlBool(action.AccountStateChanged),
+		sqlText(action.TextFingerprint),
+		sqlTime(action.OccurredAt),
+	)
 	return r.exec(ctx, script)
 }
 
@@ -600,6 +634,74 @@ ORDER BY occurred_at ASC;
 	return webSteps, nil
 }
 
+func (r *SQLiteRepository) ListBrowserActions(ctx context.Context, runID string) ([]assistant.BrowserActionRecord, error) {
+	rows, err := queryRows[browserActionRow](ctx, r, fmt.Sprintf(`
+SELECT
+	id,
+	run_id,
+	attempt_id,
+	project_slug,
+	action_type,
+	action_name,
+	COALESCE(target_context, '') AS target_context,
+	COALESCE(source_context, '') AS source_context,
+	COALESCE(source_url, '') AS source_url,
+	account_state_changed,
+	COALESCE(text_fingerprint, '') AS text_fingerprint,
+	occurred_at
+FROM browser_actions
+WHERE run_id = %s
+ORDER BY occurred_at ASC;
+`, sqlText(runID)))
+	if err != nil {
+		return nil, err
+	}
+	actions := make([]assistant.BrowserActionRecord, 0, len(rows))
+	for _, row := range rows {
+		action, err := row.toAssistantBrowserAction()
+		if err != nil {
+			return nil, err
+		}
+		actions = append(actions, action)
+	}
+	return actions, nil
+}
+
+func (r *SQLiteRepository) ListBrowserActionsByProject(ctx context.Context, projectSlug string, since, until time.Time) ([]assistant.BrowserActionRecord, error) {
+	rows, err := queryRows[browserActionRow](ctx, r, fmt.Sprintf(`
+SELECT
+	id,
+	run_id,
+	attempt_id,
+	project_slug,
+	action_type,
+	action_name,
+	COALESCE(target_context, '') AS target_context,
+	COALESCE(source_context, '') AS source_context,
+	COALESCE(source_url, '') AS source_url,
+	account_state_changed,
+	COALESCE(text_fingerprint, '') AS text_fingerprint,
+	occurred_at
+FROM browser_actions
+WHERE project_slug = %s
+	AND occurred_at >= %s
+	AND occurred_at <= %s
+ORDER BY occurred_at ASC;
+`, sqlText(strings.TrimSpace(projectSlug)), sqlTime(since.UTC()), sqlTime(until.UTC())))
+	if err != nil {
+		return nil, err
+	}
+	actions := make([]assistant.BrowserActionRecord, 0, len(rows))
+	for _, row := range rows {
+		action, err := row.toAssistantBrowserAction()
+		if err != nil {
+			return nil, err
+		}
+		actions = append(actions, action)
+	}
+	return actions, nil
+}
+
 func (r *SQLiteRepository) ListWaitRequests(ctx context.Context, runID string) ([]assistant.WaitRequest, error) {
 	rows, err := queryRows[waitRequestRow](ctx, r, fmt.Sprintf(`
 SELECT id, run_id, kind, title, prompt, COALESCE(risk_summary, '') AS risk_summary, created_at
@@ -810,6 +912,10 @@ func (r *SQLiteRepository) GetRunRecord(ctx context.Context, runID string) (RunR
 	if err != nil {
 		return RunRecord{}, err
 	}
+	browserActions, err := r.ListBrowserActions(ctx, runID)
+	if err != nil {
+		return RunRecord{}, err
+	}
 	waitRequests, err := r.ListWaitRequests(ctx, runID)
 	if err != nil {
 		return RunRecord{}, err
@@ -830,16 +936,17 @@ func (r *SQLiteRepository) GetRunRecord(ctx context.Context, runID string) (RunR
 	}
 
 	return RunRecord{
-		Run:           run,
-		Events:        events,
-		Attempts:      attempts,
-		Artifacts:     artifacts,
-		Evidence:      evidence,
-		Evaluations:   evaluations,
-		ToolCalls:     toolCalls,
-		WebSteps:      webSteps,
-		WaitRequests:  waitRequests,
-		ScheduledRuns: scheduledRuns,
+		Run:            run,
+		Events:         events,
+		Attempts:       attempts,
+		Artifacts:      artifacts,
+		Evidence:       evidence,
+		Evaluations:    evaluations,
+		ToolCalls:      toolCalls,
+		WebSteps:       webSteps,
+		BrowserActions: browserActions,
+		WaitRequests:   waitRequests,
+		ScheduledRuns:  scheduledRuns,
 	}, nil
 }
 
