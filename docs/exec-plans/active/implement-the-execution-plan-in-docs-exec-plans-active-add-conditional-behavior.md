@@ -25,7 +25,7 @@ The active plan requires a reusable policy model that remains off for ordinary r
 ## Milestones
 
 - [x] Milestone 1: Add automation safety policy model to `TaskSpec`/assistant types (profiles, enforcement, limits, no-action evidence requirements) with compatibility and validation.
-- [ ] Milestone 2: Extend config loading/validation to support automation-safety defaults and per-project overrides, including merge precedence.
+- [x] Milestone 2: Extend config loading/validation to support automation-safety defaults and per-project overrides, including merge precedence.
 - [ ] Milestone 3: Integrate policy into planner prompt/context and plan decoding so profile inference + override application produce normalized policy.
 - [ ] Milestone 4: Thread normalized policy into contract and generator prompts, including no-action handling and required evidence semantics.
 - [ ] Milestone 5: Implement browser action logging plus recent-activity metrics needed by behavioral checks.
@@ -34,20 +34,20 @@ The active plan requires a reusable policy model that remains off for ordinary r
 
 ## Current progress
 
-- Milestone 1 completed in this iteration.
-- Added first-class `TaskSpec.AutomationSafety` policy support with profile and enforcement enums, mode/rate/pattern/text/cooldown substructures, and JSON compatibility via optional fields.
-- Added automation-safety validation in assistant types, including:
-  - allowed profile and enforcement values,
-  - restriction that `engine_blocking` enforcement is only valid for `browser_high_risk_engagement`,
-  - non-negative rate-limit checks,
-  - required high-risk hard-limit fields,
-  - required no-action evidence list when `require_no_action_evidence` is enabled.
-- Added normalization support in `NormalizeTaskSpec` for optional automation safety policy, including high-risk defaults:
-  - `max_account_changing_actions_per_run = 2`,
-  - `max_replies_per_24h = 12`,
-  - `min_spacing_minutes = 20`,
-  - default no-action evidence requirements for high-risk profiles.
-- Added assistant unit tests covering high-risk default normalization and policy validation success/failure paths.
+- Milestone 1 complete.
+- Milestone 2 completed in this iteration.
+- Extended `internal/config` file schema with structured `automation_safety` support:
+  - global profile defaults (`automation_safety.defaults`),
+  - per-project overrides (`automation_safety.projects`),
+  - project-level `profile_override`, and policy override fields for enforcement/mode/rate/pattern/text-reuse/cooldown sections.
+- Added config-layer validation for automation-safety values:
+  - rejects unknown profiles,
+  - rejects invalid enforcement modes,
+  - rejects negative numeric limits,
+  - enforces `engine_blocking` only when profile context is `browser_high_risk_engagement`.
+- Added merge-precedence resolver in config:
+  - `engine defaults` -> `global defaults for effective profile` -> `project override`.
+- Added config unit tests for invalid profile/enforcement rejection and precedence merge behavior.
 - Full test suite passed: `go test ./...`.
 
 ## Key decisions
@@ -57,12 +57,13 @@ The active plan requires a reusable policy model that remains off for ordinary r
 - Treat `browser_high_risk_engagement` as the only profile with engine-blocking hard-limit enforcement in the first pass.
 - Use structured config-file overrides (global defaults + project overrides) as the policy override mechanism.
 - Keep automation safety optional on `TaskSpec` (`omitempty`) so existing runs/specs remain backward compatible when no policy is present.
+- Keep policy merge logic in config for deterministic reuse by downstream planner integration.
 
 ## Remaining issues / open questions
 
-- Milestone 2: wire `automation_safety` defaults and project-level overrides into config loading and validation, and finalize merge precedence against engine defaults.
-- Milestone 3: update planner prompt and decoding contract to emit and normalize policy profiles consistently.
-- Confirm exact project-key lookup in config for per-project policy overrides.
+- Milestone 3: thread config policy into planner prompt/context and planner output decoding so inferred profile + config overrides produce normalized `TaskSpec.AutomationSafety`.
+- Confirm final planner-side profile inference behavior for read-only vs mutating vs high-risk engagement classification.
+- Milestones 4-7 remain pending for prompt threading, logging/metrics, evaluator/scheduler enforcement, and docs.
 
 ## Links to related documents
 
