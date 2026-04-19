@@ -9,7 +9,7 @@ Out of scope:
 
 ## Background
 
-The current `cva run` UX streams line-oriented output that is automation-friendly but weak for long interactive sessions. The repository already has an approved improvement direction in `docs/exec-plans/active/improve-cva-run-with-bubble-tea-fullscreen-tui.md`, and this execution plan focuses on implementation steps in the current worktree/branch.
+The current `cva run` UX streams line-oriented output that is automation-friendly but weak for long interactive sessions. This execution plan superseded the earlier Bubble Tea TUI planning draft and focuses on implementation steps in the current worktree/branch.
 
 Key constraints:
 
@@ -115,7 +115,6 @@ All milestones in this execution plan are now complete.
 
 - `AGENTS.md`
 - `docs/PLANS.md`
-- `docs/exec-plans/active/improve-cva-run-with-bubble-tea-fullscreen-tui.md`
 - `cmd/cva/main.go`
 - `cmd/cva/format.go`
 - `cmd/cva/sse.go`
