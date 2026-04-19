@@ -463,6 +463,59 @@ func TestEvaluateAutomationSafetyComplianceSoftForBrowserMutating(t *testing.T) 
 	}
 }
 
+func TestEvaluateAutomationSafetyComplianceHardBlocksNoActionWithoutEvidence(t *testing.T) {
+	t.Parallel()
+
+	policy := &assistant.AutomationSafetyPolicy{
+		Profile:     assistant.AutomationSafetyProfileBrowserHighRiskEngagement,
+		Enforcement: assistant.AutomationSafetyEnforcementEngineBlocking,
+		ModePolicy: assistant.AutomationSafetyModePolicy{
+			AllowNoActionSuccess:     true,
+			RequireNoActionEvidence:  true,
+			NoActionEvidenceRequired: []string{"observed context", "skipped action", "safety reason", "safer next step"},
+		},
+		RateLimits: assistant.AutomationSafetyRateLimits{
+			MaxAccountChangingActionsPerRun: 2,
+			MaxRepliesPer24h:                12,
+			MinSpacingMinutes:               20,
+		},
+	}
+
+	result := evaluateAutomationSafetyCompliance(policy, nil, nil, nil, true)
+	if len(result.Findings) == 0 {
+		t.Fatal("Findings = 0, want missing no-action evidence finding")
+	}
+	if !result.HardBlock {
+		t.Fatal("HardBlock = false, want true for high-risk no-action evidence violation")
+	}
+	if !strings.Contains(strings.ToLower(result.HardBlockSummary()), "no-action") {
+		t.Fatalf("HardBlockSummary = %q, want no-action evidence detail", result.HardBlockSummary())
+	}
+}
+
+func TestValidateSchedulerAutomationSafetyBlocksWhenReplyCapReached(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.April, 5, 10, 0, 0, 0, time.UTC)
+	policy := &assistant.AutomationSafetyPolicy{
+		Profile:     assistant.AutomationSafetyProfileBrowserHighRiskEngagement,
+		Enforcement: assistant.AutomationSafetyEnforcementEngineBlocking,
+		RateLimits: assistant.AutomationSafetyRateLimits{
+			MaxRepliesPer24h: 12,
+		},
+	}
+	metrics := &assistant.BrowserRecentActivityMetrics{
+		ReplyActionCount: 12,
+	}
+
+	summary := validateSchedulerAutomationSafety(policy, metrics, now, []time.Time{now.Add(30 * time.Minute)})
+	if strings.TrimSpace(summary) == "" {
+		t.Fatal("summary is empty, want scheduler hard-limit block")
+	}
+	if !strings.Contains(strings.ToLower(summary), "max_replies_per_24h") {
+		t.Fatalf("summary = %q, want reply-cap reason", summary)
+	}
+}
 func TestRunEngineHardFailsHighRiskWhenMutationLimitExceeded(t *testing.T) {
 	t.Parallel()
 

@@ -31,3 +31,4 @@ Describe why the work is needed and any relevant context.
 ## Links to related documents
 
 - `AGENTS.md`
+- `docs/automation-safety-policy.md` (feature reference example)
