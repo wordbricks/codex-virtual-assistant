@@ -29,7 +29,7 @@ The active plan requires a reusable policy model that remains off for ordinary r
 - [x] Milestone 3: Integrate policy into planner prompt/context and plan decoding so profile inference + override application produce normalized policy.
 - [x] Milestone 4: Thread normalized policy into contract and generator prompts, including no-action handling and required evidence semantics.
 - [x] Milestone 5: Implement browser action logging plus recent-activity metrics needed by behavioral checks.
-- [ ] Milestone 6: Integrate policy checks into evaluator and scheduler flows/prompts, with hard-limit enforcement only for `browser_high_risk_engagement`.
+- [x] Milestone 6: Integrate policy checks into evaluator and scheduler flows/prompts, with hard-limit enforcement only for `browser_high_risk_engagement`.
 - [ ] Milestone 7: Add/update tests and documentation for policy fields, config overrides, prompt integration, metrics, and enforcement behavior.
 
 ## Current progress
@@ -37,8 +37,9 @@ The active plan requires a reusable policy model that remains off for ordinary r
 - Milestone 1 complete.
 - Milestone 2 complete.
 - Milestone 3 complete.
-- Milestone 4 completed in the previous iteration.
-- Milestone 5 completed in this iteration.
+- Milestone 4 completed in a previous iteration.
+- Milestone 5 completed in a previous iteration.
+- Milestone 6 completed in this iteration.
 - Planner prompt contract now includes `automation_safety` in strict JSON planner output schema and adds explicit profile/enforcement guidance for browser mutating and high-risk engagement classification.
 - Planner user context now includes automation-safety config context (global defaults + project override visibility) to expose structured config policy inputs during planning.
 - Planner decode path now:
@@ -65,12 +66,26 @@ The active plan requires a reusable policy model that remains off for ordinary r
   - repository APIs to add run actions and query project-window activity,
   - run-record hydration includes stored browser actions.
 - Engine execution persistence now writes a browser-action record for each persisted web step with run/attempt/project correlation.
-- Evaluator and scheduler prompt inputs now accept recent-activity metrics; prompts include a structured metrics context block when available.
+- Evaluator and scheduler prompt inputs now include automation-safety context and recent-activity metrics context.
+- Evaluator flow now performs policy checks before final pass/fail routing:
+  - merges automation-safety findings into evaluator output as missing requirements/next-action guidance,
+  - keeps violations soft for `browser_mutating` (`evaluator_enforced`) by forcing retry-oriented failed evaluations,
+  - hard-fails `browser_high_risk_engagement` (`engine_blocking`) on deterministic hard-limit violations.
+- Deterministic high-risk hard-limit checks now include:
+  - per-run account-changing action cap,
+  - rolling 24h reply cap,
+  - minimum spacing between mutating actions,
+  - disallowed default action-trio pattern,
+  - required no-action evidence when no-action success is claimed.
+- Scheduler flow now enforces high-risk deterministic safety constraints before saving scheduled runs:
+  - blocks scheduling when reply cap is already reached,
+  - blocks follow-ups that violate minimum spacing,
+  - blocks fixed short follow-up loops when disallowed by policy.
 - Added/updated tests covering:
-  - action extraction/classification + metrics calculations (`internal/safety`),
-  - repository persistence/query paths for browser actions (`internal/store`),
-  - runtime action metadata propagation (`internal/wtl/runtime_codex_test.go`),
-  - evaluator/scheduler prompt metric context rendering (`internal/prompting/prompts_test.go`).
+  - evaluator/scheduler prompt automation-safety guidance,
+  - evaluator soft findings behavior for `browser_mutating`,
+  - evaluator hard-fail behavior for high-risk deterministic limit violations,
+  - scheduler hard-fail behavior for disallowed fixed short follow-up cadence.
 - Full test suite passed: `go test ./...`.
 
 ## Key decisions
@@ -83,11 +98,11 @@ The active plan requires a reusable policy model that remains off for ordinary r
 - Keep policy merge logic in config for deterministic reuse by downstream planner integration.
 - Inference should avoid downscoping stronger planner-emitted profiles; decode uses max-risk ranking when planner-provided profile and inferred profile differ.
 - Browser action metrics are computed from persisted structured step/action data (not prompt prose parsing) to keep evaluator/scheduler checks deterministic.
+- Hard engine blocks remain limited to deterministic checks under `browser_high_risk_engagement`; ordinary `browser_mutating` violations stay evaluator-soft.
 
 ## Remaining issues / open questions
 
-- Milestone 6: integrate evaluator/scheduler policy checks and limit hard blocking to `browser_high_risk_engagement`.
-- Milestone 7: complete docs/test coverage updates for prompt propagation, metrics, and enforcement outcomes.
+- Milestone 7: complete docs/test coverage updates for policy fields, config overrides, prompt integration, metrics, and enforcement outcomes.
 
 ## Links to related documents
 

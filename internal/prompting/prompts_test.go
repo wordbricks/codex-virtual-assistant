@@ -366,6 +366,16 @@ func TestBuildAndDecodeSchedulerPrompt(t *testing.T) {
 			UserRequestRaw: "Research hospitals and call them later.",
 			TaskSpec: assistant.TaskSpec{
 				Goal: "Research hospitals",
+				AutomationSafety: &assistant.AutomationSafetyPolicy{
+					Profile:     assistant.AutomationSafetyProfileBrowserHighRiskEngagement,
+					Enforcement: assistant.AutomationSafetyEnforcementEngineBlocking,
+					RateLimits: assistant.AutomationSafetyRateLimits{
+						MinSpacingMinutes: 20,
+					},
+					PatternRules: assistant.AutomationSafetyPatternRules{
+						DisallowFixedShortFollowup: true,
+					},
+				},
 				SchedulePlan: &assistant.SchedulePlan{
 					Entries: []assistant.ScheduleEntry{
 						{ScheduledFor: "13:00", Prompt: "Call the first hospital."},
@@ -392,6 +402,12 @@ func TestBuildAndDecodeSchedulerPrompt(t *testing.T) {
 	}
 	if !strings.Contains(bundle.User, "Recent browser activity metrics:") || !strings.Contains(bundle.User, "mutating_action_count=2") {
 		t.Fatalf("User prompt = %q, want recent activity metric context", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "Automation safety policy context:") || !strings.Contains(bundle.User, "- profile: browser_high_risk_engagement") {
+		t.Fatalf("User prompt = %q, want scheduler automation safety context", bundle.User)
+	}
+	if !strings.Contains(bundle.System, "avoid fixed short follow-up loops") {
+		t.Fatalf("System prompt = %q, want scheduler automation safety instruction", bundle.System)
 	}
 
 	entries, err := DecodeSchedulerOutput([]byte(`{"entries":[{"scheduled_for":"2026-04-03T13:00:00Z","prompt":"Call Saint Mary Hospital at +1-555-0100."}]}`))
@@ -492,7 +508,11 @@ func TestBuildEvaluatorPromptIncludesOriginalUserRequest(t *testing.T) {
 		Run: assistant.Run{
 			UserRequestRaw: "Verify the saved list against https://example.com/source.",
 			TaskSpec: assistant.TaskSpec{
-				Goal:             "Verify the saved list",
+				Goal: "Verify the saved list",
+				AutomationSafety: &assistant.AutomationSafetyPolicy{
+					Profile:     assistant.AutomationSafetyProfileBrowserMutating,
+					Enforcement: assistant.AutomationSafetyEnforcementEvaluatorEnforced,
+				},
 				DoneDefinition:   []string{"Compare the saved list to the source"},
 				EvidenceRequired: []string{"Source URL", "Saved-list screenshot"},
 			},
@@ -514,6 +534,12 @@ func TestBuildEvaluatorPromptIncludesOriginalUserRequest(t *testing.T) {
 	}
 	if !strings.Contains(bundle.User, "Recent browser activity metrics:") || !strings.Contains(bundle.User, "total_action_count=4") {
 		t.Fatalf("User prompt = %q, want recent activity metric context", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "Automation safety policy context:") || !strings.Contains(bundle.User, "- profile: browser_mutating") {
+		t.Fatalf("User prompt = %q, want evaluator automation safety context", bundle.User)
+	}
+	if !strings.Contains(bundle.System, "any automation safety policy context") {
+		t.Fatalf("System prompt = %q, want evaluator automation safety guidance", bundle.System)
 	}
 }
 

@@ -435,11 +435,12 @@ func BuildEvaluatorPrompt(input EvaluatorInput) Bundle {
 	fmt.Fprintf(builder, "Original user request: %s\n", strings.TrimSpace(input.Run.UserRequestRaw))
 	fmt.Fprintf(builder, "Goal: %s\n", input.Run.TaskSpec.Goal)
 	appendContractContext(builder, input.Run.TaskSpec)
+	appendAutomationSafetyPromptContext(builder, input.Run.TaskSpec.AutomationSafety)
 	fmt.Fprintf(builder, "Artifacts submitted: %d\n", len(input.Artifacts))
 	fmt.Fprintf(builder, "Evidence items submitted: %d\n", len(input.Evidence))
 	appendRecentActivityMetrics(builder, input.RecentActivity)
 	return Bundle{
-		System: "You are the evaluator for a WTL GAN-policy based assistant. Judge completion strictly against the accepted contract and return strict JSON with passed, score, summary, missing_requirements, incorrect_claims, evidence_checked, and next_action_for_generator.",
+		System: "You are the evaluator for a WTL GAN-policy based assistant. Judge completion strictly against the accepted contract and any automation safety policy context. For browser_mutating runs, treat safety violations as failed evaluations with actionable next_action_for_generator guidance. For browser_high_risk_engagement runs, deterministic hard-limit violations and missing required no-action evidence must not pass. Return strict JSON with passed, score, summary, missing_requirements, incorrect_claims, evidence_checked, and next_action_for_generator.",
 		User:   strings.TrimSpace(builder.String()),
 	}
 }
@@ -490,6 +491,7 @@ func BuildSchedulerPrompt(input SchedulerInput) Bundle {
 	builder := &strings.Builder{}
 	fmt.Fprintf(builder, "Original user request: %s\n", strings.TrimSpace(input.Run.UserRequestRaw))
 	fmt.Fprintf(builder, "Goal: %s\n", strings.TrimSpace(input.Run.TaskSpec.Goal))
+	appendAutomationSafetyPromptContext(builder, input.Run.TaskSpec.AutomationSafety)
 	if input.Run.TaskSpec.SchedulePlan != nil {
 		fmt.Fprintf(builder, "Planned schedule entries:\n")
 		for _, entry := range input.Run.TaskSpec.SchedulePlan.Entries {
@@ -505,6 +507,7 @@ func BuildSchedulerPrompt(input SchedulerInput) Bundle {
 You are the scheduler phase for a WTL GAN-policy based assistant.
 Finalize the deferred execution prompts using concrete details already discovered during the run.
 Resolve template placeholders into specific names, phone numbers, URLs, or other facts when the evidence supports them.
+Honor automation safety policy context. For high-risk browser engagement, avoid fixed short follow-up loops and prefer safer spacing when risk indicators are elevated.
 Return one strict JSON object and nothing else.
 Do not wrap the JSON in markdown fences.
 The JSON object must contain exactly these keys:

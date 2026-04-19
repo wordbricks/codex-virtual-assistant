@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -771,12 +772,23 @@ func (e *RunEngine) executeEvaluator(ctx context.Context, record *store.RunRecor
 	if err != nil {
 		return "", e.failRun(ctx, record.Run, fmt.Sprintf("Evaluator output could not be decoded: %v", err), err)
 	}
+	safetyCheck := evaluateAutomationSafetyCompliance(record.Run.TaskSpec.AutomationSafety, record.BrowserActions, record.Evidence, metrics, evaluation.Passed)
+	if len(safetyCheck.Findings) > 0 {
+		evaluation = mergeAutomationSafetyFindingsIntoEvaluation(evaluation, safetyCheck)
+	}
 	if err := e.repo.AddEvaluation(ctx, evaluation); err != nil {
 		return "", err
 	}
 	record.Run.LatestEvaluation = &evaluation
 	if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypeEvaluation, assistant.RunPhaseEvaluating, evaluation.Summary); err != nil {
 		return "", err
+	}
+	if safetyCheck.HardBlock {
+		summary := firstNonEmpty(safetyCheck.HardBlockSummary(), "Automation safety hard-limit violation blocked the run.")
+		if err := e.failRun(ctx, record.Run, summary, nil); err != nil {
+			return "", err
+		}
+		return DirectiveFail, nil
 	}
 
 	updatedRecord, err := e.repo.GetRunRecord(ctx, record.Run.ID)
@@ -843,19 +855,28 @@ func (e *RunEngine) executeScheduler(ctx context.Context, record *store.RunRecor
 		return e.failRun(ctx, record.Run, fmt.Sprintf("Scheduler output could not be decoded: %v", err), err)
 	}
 
-	createdIDs := make([]string, 0, len(entries))
+	scheduledTimes := make([]time.Time, 0, len(entries))
 	for idx, entry := range entries {
 		scheduledFor, err := assistant.ParseScheduledFor(entry.ScheduledFor, now)
 		if err != nil {
 			return e.failRun(ctx, record.Run, fmt.Sprintf("Scheduler entry %d could not parse scheduled_for: %v", idx+1, err), err)
 		}
+		scheduledTimes = append(scheduledTimes, scheduledFor)
+	}
+
+	if summary := validateSchedulerAutomationSafety(record.Run.TaskSpec.AutomationSafety, metrics, now, scheduledTimes); summary != "" {
+		return e.failRun(ctx, record.Run, summary, nil)
+	}
+
+	createdIDs := make([]string, 0, len(entries))
+	for idx, entry := range entries {
 		scheduledRun := assistant.ScheduledRun{
 			ID:                    assistant.NewID("scheduled", now.Add(time.Duration(idx)*time.Millisecond)),
 			ChatID:                record.Run.ChatID,
 			ParentRunID:           record.Run.ID,
 			UserRequestRaw:        strings.TrimSpace(entry.Prompt),
 			MaxGenerationAttempts: record.Run.MaxGenerationAttempts,
-			ScheduledFor:          scheduledFor,
+			ScheduledFor:          scheduledTimes[idx],
 			Status:                assistant.ScheduledRunStatusPending,
 			CreatedAt:             now.Add(time.Duration(idx) * time.Millisecond),
 		}
@@ -1236,6 +1257,345 @@ func (e *RunEngine) publishEventWithData(ctx context.Context, runID string, even
 		return err
 	}
 	return e.observer.Publish(ctx, event)
+}
+
+type automationSafetyCheckResult struct {
+	Findings     []string
+	HardFindings []string
+	NextActions  []string
+	HardBlock    bool
+}
+
+func (r automationSafetyCheckResult) HardBlockSummary() string {
+	if len(r.HardFindings) == 0 {
+		return ""
+	}
+	return "Automation safety hard-limit violation: " + strings.Join(r.HardFindings, "; ")
+}
+
+func evaluateAutomationSafetyCompliance(
+	policy *assistant.AutomationSafetyPolicy,
+	actions []assistant.BrowserActionRecord,
+	evidence []assistant.Evidence,
+	metrics *assistant.BrowserRecentActivityMetrics,
+	evaluationPassed bool,
+) automationSafetyCheckResult {
+	result := automationSafetyCheckResult{}
+	if policy == nil {
+		return result
+	}
+	if policy.Profile != assistant.AutomationSafetyProfileBrowserMutating &&
+		policy.Profile != assistant.AutomationSafetyProfileBrowserHighRiskEngagement {
+		return result
+	}
+
+	mutatingCount, replyCount, mutatingTimes, actionTypes := countMutatingAndReplyActions(actions)
+	if limit := policy.RateLimits.MaxAccountChangingActionsPerRun; limit > 0 && mutatingCount > limit {
+		finding := fmt.Sprintf("account-changing actions in this run (%d) exceed max_account_changing_actions_per_run=%d", mutatingCount, limit)
+		result.Findings = append(result.Findings, finding)
+		result.HardFindings = append(result.HardFindings, finding)
+		result.NextActions = append(result.NextActions, "Reduce mutating browser actions to stay within per-run limits.")
+	}
+	if limit := policy.RateLimits.MaxRepliesPer24h; limit > 0 {
+		observedReplies := replyCount
+		if metrics != nil && metrics.ReplyActionCount > observedReplies {
+			observedReplies = metrics.ReplyActionCount
+		}
+		if observedReplies > limit {
+			finding := fmt.Sprintf("rolling reply count in the last 24h (%d) exceeds max_replies_per_24h=%d", observedReplies, limit)
+			result.Findings = append(result.Findings, finding)
+			result.HardFindings = append(result.HardFindings, finding)
+			result.NextActions = append(result.NextActions, "Pause reply generation and continue with read-only observation until reply volume cools down.")
+		}
+	}
+	if minSpacing := policy.RateLimits.MinSpacingMinutes; minSpacing > 0 {
+		if ok, observed := violatesMinimumSpacing(mutatingTimes, minSpacing); ok {
+			finding := fmt.Sprintf("mutating action spacing (%s) is below min_spacing_minutes=%d", observed, minSpacing)
+			result.Findings = append(result.Findings, finding)
+			result.HardFindings = append(result.HardFindings, finding)
+			result.NextActions = append(result.NextActions, "Increase spacing between mutating actions before retrying.")
+		}
+	}
+	if policy.PatternRules.DisallowDefaultActionTrios && hasDefaultActionTrio(actionTypes) {
+		finding := "default mutating action trio pattern was detected in a single run"
+		result.Findings = append(result.Findings, finding)
+		result.HardFindings = append(result.HardFindings, finding)
+		result.NextActions = append(result.NextActions, "Use a less repetitive action pattern and avoid bundled engage/reply/submit loops.")
+	}
+
+	if policy.PatternRules.RequireSourceDiversity && metrics != nil && metrics.SourcePathConcentration >= 0.85 {
+		finding := fmt.Sprintf("source_path_concentration=%.2f is too high for require_source_diversity", metrics.SourcePathConcentration)
+		result.Findings = append(result.Findings, finding)
+		result.NextActions = append(result.NextActions, "Use more diverse source paths before additional mutating actions.")
+	}
+	if policy.TextReuse.RejectHighSimilarity && metrics != nil && metrics.TextReuseRiskScore >= 0.60 {
+		finding := fmt.Sprintf("text_reuse_risk_score=%.2f indicates repeated messaging", metrics.TextReuseRiskScore)
+		result.Findings = append(result.Findings, finding)
+		result.NextActions = append(result.NextActions, "Rewrite outbound text with stronger variation before retrying.")
+	}
+
+	if evaluationPassed && policy.ModePolicy.AllowNoActionSuccess && policy.ModePolicy.RequireNoActionEvidence && mutatingCount == 0 {
+		missing := missingNoActionEvidence(policy.ModePolicy.NoActionEvidenceRequired, evidence)
+		if len(missing) > 0 {
+			finding := fmt.Sprintf("no-action success is missing required evidence: %s", strings.Join(missing, "; "))
+			result.Findings = append(result.Findings, finding)
+			result.HardFindings = append(result.HardFindings, finding)
+			result.NextActions = append(result.NextActions, "Record observed context, skipped action, safety reason, and safer next step before passing no-action outcomes.")
+		}
+	}
+
+	if isHighRiskEngineBlockingPolicy(policy) && len(result.HardFindings) > 0 {
+		result.HardBlock = true
+	}
+	result.Findings = uniqueTrimmedStrings(result.Findings)
+	result.HardFindings = uniqueTrimmedStrings(result.HardFindings)
+	result.NextActions = uniqueTrimmedStrings(result.NextActions)
+	return result
+}
+
+func mergeAutomationSafetyFindingsIntoEvaluation(evaluation assistant.Evaluation, check automationSafetyCheckResult) assistant.Evaluation {
+	if len(check.Findings) == 0 {
+		return evaluation
+	}
+	evaluation.Passed = false
+	if check.HardBlock {
+		if evaluation.Score > 20 {
+			evaluation.Score = 20
+		}
+	} else if evaluation.Score > 55 {
+		evaluation.Score = 55
+	}
+
+	missing := append([]string{}, evaluation.MissingRequirements...)
+	for _, finding := range check.Findings {
+		missing = append(missing, "Automation safety: "+finding)
+	}
+	evaluation.MissingRequirements = uniqueTrimmedStrings(missing)
+
+	summaryPrefix := "Automation safety findings: " + strings.Join(check.Findings, "; ")
+	evaluation.Summary = firstNonEmpty(summaryPrefix, evaluation.Summary)
+
+	nextActions := append([]string{}, check.NextActions...)
+	if strings.TrimSpace(evaluation.NextActionForGenerator) != "" {
+		nextActions = append(nextActions, evaluation.NextActionForGenerator)
+	}
+	evaluation.NextActionForGenerator = strings.Join(uniqueTrimmedStrings(nextActions), " ")
+	return evaluation
+}
+
+func validateSchedulerAutomationSafety(
+	policy *assistant.AutomationSafetyPolicy,
+	metrics *assistant.BrowserRecentActivityMetrics,
+	now time.Time,
+	scheduledTimes []time.Time,
+) string {
+	if !isHighRiskEngineBlockingPolicy(policy) {
+		return ""
+	}
+	if len(scheduledTimes) == 0 {
+		return ""
+	}
+
+	if limit := policy.RateLimits.MaxRepliesPer24h; limit > 0 && metrics != nil && metrics.ReplyActionCount >= limit {
+		return fmt.Sprintf("Automation safety hard-limit violation: rolling reply count (%d) reached max_replies_per_24h=%d, so no additional high-risk follow-up can be scheduled.", metrics.ReplyActionCount, limit)
+	}
+
+	sorted := append([]time.Time(nil), scheduledTimes...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Before(sorted[j])
+	})
+
+	if minSpacing := policy.RateLimits.MinSpacingMinutes; minSpacing > 0 {
+		minSpacingDuration := time.Duration(minSpacing) * time.Minute
+		for _, scheduledFor := range sorted {
+			if scheduledFor.Sub(now) < minSpacingDuration {
+				return fmt.Sprintf("Automation safety hard-limit violation: scheduled follow-up at %s is below min_spacing_minutes=%d from now.", scheduledFor.UTC().Format(time.RFC3339), minSpacing)
+			}
+		}
+		for idx := 1; idx < len(sorted); idx++ {
+			gap := sorted[idx].Sub(sorted[idx-1])
+			if gap < minSpacingDuration {
+				return fmt.Sprintf("Automation safety hard-limit violation: follow-up spacing (%s) is below min_spacing_minutes=%d.", gap.Round(time.Second), minSpacing)
+			}
+		}
+
+		if policy.PatternRules.DisallowFixedShortFollowup && len(sorted) >= 2 {
+			intervals := make([]time.Duration, 0, len(sorted)-1)
+			for idx := 1; idx < len(sorted); idx++ {
+				intervals = append(intervals, sorted[idx].Sub(sorted[idx-1]))
+			}
+			if len(intervals) > 0 {
+				first := intervals[0]
+				allEqual := true
+				allShort := first <= 2*minSpacingDuration
+				for _, interval := range intervals[1:] {
+					if interval != first {
+						allEqual = false
+					}
+					if interval > 2*minSpacingDuration {
+						allShort = false
+					}
+				}
+				if allEqual && allShort {
+					return fmt.Sprintf("Automation safety hard-limit violation: fixed short follow-up cadence (%s) is disallowed for high-risk scheduling.", first.Round(time.Second))
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+func isHighRiskEngineBlockingPolicy(policy *assistant.AutomationSafetyPolicy) bool {
+	if policy == nil {
+		return false
+	}
+	return policy.Profile == assistant.AutomationSafetyProfileBrowserHighRiskEngagement &&
+		policy.Enforcement == assistant.AutomationSafetyEnforcementEngineBlocking
+}
+
+func countMutatingAndReplyActions(actions []assistant.BrowserActionRecord) (int, int, []time.Time, []assistant.BrowserActionType) {
+	mutatingCount := 0
+	replyCount := 0
+	mutatingTimes := make([]time.Time, 0, len(actions))
+	actionTypes := make([]assistant.BrowserActionType, 0, len(actions))
+	for _, action := range actions {
+		actionTypes = append(actionTypes, action.ActionType)
+		if action.ActionType == assistant.BrowserActionTypeReply {
+			replyCount++
+		}
+		if action.AccountStateChanged {
+			mutatingCount++
+			mutatingTimes = append(mutatingTimes, action.OccurredAt.UTC())
+		}
+	}
+	sort.Slice(mutatingTimes, func(i, j int) bool {
+		return mutatingTimes[i].Before(mutatingTimes[j])
+	})
+	return mutatingCount, replyCount, mutatingTimes, actionTypes
+}
+
+func violatesMinimumSpacing(mutatingTimes []time.Time, minSpacingMinutes int) (bool, string) {
+	if len(mutatingTimes) < 2 || minSpacingMinutes <= 0 {
+		return false, ""
+	}
+	threshold := time.Duration(minSpacingMinutes) * time.Minute
+	for idx := 1; idx < len(mutatingTimes); idx++ {
+		gap := mutatingTimes[idx].Sub(mutatingTimes[idx-1])
+		if gap < threshold {
+			return true, gap.Round(time.Second).String()
+		}
+	}
+	return false, ""
+}
+
+func hasDefaultActionTrio(actionTypes []assistant.BrowserActionType) bool {
+	hasEngage := false
+	hasReply := false
+	hasSubmitLike := false
+	for _, actionType := range actionTypes {
+		switch actionType {
+		case assistant.BrowserActionTypeEngage:
+			hasEngage = true
+		case assistant.BrowserActionTypeReply:
+			hasReply = true
+		case assistant.BrowserActionTypeSubmit, assistant.BrowserActionTypeInput:
+			hasSubmitLike = true
+		}
+	}
+	return hasEngage && hasReply && hasSubmitLike
+}
+
+func missingNoActionEvidence(requirements []string, evidence []assistant.Evidence) []string {
+	if len(requirements) == 0 {
+		return nil
+	}
+	corpus := strings.ToLower(strings.TrimSpace(evidenceCorpus(evidence)))
+	if corpus == "" {
+		return append([]string{}, requirements...)
+	}
+	missing := make([]string, 0, len(requirements))
+	for _, requirement := range requirements {
+		req := strings.TrimSpace(requirement)
+		if req == "" {
+			continue
+		}
+		if !noActionRequirementSatisfied(strings.ToLower(req), corpus) {
+			missing = append(missing, req)
+		}
+	}
+	return missing
+}
+
+func evidenceCorpus(evidence []assistant.Evidence) string {
+	parts := make([]string, 0, len(evidence)*2)
+	for _, item := range evidence {
+		if strings.TrimSpace(item.Summary) != "" {
+			parts = append(parts, item.Summary)
+		}
+		if strings.TrimSpace(item.Detail) != "" {
+			parts = append(parts, item.Detail)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func noActionRequirementSatisfied(requirement string, corpus string) bool {
+	if strings.Contains(corpus, requirement) {
+		return true
+	}
+	tokens := significantTokens(requirement)
+	if len(tokens) == 0 {
+		return false
+	}
+	hits := 0
+	for _, token := range tokens {
+		if strings.Contains(corpus, token) {
+			hits++
+		}
+	}
+	if len(tokens) <= 2 {
+		return hits >= 1
+	}
+	return hits >= 2
+}
+
+func significantTokens(value string) []string {
+	stopwords := map[string]struct{}{
+		"what": {}, "that": {}, "made": {}, "action": {}, "was": {}, "for": {}, "and": {},
+		"the": {}, "this": {}, "with": {}, "have": {}, "from": {}, "next": {}, "step": {},
+		"should": {}, "happen": {}, "safe": {}, "safer": {},
+	}
+	parts := strings.Fields(strings.ToLower(value))
+	tokens := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.Trim(part, ".,;:!?()[]{}\"'`")
+		if len(trimmed) < 4 {
+			continue
+		}
+		if _, skip := stopwords[trimmed]; skip {
+			continue
+		}
+		tokens = append(tokens, trimmed)
+	}
+	return uniqueTrimmedStrings(tokens)
+}
+
+func uniqueTrimmedStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
 }
 
 func summarizePrompt(bundle prompting.Bundle) string {
