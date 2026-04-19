@@ -154,10 +154,15 @@ func (r *CodexRuntime) Execute(ctx context.Context, role assistant.AttemptRole, 
 
 	for _, step := range result.BrowserSteps {
 		response.WebSteps = append(response.WebSteps, assistant.WebStep{
-			Title:      step.Title,
-			URL:        step.URL,
-			Summary:    strings.TrimSpace(step.Summary),
-			OccurredAt: normalizeTime(step.OccurredAt, r.now()),
+			Title:         step.Title,
+			URL:           step.URL,
+			Summary:       strings.TrimSpace(step.Summary),
+			ActionName:    strings.TrimSpace(step.Action.Name),
+			ActionTarget:  strings.TrimSpace(step.Action.Target),
+			ActionRef:     strings.TrimSpace(step.Action.Ref),
+			ActionValue:   strings.TrimSpace(step.Action.Value),
+			ActionSession: strings.TrimSpace(step.Action.Session),
+			OccurredAt:    normalizeTime(step.OccurredAt, r.now()),
 		})
 		response.Evidence = append(response.Evidence, assistant.Evidence{
 			Kind:      assistant.EvidenceKindWebStep,

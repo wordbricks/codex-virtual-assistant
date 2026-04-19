@@ -88,16 +88,18 @@ type AnswerOutput struct {
 }
 
 type EvaluatorInput struct {
-	Run       assistant.Run
-	Attempt   assistant.Attempt
-	Artifacts []assistant.Artifact
-	Evidence  []assistant.Evidence
+	Run            assistant.Run
+	Attempt        assistant.Attempt
+	Artifacts      []assistant.Artifact
+	Evidence       []assistant.Evidence
+	RecentActivity *assistant.BrowserRecentActivityMetrics
 }
 
 type SchedulerInput struct {
-	Run       assistant.Run
-	Artifacts []assistant.Artifact
-	Evidence  []assistant.Evidence
+	Run            assistant.Run
+	Artifacts      []assistant.Artifact
+	Evidence       []assistant.Evidence
+	RecentActivity *assistant.BrowserRecentActivityMetrics
 }
 
 type SchedulerOutput struct {
@@ -435,6 +437,7 @@ func BuildEvaluatorPrompt(input EvaluatorInput) Bundle {
 	appendContractContext(builder, input.Run.TaskSpec)
 	fmt.Fprintf(builder, "Artifacts submitted: %d\n", len(input.Artifacts))
 	fmt.Fprintf(builder, "Evidence items submitted: %d\n", len(input.Evidence))
+	appendRecentActivityMetrics(builder, input.RecentActivity)
 	return Bundle{
 		System: "You are the evaluator for a WTL GAN-policy based assistant. Judge completion strictly against the accepted contract and return strict JSON with passed, score, summary, missing_requirements, incorrect_claims, evidence_checked, and next_action_for_generator.",
 		User:   strings.TrimSpace(builder.String()),
@@ -495,6 +498,7 @@ func BuildSchedulerPrompt(input SchedulerInput) Bundle {
 	}
 	appendArtifactHighlights(builder, input.Artifacts, 6)
 	appendEvidenceHighlights(builder, input.Evidence, 10)
+	appendRecentActivityMetrics(builder, input.RecentActivity)
 
 	return Bundle{
 		System: strings.TrimSpace(`
@@ -961,6 +965,22 @@ func appendEvidenceHighlights(builder *strings.Builder, evidence []assistant.Evi
 		item := evidence[idx]
 		fmt.Fprintf(builder, "- [%s] %s\n", item.Kind, firstNonEmpty(item.Summary, item.Detail))
 	}
+}
+
+func appendRecentActivityMetrics(builder *strings.Builder, metrics *assistant.BrowserRecentActivityMetrics) {
+	if metrics == nil {
+		fmt.Fprintf(builder, "Recent browser activity metrics: unavailable.\n")
+		return
+	}
+	fmt.Fprintf(builder, "Recent browser activity metrics:\n")
+	fmt.Fprintf(builder, "- window: %s to %s\n", metrics.WindowStart.Format(time.RFC3339), metrics.WindowEnd.Format(time.RFC3339))
+	fmt.Fprintf(builder, "- total_action_count=%d\n", metrics.TotalActionCount)
+	fmt.Fprintf(builder, "- mutating_action_count=%d\n", metrics.MutatingActionCount)
+	fmt.Fprintf(builder, "- reply_action_count=%d\n", metrics.ReplyActionCount)
+	fmt.Fprintf(builder, "- recent_mutation_density=%.4f\n", metrics.RecentMutationDensity)
+	fmt.Fprintf(builder, "- source_path_concentration=%.4f\n", metrics.SourcePathConcentration)
+	fmt.Fprintf(builder, "- repeated_action_sequence_score=%.4f\n", metrics.RepeatedActionSequenceScore)
+	fmt.Fprintf(builder, "- text_reuse_risk_score=%.4f\n", metrics.TextReuseRiskScore)
 }
 
 func appendToolCallHighlights(builder *strings.Builder, toolCalls []assistant.ToolCall, limit int) {

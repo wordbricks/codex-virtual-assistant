@@ -329,13 +329,57 @@ type ToolCall struct {
 }
 
 type WebStep struct {
-	ID         string    `json:"id"`
-	RunID      string    `json:"run_id"`
-	AttemptID  string    `json:"attempt_id"`
-	Title      string    `json:"title"`
-	URL        string    `json:"url,omitempty"`
-	Summary    string    `json:"summary"`
-	OccurredAt time.Time `json:"occurred_at"`
+	ID            string    `json:"id"`
+	RunID         string    `json:"run_id"`
+	AttemptID     string    `json:"attempt_id"`
+	Title         string    `json:"title"`
+	URL           string    `json:"url,omitempty"`
+	Summary       string    `json:"summary"`
+	ActionName    string    `json:"action_name,omitempty"`
+	ActionTarget  string    `json:"action_target,omitempty"`
+	ActionRef     string    `json:"action_ref,omitempty"`
+	ActionValue   string    `json:"action_value,omitempty"`
+	ActionSession string    `json:"action_session,omitempty"`
+	OccurredAt    time.Time `json:"occurred_at"`
+}
+
+type BrowserActionType string
+
+const (
+	BrowserActionTypeUnknown  BrowserActionType = "unknown"
+	BrowserActionTypeRead     BrowserActionType = "read"
+	BrowserActionTypeNavigate BrowserActionType = "navigate"
+	BrowserActionTypeInput    BrowserActionType = "input"
+	BrowserActionTypeSubmit   BrowserActionType = "submit"
+	BrowserActionTypeReply    BrowserActionType = "reply"
+	BrowserActionTypeEngage   BrowserActionType = "engage"
+)
+
+type BrowserActionRecord struct {
+	ID                  string            `json:"id"`
+	RunID               string            `json:"run_id"`
+	AttemptID           string            `json:"attempt_id"`
+	ProjectSlug         string            `json:"project_slug,omitempty"`
+	ActionType          BrowserActionType `json:"action_type"`
+	ActionName          string            `json:"action_name"`
+	TargetContext       string            `json:"target_context,omitempty"`
+	SourceContext       string            `json:"source_context,omitempty"`
+	SourceURL           string            `json:"source_url,omitempty"`
+	AccountStateChanged bool              `json:"account_state_changed"`
+	TextFingerprint     string            `json:"text_fingerprint,omitempty"`
+	OccurredAt          time.Time         `json:"occurred_at"`
+}
+
+type BrowserRecentActivityMetrics struct {
+	WindowStart                 time.Time `json:"window_start"`
+	WindowEnd                   time.Time `json:"window_end"`
+	TotalActionCount            int       `json:"total_action_count"`
+	MutatingActionCount         int       `json:"mutating_action_count"`
+	ReplyActionCount            int       `json:"reply_action_count"`
+	RecentMutationDensity       float64   `json:"recent_mutation_density"`
+	SourcePathConcentration     float64   `json:"source_path_concentration"`
+	RepeatedActionSequenceScore float64   `json:"repeated_action_sequence_score"`
+	TextReuseRiskScore          float64   `json:"text_reuse_risk_score"`
 }
 
 type WaitRequest struct {

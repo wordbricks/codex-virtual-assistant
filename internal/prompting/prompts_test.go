@@ -375,6 +375,13 @@ func TestBuildAndDecodeSchedulerPrompt(t *testing.T) {
 		},
 		Artifacts: []assistant.Artifact{{Title: "Hospital shortlist", Kind: assistant.ArtifactKindReport, MIMEType: "text/markdown"}},
 		Evidence:  []assistant.Evidence{{Summary: "Saint Mary Hospital listed oncology intake at +1-555-0100."}},
+		RecentActivity: &assistant.BrowserRecentActivityMetrics{
+			WindowStart:           time.Date(2026, time.April, 2, 13, 0, 0, 0, time.UTC),
+			WindowEnd:             time.Date(2026, time.April, 3, 13, 0, 0, 0, time.UTC),
+			MutatingActionCount:   2,
+			ReplyActionCount:      1,
+			RecentMutationDensity: 0.0833,
+		},
 	})
 
 	if !strings.Contains(bundle.System, "Finalize the deferred execution prompts") {
@@ -382,6 +389,9 @@ func TestBuildAndDecodeSchedulerPrompt(t *testing.T) {
 	}
 	if !strings.Contains(bundle.User, "Planned schedule entries") {
 		t.Fatalf("User prompt = %q, want schedule entry context", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "Recent browser activity metrics:") || !strings.Contains(bundle.User, "mutating_action_count=2") {
+		t.Fatalf("User prompt = %q, want recent activity metric context", bundle.User)
 	}
 
 	entries, err := DecodeSchedulerOutput([]byte(`{"entries":[{"scheduled_for":"2026-04-03T13:00:00Z","prompt":"Call Saint Mary Hospital at +1-555-0100."}]}`))
@@ -487,10 +497,23 @@ func TestBuildEvaluatorPromptIncludesOriginalUserRequest(t *testing.T) {
 				EvidenceRequired: []string{"Source URL", "Saved-list screenshot"},
 			},
 		},
+		RecentActivity: &assistant.BrowserRecentActivityMetrics{
+			WindowStart:                 time.Date(2026, time.April, 2, 0, 0, 0, 0, time.UTC),
+			WindowEnd:                   time.Date(2026, time.April, 3, 0, 0, 0, 0, time.UTC),
+			TotalActionCount:            4,
+			MutatingActionCount:         2,
+			SourcePathConcentration:     0.5,
+			TextReuseRiskScore:          0.25,
+			RecentMutationDensity:       0.0833,
+			RepeatedActionSequenceScore: 0.25,
+		},
 	})
 
 	if !strings.Contains(bundle.User, "Original user request: Verify the saved list against https://example.com/source.") {
 		t.Fatalf("User prompt = %q, want original user request context", bundle.User)
+	}
+	if !strings.Contains(bundle.User, "Recent browser activity metrics:") || !strings.Contains(bundle.User, "total_action_count=4") {
+		t.Fatalf("User prompt = %q, want recent activity metric context", bundle.User)
 	}
 }
 

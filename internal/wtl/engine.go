@@ -12,6 +12,7 @@ import (
 	"github.com/siisee11/CodexVirtualAssistant/internal/config"
 	"github.com/siisee11/CodexVirtualAssistant/internal/policy/gan"
 	"github.com/siisee11/CodexVirtualAssistant/internal/prompting"
+	"github.com/siisee11/CodexVirtualAssistant/internal/safety"
 	"github.com/siisee11/CodexVirtualAssistant/internal/store"
 	"github.com/siisee11/CodexVirtualAssistant/internal/wiki"
 )
@@ -29,9 +30,11 @@ type Repository interface {
 	AddEvaluation(context.Context, assistant.Evaluation) error
 	AddToolCall(context.Context, assistant.ToolCall) error
 	AddWebStep(context.Context, assistant.WebStep) error
+	AddBrowserAction(context.Context, assistant.BrowserActionRecord) error
 	AddWaitRequest(context.Context, assistant.WaitRequest) error
 	GetRun(context.Context, string) (assistant.Run, error)
 	GetRunRecord(context.Context, string) (store.RunRecord, error)
+	ListBrowserActionsByProject(context.Context, string, time.Time, time.Time) ([]assistant.BrowserActionRecord, error)
 	SaveScheduledRun(context.Context, assistant.ScheduledRun) error
 }
 
@@ -743,11 +746,17 @@ func (e *RunEngine) executeEvaluator(ctx context.Context, record *store.RunRecor
 		return "", e.failRun(ctx, record.Run, "Cannot evaluate because no generator attempt was found.", ErrInvalidRunState)
 	}
 
+	metrics, err := e.recentActivityMetrics(ctx, record.Run)
+	if err != nil {
+		return "", e.failRun(ctx, record.Run, fmt.Sprintf("Could not compute recent browser activity metrics: %v", err), err)
+	}
+
 	prompt := prompting.BuildEvaluatorPrompt(prompting.EvaluatorInput{
-		Run:       record.Run,
-		Attempt:   *generatorAttempt,
-		Artifacts: record.Artifacts,
-		Evidence:  record.Evidence,
+		Run:            record.Run,
+		Attempt:        *generatorAttempt,
+		Artifacts:      record.Artifacts,
+		Evidence:       record.Evidence,
+		RecentActivity: metrics,
 	})
 
 	attempt, response, err := e.executeAttempt(ctx, record.Run, record.Attempts, assistant.AttemptRoleEvaluator, prompt, "", resumeInput, record.Run.Project.WorkspaceDir)
@@ -809,10 +818,16 @@ func (e *RunEngine) executeScheduler(ctx context.Context, record *store.RunRecor
 		return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseWikiIngesting, "No deferred work was scheduled. Updating project wiki memory.")
 	}
 
+	metrics, err := e.recentActivityMetrics(ctx, record.Run)
+	if err != nil {
+		return e.failRun(ctx, record.Run, fmt.Sprintf("Could not compute recent browser activity metrics: %v", err), err)
+	}
+
 	prompt := prompting.BuildSchedulerPrompt(prompting.SchedulerInput{
-		Run:       record.Run,
-		Artifacts: record.Artifacts,
-		Evidence:  record.Evidence,
+		Run:            record.Run,
+		Artifacts:      record.Artifacts,
+		Evidence:       record.Evidence,
+		RecentActivity: metrics,
 	})
 
 	attempt, response, err := e.executeAttempt(ctx, record.Run, record.Attempts, assistant.AttemptRoleScheduler, prompt, "", resumeInput, record.Run.Project.WorkspaceDir)
@@ -1059,13 +1074,13 @@ func (e *RunEngine) executeAttempt(ctx context.Context, run assistant.Run, exist
 	if err := e.repo.AddAttempt(ctx, attempt); err != nil {
 		return assistant.Attempt{}, PhaseResponse{}, err
 	}
-	if err := e.persistPhaseResponse(ctx, run.ID, attempt.ID, response, finishedAt); err != nil {
+	if err := e.persistPhaseResponse(ctx, run.ID, run.Project.Slug, attempt.ID, response, finishedAt); err != nil {
 		return assistant.Attempt{}, PhaseResponse{}, err
 	}
 	return attempt, response, nil
 }
 
-func (e *RunEngine) persistPhaseResponse(ctx context.Context, runID, attemptID string, response PhaseResponse, now time.Time) error {
+func (e *RunEngine) persistPhaseResponse(ctx context.Context, runID, projectSlug, attemptID string, response PhaseResponse, now time.Time) error {
 	for _, artifact := range response.Artifacts {
 		artifact.ID = firstNonEmpty(artifact.ID, assistant.NewID("artifact", now))
 		artifact.RunID = runID
@@ -1100,6 +1115,18 @@ func (e *RunEngine) persistPhaseResponse(ctx context.Context, runID, attemptID s
 		webStep.AttemptID = attemptID
 		webStep.OccurredAt = normalizeTime(webStep.OccurredAt, now)
 		if err := e.repo.AddWebStep(ctx, webStep); err != nil {
+			return err
+		}
+
+		actionRecord, ok := safety.BrowserActionRecordFromWebStep(projectSlug, webStep)
+		if !ok {
+			continue
+		}
+		actionRecord.ID = assistant.NewID("browser_action", webStep.OccurredAt)
+		actionRecord.RunID = runID
+		actionRecord.AttemptID = attemptID
+		actionRecord.OccurredAt = webStep.OccurredAt
+		if err := e.repo.AddBrowserAction(ctx, actionRecord); err != nil {
 			return err
 		}
 	}
@@ -1244,6 +1271,21 @@ func isTransientPhaseExecutionError(err error) bool {
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
 	return strings.Contains(message, "codex app server closed during phase execution") ||
 		strings.Contains(message, "codex app server closed")
+}
+
+func (e *RunEngine) recentActivityMetrics(ctx context.Context, run assistant.Run) (*assistant.BrowserRecentActivityMetrics, error) {
+	projectSlug := strings.TrimSpace(run.Project.Slug)
+	if projectSlug == "" {
+		return nil, nil
+	}
+	windowEnd := e.now().UTC()
+	windowStart := windowEnd.Add(-24 * time.Hour)
+	actions, err := e.repo.ListBrowserActionsByProject(ctx, projectSlug, windowStart, windowEnd)
+	if err != nil {
+		return nil, err
+	}
+	metrics := safety.ComputeRecentActivityMetrics(actions, windowStart, windowEnd)
+	return &metrics, nil
 }
 
 func normalizeTime(value time.Time, fallback time.Time) time.Time {
