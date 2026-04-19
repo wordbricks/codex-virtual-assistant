@@ -15,20 +15,30 @@ var (
 		"Concrete artifacts produced during the run, such as summaries, tables, or documents.",
 		"Evidence that the final output satisfies the user request and done definition.",
 	}
+	defaultHighRiskMaxAccountChangingActionsPerRun = 2
+	defaultHighRiskMaxRepliesPer24h                = 12
+	defaultHighRiskMinSpacingMinutes               = 20
+	defaultHighRiskNoActionEvidenceRequired        = []string{
+		"What was observed that made action risky.",
+		"What account-changing action was skipped.",
+		"Why the action was skipped for safety.",
+		"What safer follow-up step should happen next.",
+	}
 )
 
 type TaskSpecDraft struct {
-	Goal                  string        `json:"goal"`
-	UserRequestRaw        string        `json:"user_request_raw"`
-	Deliverables          []string      `json:"deliverables"`
-	Constraints           []string      `json:"constraints"`
-	ToolsAllowed          []string      `json:"tools_allowed"`
-	ToolsRequired         []string      `json:"tools_required"`
-	DoneDefinition        []string      `json:"done_definition"`
-	EvidenceRequired      []string      `json:"evidence_required"`
-	RiskFlags             []string      `json:"risk_flags"`
-	MaxGenerationAttempts int           `json:"max_generation_attempts"`
-	SchedulePlan          *SchedulePlan `json:"schedule_plan,omitempty"`
+	Goal                  string                  `json:"goal"`
+	UserRequestRaw        string                  `json:"user_request_raw"`
+	Deliverables          []string                `json:"deliverables"`
+	Constraints           []string                `json:"constraints"`
+	ToolsAllowed          []string                `json:"tools_allowed"`
+	ToolsRequired         []string                `json:"tools_required"`
+	DoneDefinition        []string                `json:"done_definition"`
+	EvidenceRequired      []string                `json:"evidence_required"`
+	RiskFlags             []string                `json:"risk_flags"`
+	AutomationSafety      *AutomationSafetyPolicy `json:"automation_safety,omitempty"`
+	MaxGenerationAttempts int                     `json:"max_generation_attempts"`
+	SchedulePlan          *SchedulePlan           `json:"schedule_plan,omitempty"`
 }
 
 type AcceptanceContractDraft struct {
@@ -119,6 +129,7 @@ func NormalizeTaskSpec(draft TaskSpecDraft, fallbackUserRequest string, defaultM
 		DoneDefinition:        doneDefinition,
 		EvidenceRequired:      evidenceRequired,
 		RiskFlags:             riskFlags,
+		AutomationSafety:      normalizeAutomationSafetyPolicy(draft.AutomationSafety),
 		MaxGenerationAttempts: maxAttempts,
 		SchedulePlan:          normalizeSchedulePlan(draft.SchedulePlan),
 	}
@@ -127,6 +138,53 @@ func NormalizeTaskSpec(draft TaskSpecDraft, fallbackUserRequest string, defaultM
 		return TaskSpec{}, err
 	}
 	return spec, nil
+}
+
+func normalizeAutomationSafetyPolicy(policy *AutomationSafetyPolicy) *AutomationSafetyPolicy {
+	if policy == nil {
+		return nil
+	}
+
+	normalized := *policy
+	if normalized.Profile == "" {
+		normalized.Profile = AutomationSafetyProfileNone
+	}
+	normalized.ModePolicy.AllowedSessionModes = cleanList(normalized.ModePolicy.AllowedSessionModes)
+	normalized.ModePolicy.NoActionEvidenceRequired = cleanList(normalized.ModePolicy.NoActionEvidenceRequired)
+
+	if normalized.Enforcement == "" {
+		switch normalized.Profile {
+		case AutomationSafetyProfileBrowserReadOnly, AutomationSafetyProfileNone:
+			normalized.Enforcement = AutomationSafetyEnforcementAdvisory
+		case AutomationSafetyProfileBrowserMutating:
+			normalized.Enforcement = AutomationSafetyEnforcementEvaluatorEnforced
+		case AutomationSafetyProfileBrowserHighRiskEngagement:
+			normalized.Enforcement = AutomationSafetyEnforcementEngineBlocking
+		}
+	}
+
+	if normalized.Profile == AutomationSafetyProfileBrowserHighRiskEngagement {
+		if normalized.RateLimits.MaxAccountChangingActionsPerRun == 0 {
+			normalized.RateLimits.MaxAccountChangingActionsPerRun = defaultHighRiskMaxAccountChangingActionsPerRun
+		}
+		if normalized.RateLimits.MaxRepliesPer24h == 0 {
+			normalized.RateLimits.MaxRepliesPer24h = defaultHighRiskMaxRepliesPer24h
+		}
+		if normalized.RateLimits.MinSpacingMinutes == 0 {
+			normalized.RateLimits.MinSpacingMinutes = defaultHighRiskMinSpacingMinutes
+		}
+		if !normalized.ModePolicy.AllowNoActionSuccess {
+			normalized.ModePolicy.AllowNoActionSuccess = true
+		}
+		if !normalized.ModePolicy.RequireNoActionEvidence {
+			normalized.ModePolicy.RequireNoActionEvidence = true
+		}
+		if len(normalized.ModePolicy.NoActionEvidenceRequired) == 0 {
+			normalized.ModePolicy.NoActionEvidenceRequired = slices.Clone(defaultHighRiskNoActionEvidenceRequired)
+		}
+	}
+
+	return &normalized
 }
 
 func normalizeSchedulePlan(plan *SchedulePlan) *SchedulePlan {

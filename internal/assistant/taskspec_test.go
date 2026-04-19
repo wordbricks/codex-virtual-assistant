@@ -44,3 +44,42 @@ func TestNewDefaultTaskSpecProducesValidSpec(t *testing.T) {
 		t.Fatalf("Validate() error = %v", err)
 	}
 }
+
+func TestNormalizeTaskSpecAppliesHighRiskAutomationSafetyDefaults(t *testing.T) {
+	t.Parallel()
+
+	spec, err := NormalizeTaskSpec(TaskSpecDraft{
+		UserRequestRaw: "Reply to new comments with concise follow-ups.",
+		AutomationSafety: &AutomationSafetyPolicy{
+			Profile: AutomationSafetyProfileBrowserHighRiskEngagement,
+		},
+	}, "", 3)
+	if err != nil {
+		t.Fatalf("NormalizeTaskSpec() error = %v", err)
+	}
+
+	if spec.AutomationSafety == nil {
+		t.Fatal("AutomationSafety = nil, want normalized policy")
+	}
+	if spec.AutomationSafety.Enforcement != AutomationSafetyEnforcementEngineBlocking {
+		t.Fatalf("Enforcement = %q, want %q", spec.AutomationSafety.Enforcement, AutomationSafetyEnforcementEngineBlocking)
+	}
+	if spec.AutomationSafety.RateLimits.MaxAccountChangingActionsPerRun != 2 {
+		t.Fatalf("MaxAccountChangingActionsPerRun = %d, want 2", spec.AutomationSafety.RateLimits.MaxAccountChangingActionsPerRun)
+	}
+	if spec.AutomationSafety.RateLimits.MaxRepliesPer24h != 12 {
+		t.Fatalf("MaxRepliesPer24h = %d, want 12", spec.AutomationSafety.RateLimits.MaxRepliesPer24h)
+	}
+	if spec.AutomationSafety.RateLimits.MinSpacingMinutes != 20 {
+		t.Fatalf("MinSpacingMinutes = %d, want 20", spec.AutomationSafety.RateLimits.MinSpacingMinutes)
+	}
+	if !spec.AutomationSafety.ModePolicy.AllowNoActionSuccess {
+		t.Fatal("AllowNoActionSuccess = false, want true")
+	}
+	if !spec.AutomationSafety.ModePolicy.RequireNoActionEvidence {
+		t.Fatal("RequireNoActionEvidence = false, want true")
+	}
+	if len(spec.AutomationSafety.ModePolicy.NoActionEvidenceRequired) == 0 {
+		t.Fatal("NoActionEvidenceRequired is empty, want default evidence requirements")
+	}
+}
