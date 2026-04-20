@@ -634,6 +634,8 @@ Commands:
   schedule create --run ID --at WHEN "prompt"                   Create a scheduled run
   schedule update <scheduled_run_id> [--at WHEN] [--prompt P]   Update a pending scheduled run
   schedule list [--chat ID] [--status S]                        List scheduled runs
+    --at WHEN accepts RFC3339, relative durations (+30m), clock time (13:00),
+    or randexp(min,max) windows (for example 'randexp(45m,3h)').
   schedule show <scheduled_run_id>                              Show a scheduled run
   schedule cancel <scheduled_run_id>                            Cancel a pending scheduled run
   workspace lint [project_slug ...]                             Lint project workspace structure
