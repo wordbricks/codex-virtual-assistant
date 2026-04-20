@@ -23,7 +23,7 @@ This execution plan is the implementation tracker that breaks that active plan i
 
 ## Milestones
 
-- [ ] Milestone 1: Implement parser support in `internal/assistant/schedule.go` for randomized `randexp(min,max)` expressions with strict validation and concrete timestamp materialization.
+- [x] Milestone 1: Implement parser support in `internal/assistant/schedule.go` for randomized `randexp(min,max)` expressions with strict validation and concrete timestamp materialization.
 - [ ] Milestone 2: Add/extend tests for randomized parsing and compatibility with existing fixed scheduling semantics.
 - [ ] Milestone 3: Update scheduler prompt guidance in `internal/prompting/prompts.go` so randomized scheduling can be intentionally emitted for irregular cooldown windows.
 - [ ] Milestone 4: Update CLI/help and docs to expose randomized `--at` syntax for manual scheduling flows.
@@ -31,18 +31,25 @@ This execution plan is the implementation tracker that breaks that active plan i
 
 ## Current progress
 
-- Not started.
+- Milestone 1 completed: `ParseScheduledFor` now recognizes `randexp(min,max)` and materializes a concrete UTC timestamp at parse time.
+- Added strict parser validation for randomized expressions: exact two args, parseable durations, positive durations, and `max > min`.
+- Added truncated exponential inverse-CDF sampling helper with fixed `lambda=2.0` bias and sampler output guardrails (`[0,1)`).
+- Backward-compatible parsing paths remain intact for RFC3339, relative durations, and clock-time schedules.
+- Verification run: `go test ./internal/assistant ./internal/assistantapp ./internal/wtl` passed.
 
 ## Key decisions
 
 - Use `docs/exec-plans/active/add-non-normal-randomized-follow-up-scheduling.md` as the implementation source of truth.
 - Keep randomization opt-in and parser-centric so all scheduling entry points remain consistent.
 - Preserve backward compatibility for existing fixed scheduling inputs.
+- Use a single fixed truncated-exponential shape parameter (`lambda=2.0`) for Milestone 1 and defer tuning to follow-up iterations if needed.
+- Keep an internal sampler-injection helper (`parseRandExpScheduledForWithSampler`) to support deterministic tests in Milestone 2.
 - Require test-backed validation before each milestone commit.
 
 ## Remaining issues / open questions
 
-- No blocker identified at planning start.
+- Milestone 2 pending: add explicit randomized parser tests (valid bounds + invalid windows) and compatibility coverage assertions.
+- Need to confirm prompt/docs wording in Milestones 3-4 aligns with parser behavior and does not imply mandatory randomization.
 - `ARCHITECTURE.md` was not present in this worktree; `README.md` is used as architecture/context reference.
 
 ## Links to related documents
