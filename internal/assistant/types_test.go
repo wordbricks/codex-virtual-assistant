@@ -125,6 +125,126 @@ func TestParseScheduledForSupportsRelativeAndClockTimes(t *testing.T) {
 	}
 }
 
+func TestParseScheduledForSupportsRFC3339(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.April, 3, 12, 30, 0, 0, time.UTC)
+	absolute, err := ParseScheduledFor("2026-04-04T01:02:03Z", now)
+	if err != nil {
+		t.Fatalf("ParseScheduledFor(RFC3339) error = %v", err)
+	}
+	if want := time.Date(2026, time.April, 4, 1, 2, 3, 0, time.UTC); !absolute.Equal(want) {
+		t.Fatalf("absolute = %s, want %s", absolute, want)
+	}
+}
+
+func TestParseScheduledForSupportsRandExpWithinBounds(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.April, 3, 12, 30, 0, 0, time.UTC)
+	min := now.Add(45 * time.Minute)
+	max := now.Add(3 * time.Hour)
+
+	parsed, err := ParseScheduledFor("randexp(45m,3h)", now)
+	if err != nil {
+		t.Fatalf("ParseScheduledFor(randexp(45m,3h)) error = %v", err)
+	}
+	if parsed.Before(min) || parsed.After(max) {
+		t.Fatalf("randexp parsed = %s, want within [%s, %s]", parsed, min, max)
+	}
+}
+
+func TestParseRandExpScheduledForWithSamplerDeterministicBounds(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.April, 3, 12, 30, 0, 0, time.UTC)
+
+	minSample, ok, err := parseRandExpScheduledForWithSampler("randexp(45m,3h)", now, func() float64 { return 0 })
+	if err != nil {
+		t.Fatalf("parseRandExpScheduledForWithSampler(min) error = %v", err)
+	}
+	if !ok {
+		t.Fatal("parseRandExpScheduledForWithSampler(min) ok = false, want true")
+	}
+	if want := now.Add(45 * time.Minute); !minSample.Equal(want) {
+		t.Fatalf("minSample = %s, want %s", minSample, want)
+	}
+
+	upperSample, ok, err := parseRandExpScheduledForWithSampler("randexp(45m,3h)", now, func() float64 { return 0.999999 })
+	if err != nil {
+		t.Fatalf("parseRandExpScheduledForWithSampler(near-max) error = %v", err)
+	}
+	if !ok {
+		t.Fatal("parseRandExpScheduledForWithSampler(near-max) ok = false, want true")
+	}
+	lowerBound := now.Add(45 * time.Minute)
+	upperBound := now.Add(3 * time.Hour)
+	if upperSample.Before(lowerBound) || upperSample.After(upperBound) {
+		t.Fatalf("upperSample = %s, want within [%s, %s]", upperSample, lowerBound, upperBound)
+	}
+}
+
+func TestParseScheduledForRejectsInvalidRandExpExpressions(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.April, 3, 12, 30, 0, 0, time.UTC)
+	cases := []struct {
+		name      string
+		raw       string
+		wantError string
+	}{
+		{
+			name:      "missing_arg",
+			raw:       "randexp(45m)",
+			wantError: "must have exactly 2 duration args",
+		},
+		{
+			name:      "empty_min",
+			raw:       "randexp(,3h)",
+			wantError: "requires non-empty min,max durations",
+		},
+		{
+			name:      "invalid_min_duration",
+			raw:       "randexp(foo,3h)",
+			wantError: "parse min duration",
+		},
+		{
+			name:      "invalid_max_duration",
+			raw:       "randexp(45m,bar)",
+			wantError: "parse max duration",
+		},
+		{
+			name:      "non_positive_min",
+			raw:       "randexp(0m,3h)",
+			wantError: "durations must be > 0",
+		},
+		{
+			name:      "max_less_than_min",
+			raw:       "randexp(3h,45m)",
+			wantError: "max must be greater than min",
+		},
+		{
+			name:      "max_equals_min",
+			raw:       "randexp(45m,45m)",
+			wantError: "max must be greater than min",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseScheduledFor(tc.raw, now)
+			if err == nil {
+				t.Fatalf("ParseScheduledFor(%q) error = nil, want %q", tc.raw, tc.wantError)
+			}
+			if !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("ParseScheduledFor(%q) error = %q, want substring %q", tc.raw, err.Error(), tc.wantError)
+			}
+		})
+	}
+}
+
 func TestNextCronOccurrenceSupportsDailyMidnight(t *testing.T) {
 	t.Parallel()
 
