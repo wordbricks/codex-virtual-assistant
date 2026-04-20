@@ -1,6 +1,6 @@
 {
   "name": "@wordbricks/cva",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "description": "Codex Virtual Assistant CLI wrapper that installs the native cva binary.",
   "homepage": "https://github.com/wordbricks/codex-virtual-assistant",
   "bugs": {
