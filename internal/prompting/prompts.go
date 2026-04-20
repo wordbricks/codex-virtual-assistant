@@ -515,7 +515,9 @@ The JSON object must contain exactly these keys:
 Each entry object must contain exactly:
 - scheduled_for
 - prompt
-Use RFC3339 timestamps for scheduled_for whenever you can resolve them precisely.`),
+Use RFC3339 timestamps for scheduled_for whenever you can resolve them precisely.
+When exact follow-up timing is not required and an irregular cooldown window is safer, you may use randexp(min,max) (for example randexp(45m,3h)).
+For randexp(min,max), both min and max must be positive durations and max must be greater than min.`),
 		User: strings.TrimSpace(builder.String()),
 	}
 }
