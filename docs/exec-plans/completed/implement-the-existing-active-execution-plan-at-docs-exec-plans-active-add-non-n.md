@@ -1,6 +1,6 @@
 # Goal / scope
 
-Implement the active execution plan in `docs/exec-plans/active/add-non-normal-randomized-follow-up-scheduling.md` end-to-end as the source of truth.
+Implement the active execution plan in `docs/exec-plans/completed/add-non-normal-randomized-follow-up-scheduling.md` end-to-end as the source of truth.
 
 In scope:
 
@@ -27,7 +27,7 @@ This execution plan is the implementation tracker that breaks that active plan i
 - [x] Milestone 2: Add/extend tests for randomized parsing and compatibility with existing fixed scheduling semantics.
 - [x] Milestone 3: Update scheduler prompt guidance in `internal/prompting/prompts.go` so randomized scheduling can be intentionally emitted for irregular cooldown windows.
 - [x] Milestone 4: Update CLI/help and docs to expose randomized `--at` syntax for manual scheduling flows.
-- [ ] Milestone 5: Run full verification, complete plan bookkeeping (including moving completed active plan file), then commit/push final milestone updates and open PR with auto-merge enabled.
+- [x] Milestone 5: Run full verification, complete plan bookkeeping (including moving completed active plan file), then commit/push final milestone updates and open PR with auto-merge enabled.
 
 ## Current progress
 
@@ -40,11 +40,13 @@ This execution plan is the implementation tracker that breaks that active plan i
 - Milestone 3 completed: updated scheduler prompt instructions to keep RFC3339 as the preferred precise format while explicitly allowing `randexp(min,max)` for irregular cooldown windows.
 - Added explicit prompt constraints for randomized syntax validity (`min`/`max` positive durations, `max > min`) to align generated schedules with parser validation behavior.
 - Milestone 4 completed: updated CLI `printUsage()` help and README scheduled-work docs to explicitly list `--at` format options, including `randexp(min,max)` examples for manual `schedule create/update` flows.
-- Verification runs: `go test ./internal/assistant ./internal/assistantapp ./internal/wtl`, `go test ./internal/prompting ./internal/wtl ./internal/assistantapp`, and `go test ./cmd/cva ./internal/assistant ./internal/prompting ./internal/assistantapp ./internal/wtl` passed.
+- Milestone 5 completed: full repository verification passed via `go test ./...`.
+- Confirmed both scheduling entry points share the same parser path without new branching: WTL scheduler materialization (`internal/wtl/engine.go`) and manual/API schedule create/update resolution (`internal/assistantapp/service.go`) both call `assistant.ParseScheduledFor`.
+- Final bookkeeping completed: moved `docs/exec-plans/completed/add-non-normal-randomized-follow-up-scheduling.md` and this implementation tracker plan from `docs/exec-plans/active` to `docs/exec-plans/completed`.
 
 ## Key decisions
 
-- Use `docs/exec-plans/active/add-non-normal-randomized-follow-up-scheduling.md` as the implementation source of truth.
+- Use `docs/exec-plans/completed/add-non-normal-randomized-follow-up-scheduling.md` as the implementation source of truth.
 - Keep randomization opt-in and parser-centric so all scheduling entry points remain consistent.
 - Preserve backward compatibility for existing fixed scheduling inputs.
 - Use a single fixed truncated-exponential shape parameter (`lambda=2.0`) for Milestone 1 and defer tuning to follow-up iterations if needed.
@@ -52,12 +54,12 @@ This execution plan is the implementation tracker that breaks that active plan i
 - Exercise both public and helper parsing paths in tests so production behavior and boundary math remain coupled to one parser implementation.
 - Keep prompt wording preference-ordered: precise RFC3339 first, randomized windows as opt-in for irregular cooldown cases.
 - Surface randomized `--at` syntax in both CLI usage output and README examples so manual scheduling users can discover and apply the same parser capability used by scheduler output.
+- Keep parser-path convergence explicit across WTL and manual/API scheduling flows by verifying both call `assistant.ParseScheduledFor`.
 - Require test-backed validation before each milestone commit.
 
 ## Remaining issues / open questions
 
-- Milestone 5 pending: run final verification, move completed active plan into `docs/exec-plans/completed`, and finish final bookkeeping.
-- Confirm final completion iteration keeps milestone-by-milestone commit hygiene while moving the active source plan into completed.
+- None. Milestones 1-5 are complete and bookkeeping is finalized.
 - `ARCHITECTURE.md` was not present in this worktree; `README.md` is used as architecture/context reference.
 
 ## Links to related documents
@@ -65,5 +67,5 @@ This execution plan is the implementation tracker that breaks that active plan i
 - `AGENTS.md`
 - `README.md`
 - `docs/PLANS.md`
-- `docs/exec-plans/active/add-non-normal-randomized-follow-up-scheduling.md`
+- `docs/exec-plans/completed/add-non-normal-randomized-follow-up-scheduling.md`
 - `docs/automation-safety-policy.md`

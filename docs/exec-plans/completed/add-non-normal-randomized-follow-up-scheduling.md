@@ -88,11 +88,11 @@ Manual CLI behavior should remain aligned:
 
 ## Milestones
 
-- [ ] Milestone 1: Extend `ParseScheduledFor()` with `randexp(min,max)` support.
-- [ ] Milestone 2: Add unit tests covering valid windows, invalid windows, and boundary handling.
-- [ ] Milestone 3: Update the scheduler prompt so deferred follow-up work can intentionally choose the randomized syntax.
-- [ ] Milestone 4: Update CLI/help text or docs so manual schedule management users know the syntax exists.
-- [ ] Milestone 5: Verify that WTL scheduling and direct schedule creation both flow through the same parser path without additional branching.
+- [x] Milestone 1: Extend `ParseScheduledFor()` with `randexp(min,max)` support.
+- [x] Milestone 2: Add unit tests covering valid windows, invalid windows, and boundary handling.
+- [x] Milestone 3: Update the scheduler prompt so deferred follow-up work can intentionally choose the randomized syntax.
+- [x] Milestone 4: Update CLI/help text or docs so manual schedule management users know the syntax exists.
+- [x] Milestone 5: Verify that WTL scheduling and direct schedule creation both flow through the same parser path without additional branching.
 
 ## Implementation plan
 
@@ -189,5 +189,8 @@ Verification goals:
 
 ## Current progress
 
-- Planned only.
-- No code changes should be made as part of this document-only step.
+- Completed. `randexp(min,max)` parsing is implemented and materialized to concrete UTC timestamps at schedule creation time.
+- Coverage added for randomized parsing validity/bounds and compatibility with existing fixed scheduling inputs.
+- Scheduler prompt guidance updated to allow randomized windows when irregular cooldown spacing is appropriate.
+- CLI/help and README docs updated to expose manual `--at` support for `randexp(min,max)`.
+- Verified parser-path convergence across WTL scheduling and manual/API scheduling flows; full test suite passed before completion.
