@@ -756,13 +756,15 @@ func newTestAPIHandler(t *testing.T, executor *sequenceExecutor) http.Handler {
 	events.SetSnapshotLoader(repo)
 	runtime := wtl.NewCodexRuntime(executor, cfg.DefaultModel, time.Now)
 	engine := wtl.NewRunEngine(repo, runtime, events, policy, projectManager, wikiService, apiTestMessenger(), time.Now)
-	runs := assistantapp.NewRunService(context.Background(), repo, engine, policy, time.Now)
+	trackedEngine := &trackedEngine{inner: engine}
+	runs := assistantapp.NewRunService(context.Background(), repo, trackedEngine, policy, time.Now)
 	handler, err := NewHandler(cfg, runs, events, wikiService)
 	if err != nil {
 		t.Fatalf("NewHandler() error = %v", err)
 	}
 
 	t.Cleanup(func() {
+		trackedEngine.Wait()
 		_ = runtime.Close()
 		_ = repo.Close()
 	})
@@ -811,6 +813,31 @@ type sequenceExecutor struct {
 	mu    sync.Mutex
 	steps []executorStep
 	index int
+}
+
+type trackedEngine struct {
+	inner wtl.Engine
+	wg    sync.WaitGroup
+}
+
+func (e *trackedEngine) Start(ctx context.Context, run assistant.Run) error {
+	e.wg.Add(1)
+	defer e.wg.Done()
+	return e.inner.Start(ctx, run)
+}
+
+func (e *trackedEngine) Resume(ctx context.Context, runID string, input map[string]string) error {
+	e.wg.Add(1)
+	defer e.wg.Done()
+	return e.inner.Resume(ctx, runID, input)
+}
+
+func (e *trackedEngine) Cancel(ctx context.Context, runID string) error {
+	return e.inner.Cancel(ctx, runID)
+}
+
+func (e *trackedEngine) Wait() {
+	e.wg.Wait()
 }
 
 type executorStep struct {
