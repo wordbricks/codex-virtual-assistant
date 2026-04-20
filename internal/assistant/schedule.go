@@ -3,6 +3,8 @@ package assistant
 import (
 	"errors"
 	"fmt"
+	"math"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"time"
@@ -123,6 +125,11 @@ func ParseScheduledFor(raw string, now time.Time) (time.Time, error) {
 	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
 		return parsed.UTC(), nil
 	}
+	if parsed, ok, err := parseRandExpScheduledFor(value, now); err != nil {
+		return time.Time{}, err
+	} else if ok {
+		return parsed.UTC(), nil
+	}
 
 	if strings.HasPrefix(value, "+") || strings.HasPrefix(value, "-") {
 		duration, err := time.ParseDuration(value)
@@ -139,6 +146,71 @@ func ParseScheduledFor(raw string, now time.Time) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf("unsupported scheduled_for value %q", value)
+}
+
+const randExpLambda = 2.0
+
+func parseRandExpScheduledFor(raw string, now time.Time) (time.Time, bool, error) {
+	return parseRandExpScheduledForWithSampler(raw, now, rand.Float64)
+}
+
+func parseRandExpScheduledForWithSampler(raw string, now time.Time, sampler func() float64) (time.Time, bool, error) {
+	if !strings.HasPrefix(raw, "randexp(") || !strings.HasSuffix(raw, ")") {
+		return time.Time{}, false, nil
+	}
+	if sampler == nil {
+		return time.Time{}, true, errors.New("randexp sampler is required")
+	}
+
+	inner := strings.TrimSpace(raw[len("randexp(") : len(raw)-1])
+	parts := strings.Split(inner, ",")
+	if len(parts) != 2 {
+		return time.Time{}, true, fmt.Errorf("randexp %q must have exactly 2 duration args", raw)
+	}
+
+	minRaw := strings.TrimSpace(parts[0])
+	maxRaw := strings.TrimSpace(parts[1])
+	if minRaw == "" || maxRaw == "" {
+		return time.Time{}, true, fmt.Errorf("randexp %q requires non-empty min,max durations", raw)
+	}
+
+	minDuration, err := time.ParseDuration(minRaw)
+	if err != nil {
+		return time.Time{}, true, fmt.Errorf("randexp parse min duration %q: %w", minRaw, err)
+	}
+	maxDuration, err := time.ParseDuration(maxRaw)
+	if err != nil {
+		return time.Time{}, true, fmt.Errorf("randexp parse max duration %q: %w", maxRaw, err)
+	}
+	if minDuration <= 0 || maxDuration <= 0 {
+		return time.Time{}, true, fmt.Errorf("randexp durations must be > 0, got min=%s max=%s", minDuration, maxDuration)
+	}
+	if maxDuration <= minDuration {
+		return time.Time{}, true, fmt.Errorf("randexp max must be greater than min, got min=%s max=%s", minDuration, maxDuration)
+	}
+
+	u := sampler()
+	if math.IsNaN(u) || math.IsInf(u, 0) || u < 0 || u >= 1 {
+		return time.Time{}, true, fmt.Errorf("randexp sampler output %.6f must be in [0,1)", u)
+	}
+
+	span := maxDuration - minDuration
+	sampled := minDuration + time.Duration(truncatedExponentialQuantile(u, randExpLambda)*float64(span))
+	return now.Add(sampled).UTC(), true, nil
+}
+
+func truncatedExponentialQuantile(u float64, lambda float64) float64 {
+	if u <= 0 {
+		return 0
+	}
+	if u >= 1 {
+		return 1
+	}
+	if lambda <= 0 {
+		return u
+	}
+	normalizer := 1 - math.Exp(-lambda)
+	return -math.Log(1-u*normalizer) / lambda
 }
 
 type CronExpr struct {
