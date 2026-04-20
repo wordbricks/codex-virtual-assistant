@@ -26,7 +26,7 @@ This execution plan is the implementation tracker that breaks that active plan i
 - [x] Milestone 1: Implement parser support in `internal/assistant/schedule.go` for randomized `randexp(min,max)` expressions with strict validation and concrete timestamp materialization.
 - [x] Milestone 2: Add/extend tests for randomized parsing and compatibility with existing fixed scheduling semantics.
 - [x] Milestone 3: Update scheduler prompt guidance in `internal/prompting/prompts.go` so randomized scheduling can be intentionally emitted for irregular cooldown windows.
-- [ ] Milestone 4: Update CLI/help and docs to expose randomized `--at` syntax for manual scheduling flows.
+- [x] Milestone 4: Update CLI/help and docs to expose randomized `--at` syntax for manual scheduling flows.
 - [ ] Milestone 5: Run full verification, complete plan bookkeeping (including moving completed active plan file), then commit/push final milestone updates and open PR with auto-merge enabled.
 
 ## Current progress
@@ -39,7 +39,8 @@ This execution plan is the implementation tracker that breaks that active plan i
 - Added explicit RFC3339 parse compatibility test to keep fixed scheduling semantics covered alongside existing relative and clock-time tests.
 - Milestone 3 completed: updated scheduler prompt instructions to keep RFC3339 as the preferred precise format while explicitly allowing `randexp(min,max)` for irregular cooldown windows.
 - Added explicit prompt constraints for randomized syntax validity (`min`/`max` positive durations, `max > min`) to align generated schedules with parser validation behavior.
-- Verification runs: `go test ./internal/assistant ./internal/assistantapp ./internal/wtl` and `go test ./internal/prompting ./internal/wtl ./internal/assistantapp` passed.
+- Milestone 4 completed: updated CLI `printUsage()` help and README scheduled-work docs to explicitly list `--at` format options, including `randexp(min,max)` examples for manual `schedule create/update` flows.
+- Verification runs: `go test ./internal/assistant ./internal/assistantapp ./internal/wtl`, `go test ./internal/prompting ./internal/wtl ./internal/assistantapp`, and `go test ./cmd/cva ./internal/assistant ./internal/prompting ./internal/assistantapp ./internal/wtl` passed.
 
 ## Key decisions
 
@@ -50,12 +51,13 @@ This execution plan is the implementation tracker that breaks that active plan i
 - Keep an internal sampler-injection helper (`parseRandExpScheduledForWithSampler`) to support deterministic tests in Milestone 2.
 - Exercise both public and helper parsing paths in tests so production behavior and boundary math remain coupled to one parser implementation.
 - Keep prompt wording preference-ordered: precise RFC3339 first, randomized windows as opt-in for irregular cooldown cases.
+- Surface randomized `--at` syntax in both CLI usage output and README examples so manual scheduling users can discover and apply the same parser capability used by scheduler output.
 - Require test-backed validation before each milestone commit.
 
 ## Remaining issues / open questions
 
-- Milestone 4 pending: document randomized `--at` syntax for CLI users and examples.
 - Milestone 5 pending: run final verification, move completed active plan into `docs/exec-plans/completed`, and finish final bookkeeping.
+- Confirm final completion iteration keeps milestone-by-milestone commit hygiene while moving the active source plan into completed.
 - `ARCHITECTURE.md` was not present in this worktree; `README.md` is used as architecture/context reference.
 
 ## Links to related documents

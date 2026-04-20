@@ -121,10 +121,14 @@ cva resume <run_id> key=value
 For scheduled work:
 
 ```bash
+cva schedule create --run <run_id> --at "+30m" "Follow up with the next outreach batch"
+cva schedule update <scheduled_run_id> --at "randexp(45m,3h)"
 cva schedule list
 cva schedule show <scheduled_run_id>
 cva schedule cancel <scheduled_run_id>
 ```
+
+`--at` supports RFC3339 timestamps, relative durations (for example `+30m`), clock times (`13:00`), and randomized windows with `randexp(min,max)`.
 
 ## Run locally
 
