@@ -2,6 +2,7 @@ import type {
   BootstrapResponse,
   ChatRecord,
   ChatSummary,
+  CreateProjectResponse,
   ProjectDetailResponse,
   ProjectRunsResponse,
   ProjectSummary,
@@ -24,16 +25,28 @@ export async function fetchJSON<T>(url: string, options: RequestInit = {}): Prom
   });
 
   const text = await response.text();
-  const payload = text ? (JSON.parse(text) as T) : (null as T);
-  if (!response.ok) {
-    throw new Error(typeof payload === "string" ? payload : `request failed ${response.status}`);
+  let payload: T | string | null = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text) as T;
+    } catch {
+      payload = text;
+    }
   }
-  return payload;
+  if (!response.ok) {
+    throw new Error(typeof payload === "string" ? payload.trim() : `request failed ${response.status}`);
+  }
+  return payload as T;
 }
 
 export const apiClient = {
   bootstrap: () => fetchJSON<BootstrapResponse>("/api/v1/bootstrap"),
   listProjects: () => fetchJSON<{ projects: ProjectSummary[] }>("/api/v1/projects"),
+  createProject: (body: { slug?: string; name: string; description?: string }) =>
+    fetchJSON<CreateProjectResponse>("/api/v1/projects", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   getProjectDetail: (slug: string) =>
     fetchJSON<ProjectDetailResponse>(`/api/v1/projects/${encodeURIComponent(slug)}`),
   listWikiPages: (slug: string) =>

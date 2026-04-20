@@ -88,7 +88,7 @@ func NewWithExecutorAndMessenger(cfg config.Config, executor wtl.CodexPhaseExecu
 	runs := assistantapp.NewRunService(context.Background(), repo, engine, policy, time.Now)
 	backgroundScheduler := scheduler.New(repo, runs, events, cfg.SchedulerInterval, time.Now)
 
-	handler, err := api.NewHandler(cfg, runs, events, wikiService)
+	handler, err := api.NewHandler(cfg, runs, events, wikiService, projectManager)
 	if err != nil {
 		return nil, err
 	}

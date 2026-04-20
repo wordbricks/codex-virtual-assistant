@@ -424,6 +424,47 @@ func TestProjectsAPIListsWikiAndSupportsIndexAndLint(t *testing.T) {
 	}
 }
 
+func TestProjectsAPICreatesProjectScaffold(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestAPIHandler(t, &sequenceExecutor{})
+
+	createResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/projects", map[string]any{
+		"name":        "Launch Plan",
+		"description": "Track launch work and follow-up execution.",
+	})
+	if createResponse.Code != http.StatusCreated {
+		t.Fatalf("POST /projects status = %d, want %d; body = %s", createResponse.Code, http.StatusCreated, createResponse.Body.String())
+	}
+
+	var created createProjectResponse
+	if err := json.Unmarshal(createResponse.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create project response: %v", err)
+	}
+	if created.Project.Slug != "launch-plan" {
+		t.Fatalf("created.Project.Slug = %q, want launch-plan", created.Project.Slug)
+	}
+	if !created.Project.WikiEnabled || created.Project.WikiPageCount == 0 {
+		t.Fatalf("created.Project = %#v, want wiki scaffold", created.Project)
+	}
+
+	detailResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/projects/launch-plan", nil)
+	if detailResponse.Code != http.StatusOK {
+		t.Fatalf("GET /projects/launch-plan status = %d, want %d", detailResponse.Code, http.StatusOK)
+	}
+	if !strings.Contains(detailResponse.Body.String(), "Track launch work") {
+		t.Fatalf("detail response = %q, want project description", detailResponse.Body.String())
+	}
+
+	reservedResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/projects", map[string]any{
+		"slug": "no_project",
+		"name": "No Project",
+	})
+	if reservedResponse.Code != http.StatusBadRequest {
+		t.Fatalf("POST /projects reserved status = %d, want %d", reservedResponse.Code, http.StatusBadRequest)
+	}
+}
+
 func TestProjectsAPIProjectDetailAndRunsEndpoints(t *testing.T) {
 	t.Parallel()
 
@@ -758,7 +799,7 @@ func newTestAPIHandler(t *testing.T, executor *sequenceExecutor) http.Handler {
 	engine := wtl.NewRunEngine(repo, runtime, events, policy, projectManager, wikiService, apiTestMessenger(), time.Now)
 	trackedEngine := &trackedEngine{inner: engine}
 	runs := assistantapp.NewRunService(context.Background(), repo, trackedEngine, policy, time.Now)
-	handler, err := NewHandler(cfg, runs, events, wikiService)
+	handler, err := NewHandler(cfg, runs, events, wikiService, projectManager)
 	if err != nil {
 		t.Fatalf("NewHandler() error = %v", err)
 	}

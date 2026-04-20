@@ -393,6 +393,104 @@ input, textarea { font: inherit; }
   font-size: 13px;
 }
 
+.project-create-panel {
+  margin-top: 22px;
+  display: grid;
+  grid-template-columns: minmax(220px, 0.75fr) minmax(320px, 1.25fr);
+  gap: 18px;
+  align-items: start;
+  border: 1px solid rgba(18, 18, 18, 0.1);
+  border-radius: 14px;
+  background: #fff;
+  padding: 18px;
+}
+
+.project-create-copy h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.project-create-copy p:last-child {
+  margin: 10px 0 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.project-create-form {
+  display: grid;
+  gap: 10px;
+}
+
+.project-create-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.project-create-form label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.project-create-form input,
+.project-create-form textarea {
+  width: 100%;
+  border: 1px solid rgba(0, 0, 0, 0.13);
+  border-radius: 10px;
+  background: #fff;
+  padding: 9px 10px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.project-create-form textarea {
+  resize: vertical;
+  min-height: 86px;
+}
+
+.project-create-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.project-create-actions label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-create-actions input {
+  width: 54px;
+  padding: 4px 6px;
+  text-align: center;
+}
+
+.project-create-actions button {
+  border-radius: 999px;
+  padding: 9px 15px;
+  color: #fff;
+  background: #121212;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.project-create-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .projects-inbox {
   margin-top: 20px;
   padding: 16px 18px;
@@ -1295,6 +1393,11 @@ input, textarea { font: inherit; }
   }
 
   .project-overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .project-create-panel,
+  .project-create-fields {
     grid-template-columns: 1fr;
   }
 

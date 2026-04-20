@@ -60,6 +60,15 @@ const wikiPageTypeOptions = ["all", ...pageTypeOrder] as const;
 type WikiPageTypeFilter = (typeof wikiPageTypeOptions)[number];
 
 export function ProjectsHomePlaceholder() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  const bootstrapQuery = useQuery({
+    queryKey: ["bootstrap"],
+    queryFn: apiClient.bootstrap,
+    staleTime: 30_000,
+  });
+
   const projectsQuery = useQuery({
     queryKey: ["projects"],
     queryFn: apiClient.listProjects,
@@ -87,6 +96,64 @@ export function ProjectsHomePlaceholder() {
 
   const inbox = projects.find((project) => project.slug === "no_project") ?? null;
   const namedProjects = projects.filter((project) => project.slug !== "no_project");
+  const [projectName, setProjectName] = useState("");
+  const [projectSlug, setProjectSlug] = useState("");
+  const [slugEdited, setSlugEdited] = useState(false);
+  const [projectDescription, setProjectDescription] = useState("");
+  const [initialRequest, setInitialRequest] = useState("");
+  const [maxAttempts, setMaxAttempts] = useState(bootstrapQuery.data?.default_max_generation_attempts ?? 3);
+  const [createMessage, setCreateMessage] = useState("");
+
+  useEffect(() => {
+    if (bootstrapQuery.data?.default_max_generation_attempts) {
+      setMaxAttempts(bootstrapQuery.data.default_max_generation_attempts);
+    }
+  }, [bootstrapQuery.data?.default_max_generation_attempts]);
+
+  const createProjectMutation = useMutation({
+    mutationFn: async () => {
+      const name = projectName.trim();
+      if (!name) throw new Error("Project name is required.");
+      const slug = (projectSlug.trim() || slugifyProjectName(name)).trim();
+      if (!slug) throw new Error("Project slug is required.");
+
+      const created = await apiClient.createProject({
+        name,
+        slug,
+        description: projectDescription.trim(),
+      });
+
+      const task = initialRequest.trim();
+      const run = task
+        ? await apiClient.createRun("/api/v1/runs", {
+            user_request_raw: task,
+            max_generation_attempts: maxAttempts,
+            project_slug: created.project.slug,
+          })
+        : null;
+
+      return { project: created.project, run };
+    },
+    onSuccess: ({ project, run }) => {
+      setProjectName("");
+      setProjectSlug("");
+      setSlugEdited(false);
+      setProjectDescription("");
+      setInitialRequest("");
+      setCreateMessage(run ? `Project ${project.slug} created and run ${run.run.id} queued.` : `Project ${project.slug} created.`);
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-detail", project.slug] });
+      void navigate({ to: run ? "/projects/$slug/runs" : "/projects/$slug", params: { slug: project.slug } });
+    },
+    onError: (error) => {
+      setCreateMessage((error as Error).message);
+    },
+  });
+
+  const updateProjectName = (value: string) => {
+    setProjectName(value);
+    if (!slugEdited) setProjectSlug(slugifyProjectName(value));
+  };
 
   return (
     <section className="projects-home">
@@ -97,6 +164,80 @@ export function ProjectsHomePlaceholder() {
           <p className="projects-subtitle">Choose a project to review wiki memory, recent runs, and current status.</p>
         </div>
       </header>
+
+      <section className="project-create-panel" aria-labelledby="new-project-title">
+        <div className="project-create-copy">
+          <p className="projects-kicker">New Project</p>
+          <h3 id="new-project-title">Start a project workspace</h3>
+          <p>
+            Create the wiki scaffold, browser profile, run folders, and optional first task in one flow.
+          </p>
+        </div>
+        <form
+          className="project-create-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            createProjectMutation.mutate();
+          }}
+        >
+          <div className="project-create-fields">
+            <label>
+              <span>Name</span>
+              <input
+                value={projectName}
+                onChange={(event) => updateProjectName(event.target.value)}
+                placeholder="Launch Plan"
+                autoComplete="off"
+              />
+            </label>
+            <label>
+              <span>Slug</span>
+              <input
+                value={projectSlug}
+                onChange={(event) => {
+                  setSlugEdited(true);
+                  setProjectSlug(slugifyProjectName(event.target.value));
+                }}
+                placeholder="launch-plan"
+                autoComplete="off"
+              />
+            </label>
+          </div>
+          <label>
+            <span>Description</span>
+            <input
+              value={projectDescription}
+              onChange={(event) => setProjectDescription(event.target.value)}
+              placeholder="Track launch work, decisions, and follow-up execution."
+            />
+          </label>
+          <label>
+            <span>First task</span>
+            <textarea
+              value={initialRequest}
+              onChange={(event) => setInitialRequest(event.target.value)}
+              placeholder="Optional: describe the first run to queue for this project."
+              rows={3}
+            />
+          </label>
+          <div className="project-create-actions">
+            <label>
+              Max attempts
+              <input
+                type="number"
+                min={1}
+                max={9}
+                value={maxAttempts}
+                onChange={(event) => setMaxAttempts(Number.parseInt(event.target.value, 10) || 1)}
+              />
+            </label>
+            <button type="submit" disabled={createProjectMutation.isPending}>
+              {createProjectMutation.isPending ? "Starting..." : "Start Project"}
+            </button>
+          </div>
+          {createMessage && <p className="project-run-message">{createMessage}</p>}
+        </form>
+      </section>
 
       {projectsQuery.isLoading && <p className="projects-note">Loading projects…</p>}
       {projectsQuery.isError && <p className="projects-note">Failed to load projects: {(projectsQuery.error as Error).message}</p>}
@@ -788,7 +929,9 @@ export function ProjectRunsPlaceholder() {
       <div className="runs-board-grid">
         {visibleColumns.map((column) => {
           const isScheduled = column.key === "scheduled";
-          const runsForColumn = isScheduled ? [] : runsByColumn[column.key];
+          const runsForColumn: typeof filteredRuns = isScheduled
+            ? []
+            : runsByColumn[column.key as Exclude<RunColumnKey, "scheduled">];
           const count = isScheduled ? filteredScheduled.length : runsForColumn.length;
           return (
             <section key={column.key} className="runs-column" data-column={column.key}>
@@ -1256,6 +1399,14 @@ function truncate(value: string, limit: number): string {
 
 function humanize(value: string): string {
   return value.replace(/[_-]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function slugifyProjectName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^[-_]+|[-_]+$/g, "");
 }
 
 function relativeTime(value?: string): string {

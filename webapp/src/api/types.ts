@@ -201,6 +201,10 @@ export type ProjectDetailResponse = {
   latest_log_entries?: string[];
 };
 
+export type CreateProjectResponse = {
+  project: ProjectSummary;
+};
+
 export type Pagination = {
   page: number;
   page_size: number;

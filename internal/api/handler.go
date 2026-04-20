@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,11 +39,12 @@ type BootstrapResponse struct {
 }
 
 type RunAPI struct {
-	cfg    config.Config
-	runs   *assistantapp.RunService
-	events *EventBroker
-	wiki   *wiki.Service
-	static fs.FS
+	cfg      config.Config
+	runs     *assistantapp.RunService
+	events   *EventBroker
+	wiki     *wiki.Service
+	projects projectCreator
+	static   fs.FS
 }
 
 type createRunRequest struct {
@@ -50,6 +52,16 @@ type createRunRequest struct {
 	MaxGenerationAttempts int    `json:"max_generation_attempts"`
 	ParentRunID           string `json:"parent_run_id"`
 	ProjectSlug           string `json:"project_slug"`
+}
+
+type createProjectRequest struct {
+	Slug        string `json:"slug"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type createProjectResponse struct {
+	Project wiki.ProjectSummary `json:"project"`
 }
 
 type runActionRequest struct {
@@ -99,18 +111,27 @@ type projectRunsResponse struct {
 	RunRecords []store.RunRecord       `json:"run_records,omitempty"`
 }
 
-func NewHandler(cfg config.Config, runs *assistantapp.RunService, events *EventBroker, wikiService *wiki.Service) (http.Handler, error) {
+type projectCreator interface {
+	EnsureProject(assistant.ProjectContext) (assistant.ProjectContext, error)
+}
+
+func NewHandler(cfg config.Config, runs *assistantapp.RunService, events *EventBroker, wikiService *wiki.Service, projectCreators ...projectCreator) (http.Handler, error) {
 	staticFS, err := web.StaticFS()
 	if err != nil {
 		return nil, err
 	}
+	var projects projectCreator
+	if len(projectCreators) > 0 {
+		projects = projectCreators[0]
+	}
 
 	api := &RunAPI{
-		cfg:    cfg,
-		runs:   runs,
-		events: events,
-		wiki:   wikiService,
-		static: staticFS,
+		cfg:      cfg,
+		runs:     runs,
+		events:   events,
+		wiki:     wikiService,
+		projects: projects,
+		static:   staticFS,
 	}
 
 	mux := http.NewServeMux()
@@ -374,20 +395,66 @@ func (a *RunAPI) handleScheduledRunByID(w http.ResponseWriter, r *http.Request) 
 }
 
 func (a *RunAPI) handleProjects(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		if a.wiki == nil {
+			http.Error(w, "project wiki service is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		projects, err := a.wiki.ListProjects()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"projects": projects})
+	case http.MethodPost:
+		if a.projects == nil {
+			http.Error(w, "project manager is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		if a.wiki == nil {
+			http.Error(w, "project wiki service is not configured", http.StatusServiceUnavailable)
+			return
+		}
+
+		var request createProjectRequest
+		if err := decodeJSONBody(r.Body, &request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		slug := normalizeProjectSlug(request.Slug)
+		if slug == "" {
+			slug = normalizeProjectSlug(request.Name)
+		}
+		if slug == "" {
+			http.Error(w, "project slug or name is required", http.StatusBadRequest)
+			return
+		}
+		if slug == "no_project" {
+			http.Error(w, "no_project is reserved", http.StatusBadRequest)
+			return
+		}
+
+		projectCtx, err := a.projects.EnsureProject(assistant.ProjectContext{
+			Slug:        slug,
+			Name:        strings.TrimSpace(request.Name),
+			Description: strings.TrimSpace(request.Description),
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		projectSummary, err := a.findProjectSummaryBySlug(projectCtx.Slug)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusCreated, createProjectResponse{Project: projectSummary})
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
-	if a.wiki == nil {
-		http.Error(w, "project wiki service is not configured", http.StatusServiceUnavailable)
-		return
-	}
-	projects, err := a.wiki.ListProjects()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"projects": projects})
 }
 
 func (a *RunAPI) handleProjectBySlug(w http.ResponseWriter, r *http.Request) {
@@ -625,6 +692,15 @@ func isActiveRunStatus(status assistant.RunStatus) bool {
 	default:
 		return false
 	}
+}
+
+var projectSlugUnsafeChars = regexp.MustCompile(`[^a-z0-9_-]+`)
+
+func normalizeProjectSlug(value string) string {
+	slug := strings.ToLower(strings.TrimSpace(value))
+	slug = projectSlugUnsafeChars.ReplaceAllString(slug, "-")
+	slug = strings.Trim(slug, "-_")
+	return slug
 }
 
 func isStoppedRunStatus(status assistant.RunStatus) bool {
