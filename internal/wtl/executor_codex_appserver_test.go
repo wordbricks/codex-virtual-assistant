@@ -1,6 +1,7 @@
 package wtl
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -160,6 +161,75 @@ func TestPhaseOutputSchemaSupportsGateAnswerAndReport(t *testing.T) {
 	}
 	if _, ok := schedulerProperties["entries"]; !ok {
 		t.Fatalf("scheduler schema properties = %#v, want entries", schedulerProperties)
+	}
+}
+
+func TestPhaseOutputSchemasAreStrictStructuredOutputSchemas(t *testing.T) {
+	t.Parallel()
+
+	roles := []assistant.AttemptRole{
+		assistant.AttemptRoleGate,
+		assistant.AttemptRoleAnswer,
+		assistant.AttemptRoleProjectSelector,
+		assistant.AttemptRolePlanner,
+		assistant.AttemptRoleContractor,
+		assistant.AttemptRoleEvaluator,
+		assistant.AttemptRoleScheduler,
+		assistant.AttemptRoleReporter,
+		assistant.AttemptRoleGenerator,
+	}
+	for _, role := range roles {
+		role := role
+		t.Run(string(role), func(t *testing.T) {
+			t.Parallel()
+
+			schema := phaseOutputSchema(role)
+			if schema == nil {
+				t.Fatal("phaseOutputSchema() = nil")
+			}
+			assertStrictStructuredOutputSchema(t, string(role), schema)
+		})
+	}
+}
+
+func assertStrictStructuredOutputSchema(t *testing.T, path string, schema any) {
+	t.Helper()
+
+	object, ok := schema.(map[string]any)
+	if !ok {
+		return
+	}
+	if properties, ok := object["properties"].(map[string]any); ok {
+		if got, ok := object["additionalProperties"].(bool); !ok || got {
+			t.Fatalf("%s additionalProperties = %#v, want false", path, object["additionalProperties"])
+		}
+		required, ok := object["required"].([]string)
+		if !ok {
+			t.Fatalf("%s required type = %T, want []string", path, object["required"])
+		}
+		if len(required) != len(properties) {
+			t.Fatalf("%s required = %#v, want exactly %d properties", path, required, len(properties))
+		}
+		requiredSet := make(map[string]bool, len(required))
+		for _, key := range required {
+			requiredSet[key] = true
+		}
+		for key := range properties {
+			if !requiredSet[key] {
+				t.Fatalf("%s required = %#v, missing %q", path, required, key)
+			}
+		}
+		for key, property := range properties {
+			assertStrictStructuredOutputSchema(t, path+"."+key, property)
+		}
+	}
+	if alternatives, ok := object["anyOf"].([]any); ok {
+		for i, alternative := range alternatives {
+			assertStrictStructuredOutputSchema(t, fmt.Sprintf("%s.anyOf[%d]", path, i), alternative)
+		}
+	}
+	if items, ok := object["items"]; ok {
+		assertStrictStructuredOutputSchema(t, path+".items", items)
 	}
 }
 

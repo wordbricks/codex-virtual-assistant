@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1570,60 +1571,35 @@ func phaseOutputSchema(role assistant.AttemptRole) map[string]any {
 				"automation_safety": map[string]any{
 					"anyOf": []any{
 						map[string]any{"type": "null"},
-						map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"profile":     map[string]any{"type": "string", "enum": []string{"none", "browser_read_only", "browser_mutating", "browser_high_risk_engagement"}},
-								"enforcement": map[string]any{"type": "string", "enum": []string{"advisory", "evaluator_enforced", "engine_blocking"}},
-								"mode_policy": map[string]any{
-									"type": "object",
-									"properties": map[string]any{
-										"allowed_session_modes":       stringArraySchema(),
-										"allow_no_action_success":     map[string]any{"type": "boolean"},
-										"require_no_action_evidence":  map[string]any{"type": "boolean"},
-										"no_action_evidence_required": stringArraySchema(),
-									},
-									"additionalProperties": false,
-								},
-								"rate_limits": map[string]any{
-									"type": "object",
-									"properties": map[string]any{
-										"max_account_changing_actions_per_run": map[string]any{"type": "integer"},
-										"max_replies_per_24h":                  map[string]any{"type": "integer"},
-										"min_spacing_minutes":                  map[string]any{"type": "integer"},
-									},
-									"additionalProperties": false,
-								},
-								"pattern_rules": map[string]any{
-									"type": "object",
-									"properties": map[string]any{
-										"disallow_default_action_trios":  map[string]any{"type": "boolean"},
-										"disallow_fixed_short_followups": map[string]any{"type": "boolean"},
-										"require_source_diversity":       map[string]any{"type": "boolean"},
-									},
-									"additionalProperties": false,
-								},
-								"text_reuse_policy": map[string]any{
-									"type": "object",
-									"properties": map[string]any{
-										"reject_high_similarity":       map[string]any{"type": "boolean"},
-										"avoid_repeated_self_intro":    map[string]any{"type": "boolean"},
-										"require_text_variant_support": map[string]any{"type": "boolean"},
-									},
-									"additionalProperties": false,
-								},
-								"cooldown_policy": map[string]any{
-									"type": "object",
-									"properties": map[string]any{
-										"force_read_only_after_dense_activity":      map[string]any{"type": "boolean"},
-										"prefer_longer_cooldown_after_blocked_runs": map[string]any{"type": "boolean"},
-									},
-									"additionalProperties": false,
-								},
-							},
-							"required":             []string{"profile", "enforcement"},
-							"additionalProperties": false,
-						},
+						strictObjectSchema(map[string]any{
+							"profile":     map[string]any{"type": "string", "enum": []string{"none", "browser_read_only", "browser_mutating", "browser_high_risk_engagement"}},
+							"enforcement": map[string]any{"type": "string", "enum": []string{"advisory", "evaluator_enforced", "engine_blocking"}},
+							"mode_policy": nullableSchema(strictObjectSchema(map[string]any{
+								"allowed_session_modes":       stringArraySchema(),
+								"allow_no_action_success":     map[string]any{"type": "boolean"},
+								"require_no_action_evidence":  map[string]any{"type": "boolean"},
+								"no_action_evidence_required": stringArraySchema(),
+							})),
+							"rate_limits": nullableSchema(strictObjectSchema(map[string]any{
+								"max_account_changing_actions_per_run": map[string]any{"type": "integer"},
+								"max_replies_per_24h":                  map[string]any{"type": "integer"},
+								"min_spacing_minutes":                  map[string]any{"type": "integer"},
+							})),
+							"pattern_rules": nullableSchema(strictObjectSchema(map[string]any{
+								"disallow_default_action_trios":  map[string]any{"type": "boolean"},
+								"disallow_fixed_short_followups": map[string]any{"type": "boolean"},
+								"require_source_diversity":       map[string]any{"type": "boolean"},
+							})),
+							"text_reuse_policy": nullableSchema(strictObjectSchema(map[string]any{
+								"reject_high_similarity":       map[string]any{"type": "boolean"},
+								"avoid_repeated_self_intro":    map[string]any{"type": "boolean"},
+								"require_text_variant_support": map[string]any{"type": "boolean"},
+							})),
+							"cooldown_policy": nullableSchema(strictObjectSchema(map[string]any{
+								"force_read_only_after_dense_activity":      map[string]any{"type": "boolean"},
+								"prefer_longer_cooldown_after_blocked_runs": map[string]any{"type": "boolean"},
+							})),
+						}),
 					},
 				},
 				"max_generation_attempts": map[string]any{"type": "integer"},
@@ -1794,6 +1770,29 @@ func stringArraySchema() map[string]any {
 	return map[string]any{
 		"type":  "array",
 		"items": map[string]any{"type": "string"},
+	}
+}
+
+func strictObjectSchema(properties map[string]any) map[string]any {
+	required := make([]string, 0, len(properties))
+	for key := range properties {
+		required = append(required, key)
+	}
+	sort.Strings(required)
+	return map[string]any{
+		"type":                 "object",
+		"properties":           properties,
+		"required":             required,
+		"additionalProperties": false,
+	}
+}
+
+func nullableSchema(schema map[string]any) map[string]any {
+	return map[string]any{
+		"anyOf": []any{
+			map[string]any{"type": "null"},
+			schema,
+		},
 	}
 }
 
