@@ -1091,7 +1091,7 @@ func (e *RunEngine) executeAttempt(ctx context.Context, run assistant.Run, exist
 		return attempt, PhaseResponse{}, err
 	}
 
-	attempt.OutputSummary = firstNonEmpty(strings.TrimSpace(response.Summary), summarizeOutput(response.Output))
+	attempt.OutputSummary = summarizeAttemptResponse(response)
 	if err := e.repo.AddAttempt(ctx, attempt); err != nil {
 		return assistant.Attempt{}, PhaseResponse{}, err
 	}
@@ -1611,6 +1611,29 @@ func summarizeOutput(value string) string {
 	trimmed := strings.TrimSpace(value)
 	if len(trimmed) > 240 {
 		return trimmed[:240]
+	}
+	return trimmed
+}
+
+func summarizeAttemptResponse(response PhaseResponse) string {
+	summary := strings.TrimSpace(response.Summary)
+	output := strings.TrimSpace(response.Output)
+	if output != "" {
+		shortOutput := summarizeOutput(output)
+		if summary == "" || summary == shortOutput {
+			return summarizeAttemptOutput(output)
+		}
+	}
+	return firstNonEmpty(summary, summarizeAttemptOutput(output))
+}
+
+func summarizeAttemptOutput(value string) string {
+	const limit = 1200
+
+	trimmed := strings.TrimSpace(value)
+	runes := []rune(trimmed)
+	if len(runes) > limit {
+		return strings.TrimSpace(string(runes[:limit-3])) + "..."
 	}
 	return trimmed
 }

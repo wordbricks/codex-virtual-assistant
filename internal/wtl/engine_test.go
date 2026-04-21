@@ -90,6 +90,40 @@ func TestRunEngineRetriesGeneratorUntilEvaluationPasses(t *testing.T) {
 	}
 }
 
+func TestSummarizeAttemptResponsePreservesLongRawPhaseOutput(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"goal":"` + strings.Repeat("capture full planner context ", 60) + `"}`
+	response := PhaseResponse{
+		Summary: summarizeOutput(raw),
+		Output:  raw,
+	}
+
+	summary := summarizeAttemptResponse(response)
+	if len([]rune(summary)) <= 240 {
+		t.Fatalf("attempt summary length = %d, want longer than legacy summary cap", len([]rune(summary)))
+	}
+	if !strings.HasSuffix(summary, "...") {
+		t.Fatalf("attempt summary suffix = %q, want ellipsis", summary[len(summary)-3:])
+	}
+	if !strings.Contains(summary, "capture full planner context") {
+		t.Fatalf("attempt summary = %q, want raw phase output content", summary)
+	}
+}
+
+func TestSummarizeAttemptResponseKeepsExplicitConciseSummary(t *testing.T) {
+	t.Parallel()
+
+	response := PhaseResponse{
+		Summary: "Planner normalized the request.",
+		Output:  `{"goal":"` + strings.Repeat("large structured payload ", 60) + `"}`,
+	}
+
+	if got := summarizeAttemptResponse(response); got != response.Summary {
+		t.Fatalf("summarizeAttemptResponse() = %q, want explicit summary %q", got, response.Summary)
+	}
+}
+
 func TestRunEngineWaitsAndResumes(t *testing.T) {
 	t.Parallel()
 
