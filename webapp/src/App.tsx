@@ -1,10 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link, Outlet, useRouterState } from "@tanstack/react-router";
+import { Link, Outlet } from "@tanstack/react-router";
 import { apiClient } from "@/api/client";
-
-const navigationLinks = [
-  { to: "/", label: "Projects" },
-] as const;
 
 export function AppShell() {
   const { data: bootstrap } = useQuery({
@@ -13,34 +9,18 @@ export function AppShell() {
     staleTime: 30_000,
   });
 
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
-
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="sidebar-brand">
-          <img className="sidebar-brand-logo" src="/logo.svg" alt="" aria-hidden="true" />
-          <div>
-            <p className="sidebar-brand-label">Workspace</p>
-            <h1>{bootstrap?.product_name ?? "Codex"}</h1>
-          </div>
-        </div>
-
-        <nav className="sidebar-history" aria-label="Primary">
-          {navigationLinks.map((link) => (
-            <Link
-              key={link.to}
-              to={link.to}
-              className={`sidebar-item${pathname === link.to ? " is-active" : ""}`}
-            >
-              <span className="sidebar-item-title">{link.label}</span>
-            </Link>
-          ))}
-        </nav>
-      </aside>
-
       <main className="chat-main">
-        <Outlet />
+        <header className="app-header">
+          <Link to="/" className="app-brand" aria-label="Go to home">
+            <img className="app-brand-logo" src="/logo.svg" alt="" aria-hidden="true" />
+            <span className="app-brand-title">{bootstrap?.product_name ?? "Codex"}</span>
+          </Link>
+        </header>
+        <div className="app-content">
+          <Outlet />
+        </div>
       </main>
     </div>
   );
