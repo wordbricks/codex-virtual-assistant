@@ -49,6 +49,10 @@ func TestBuildPlannerPromptDeclaresStrictJSONContract(t *testing.T) {
 	if !strings.Contains(bundle.System, "automation_safety") {
 		t.Fatalf("System prompt = %q, want automation_safety guidance", bundle.System)
 	}
+	if !strings.Contains(bundle.System, "read_only, single_action, reply_only") ||
+		!strings.Contains(bundle.System, "Do not invent other session mode names") {
+		t.Fatalf("System prompt = %q, want allowed automation safety session modes", bundle.System)
+	}
 	if !strings.Contains(bundle.User, "Default max generation attempts: 4") {
 		t.Fatalf("User prompt = %q, want attempt count", bundle.User)
 	}

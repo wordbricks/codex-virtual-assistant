@@ -164,6 +164,32 @@ func TestPhaseOutputSchemaSupportsGateAnswerAndReport(t *testing.T) {
 	}
 }
 
+func TestPlannerSchemaRestrictsAutomationSafetySessionModes(t *testing.T) {
+	t.Parallel()
+
+	schema := phaseOutputSchema(assistant.AttemptRolePlanner)
+	properties := schema["properties"].(map[string]any)
+	automationSafety := properties["automation_safety"].(map[string]any)
+	anyOf := automationSafety["anyOf"].([]any)
+	policySchema := anyOf[1].(map[string]any)
+	policyProperties := policySchema["properties"].(map[string]any)
+	modePolicy := policyProperties["mode_policy"].(map[string]any)
+	modeAnyOf := modePolicy["anyOf"].([]any)
+	modeSchema := modeAnyOf[1].(map[string]any)
+	modeProperties := modeSchema["properties"].(map[string]any)
+	allowedModes := modeProperties["allowed_session_modes"].(map[string]any)
+	items := allowedModes["items"].(map[string]any)
+
+	enumValues, ok := items["enum"].([]string)
+	if !ok {
+		t.Fatalf("allowed_session_modes.items.enum type = %T, want []string", items["enum"])
+	}
+	want := []string{"read_only", "single_action", "reply_only"}
+	if fmt.Sprint(enumValues) != fmt.Sprint(want) {
+		t.Fatalf("allowed_session_modes enum = %#v, want %#v", enumValues, want)
+	}
+}
+
 func TestPhaseOutputSchemasAreStrictStructuredOutputSchemas(t *testing.T) {
 	t.Parallel()
 

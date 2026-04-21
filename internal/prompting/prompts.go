@@ -217,6 +217,7 @@ The JSON object must contain exactly these keys:
 Use automation_safety=null when the run is not browser automation or has no automation-safety policy requirements.
 When browser automation is relevant, prefer a structured automation_safety object with profile and enforcement, plus optional mode_policy/rate_limits/pattern_rules/text_reuse_policy/cooldown_policy.
 Valid automation safety profiles are: none, browser_read_only, browser_mutating, browser_high_risk_engagement.
+Valid automation safety mode_policy.allowed_session_modes values are: read_only, single_action, reply_only. Do not invent other session mode names.
 Treat social growth, outreach messaging, public comments or replies, follows or connection requests, marketplace inquiries, community engagement, recruiting/networking messages, likes, endorsements, reviews, and repeated application/inquiry submission workflows as high-risk engagement candidates.
 Use schedule_plan=null when all work should happen immediately.
 If the request includes future or time-distributed work, keep immediate work in the normal TaskSpec fields and place only the deferred work in schedule_plan.entries.

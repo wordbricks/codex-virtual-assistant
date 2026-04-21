@@ -1575,7 +1575,7 @@ func phaseOutputSchema(role assistant.AttemptRole) map[string]any {
 							"profile":     map[string]any{"type": "string", "enum": []string{"none", "browser_read_only", "browser_mutating", "browser_high_risk_engagement"}},
 							"enforcement": map[string]any{"type": "string", "enum": []string{"advisory", "evaluator_enforced", "engine_blocking"}},
 							"mode_policy": nullableSchema(strictObjectSchema(map[string]any{
-								"allowed_session_modes":       stringArraySchema(),
+								"allowed_session_modes":       stringEnumArraySchema("read_only", "single_action", "reply_only"),
 								"allow_no_action_success":     map[string]any{"type": "boolean"},
 								"require_no_action_evidence":  map[string]any{"type": "boolean"},
 								"no_action_evidence_required": stringArraySchema(),
@@ -1770,6 +1770,16 @@ func stringArraySchema() map[string]any {
 	return map[string]any{
 		"type":  "array",
 		"items": map[string]any{"type": "string"},
+	}
+}
+
+func stringEnumArraySchema(values ...string) map[string]any {
+	return map[string]any{
+		"type": "array",
+		"items": map[string]any{
+			"type": "string",
+			"enum": values,
+		},
 	}
 }
 
