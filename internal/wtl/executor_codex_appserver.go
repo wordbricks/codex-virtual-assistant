@@ -315,6 +315,11 @@ func (s *appServerTurnSession) appServerEnv() []string {
 }
 
 func detectAgentBrowserCLIPath() string {
+	for _, envName := range []string{"ASSISTANT_AGENT_BROWSER_BIN", "CVA_AGENT_BROWSER_BIN"} {
+		if path := strings.TrimSpace(os.Getenv(envName)); path != "" {
+			return path
+		}
+	}
 	path, err := exec.LookPath("agent-browser")
 	if err != nil {
 		return ""

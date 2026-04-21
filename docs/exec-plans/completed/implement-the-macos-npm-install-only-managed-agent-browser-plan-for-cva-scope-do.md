@@ -34,9 +34,9 @@ Repository references show this work spans:
 - [x] Milestone 1: Narrow release workflow targets to darwin `amd64`/`arm64` for CVA and add darwin `amd64`/`arm64` patched `agent-browser` asset build/upload from `ref/agent-browser`.
 - [x] Milestone 2: Update npm platform metadata/resolution so only macOS (`darwin:x64`, `darwin:arm64`) is supported, and ensure asset naming/URL resolution includes both managed `cva` and managed `agent-browser` binaries.
 - [x] Milestone 3: Update npm install flow to download/install both binaries for supported macOS targets and keep install error handling/messages coherent for unsupported platforms.
-- [ ] Milestone 4: Update npm bin wrapper to pass the downloaded managed `agent-browser` path to native CVA via `ASSISTANT_AGENT_BROWSER_BIN` (and any required compatibility wiring), without changing `AGENT_BROWSER_EXECUTABLE_PATH` meaning.
-- [ ] Milestone 5: Update native CVA `agent-browser` resolver logic and tests to enforce priority order: `ASSISTANT_AGENT_BROWSER_BIN` -> `CVA_AGENT_BROWSER_BIN` -> PATH fallback; keep Chrome executable handling separate.
-- [ ] Milestone 6: Update docs (`README.md`, `npm/README.md`) and run focused Go/Node tests covering release/npm/runtime path-resolution changes.
+- [x] Milestone 4: Update npm bin wrapper to pass the downloaded managed `agent-browser` path to native CVA via `ASSISTANT_AGENT_BROWSER_BIN` (and any required compatibility wiring), without changing `AGENT_BROWSER_EXECUTABLE_PATH` meaning.
+- [x] Milestone 5: Update native CVA `agent-browser` resolver logic and tests to enforce priority order: `ASSISTANT_AGENT_BROWSER_BIN` -> `CVA_AGENT_BROWSER_BIN` -> PATH fallback; keep Chrome executable handling separate.
+- [x] Milestone 6: Update docs (`README.md`, `npm/README.md`) and run focused Go/Node tests covering release/npm/runtime path-resolution changes.
 
 ## Current progress
 
@@ -62,6 +62,24 @@ Repository references show this work spans:
   - Installer CLI failure text now reflects managed dual-binary install failure context.
   - `npm/lib/install.test.js` now covers dual download behavior, force/skip behavior, compatibility `ensureBinary` return path, and unsupported-platform messaging.
   - Focused tests run: `node --test npm/lib/platform.test.js npm/lib/install.test.js`.
+- Milestone 4 completed in npm wrapper flow:
+  - `npm/bin/cva.js` now resolves both managed paths before spawning native CVA.
+  - If either managed binary is missing, the wrapper runs the managed dual-binary installer before launching.
+  - The spawned native CVA process receives `ASSISTANT_AGENT_BROWSER_BIN=<managed agent-browser path>`.
+  - The wrapper mirrors the same path into `CVA_AGENT_BROWSER_BIN` only when that compatibility env var is not already set.
+  - `AGENT_BROWSER_EXECUTABLE_PATH` is not modified by the wrapper and remains a browser executable path.
+  - `npm/bin/cva.test.js` verifies wrapper env behavior and managed path resolution.
+- Milestone 5 completed in native runtime resolver:
+  - `detectAgentBrowserCLIPath()` now resolves `ASSISTANT_AGENT_BROWSER_BIN`, then `CVA_AGENT_BROWSER_BIN`, then PATH `agent-browser`.
+  - Go tests verify both managed env priority paths.
+- Milestone 6 completed in docs and verification:
+  - Root README and npm README now describe macOS-only npm support and the bundled managed `agent-browser` behavior.
+  - Release verification now runs npm wrapper, installer, and platform tests.
+  - `npm/package.json` `files` is narrowed so npm tarballs include runtime files only, not local tests.
+  - Focused tests run: `node --check npm/bin/cva.js npm/lib/install.js npm/lib/platform.js`.
+  - Focused tests run: `node --test npm/bin/cva.test.js npm/lib/install.test.js npm/lib/platform.test.js`.
+  - Focused tests run: `go test ./internal/wtl`.
+  - Package verification run: `npm pack --dry-run`.
 
 ## Key decisions
 
@@ -73,13 +91,13 @@ Repository references show this work spans:
 - Managed `agent-browser` release asset names are `agent-browser-darwin-x64` and `agent-browser-darwin-arm64` to mirror CVA darwin naming style.
 - npm platform metadata now hard-gates package installation to macOS x64/arm64 via `os`/`cpu` fields in `npm/package.json`.
 - npm install flow now treats `cva` and `agent-browser` as a managed pair for download/install; `ensureBinary` remains for wrapper compatibility.
+- Release CI builds `agent-browser` on `macos-latest` because the source is a Rust/Node CLI targeting `x86_64-apple-darwin` and `aarch64-apple-darwin`.
+- The release workflow checks out the pinned `vercel-labs/agent-browser` source ref used by local `ref/agent-browser` (`57405f93614fae46e5c955ce662b4785283e1301`) into `ref/agent-browser` during CI.
 
 ## Remaining issues / open questions
 
-- Verify CI has access to checkout `ref: ref/agent-browser` and that `./cmd/agent-browser` is the correct build target at that ref.
-- Confirm whether `CVA_AGENT_BROWSER_BIN` should be documented as compatibility-only or first-class override for non-wrapper invocations.
-- Decide whether release verification should include `node --test npm/lib/platform.test.js` and expanded `npm/lib/install.test.js` in workflow `verify` (currently run locally in milestone work).
-- Confirm minimum focused test set expected by reviewers beyond unit coverage in Go (`internal/wtl`) and Node (`npm/lib`).
+- If the patched `agent-browser` source moves to a project-owned fork, update `AGENT_BROWSER_REPOSITORY` and `AGENT_BROWSER_REF` in `.github/workflows/release.yml`.
+- `CVA_AGENT_BROWSER_BIN` is treated as compatibility-only; `ASSISTANT_AGENT_BROWSER_BIN` is the first-class managed path.
 
 ## Links to related documents
 

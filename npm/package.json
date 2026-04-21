@@ -24,8 +24,9 @@
   },
   "files": [
     "README.md",
-    "bin",
-    "lib"
+    "bin/cva.js",
+    "lib/install.js",
+    "lib/platform.js"
   ],
   "keywords": [
     "agent",

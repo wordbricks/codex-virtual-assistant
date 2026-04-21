@@ -24,7 +24,7 @@ jobs:
       - run: node --check npm/bin/cva.js
       - run: node --check npm/lib/install.js
       - run: node --check npm/lib/platform.js
-      - run: node --test npm/lib/install.test.js
+      - run: node --test npm/bin/cva.test.js npm/lib/install.test.js npm/lib/platform.test.js
       - run: npm pack --dry-run
         working-directory: npm
 
@@ -70,37 +70,36 @@ jobs:
 
   build-agent-browser-binaries:
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
+    env:
+      AGENT_BROWSER_REPOSITORY: vercel-labs/agent-browser
+      AGENT_BROWSER_REF: 57405f93614fae46e5c955ce662b4785283e1301
     strategy:
       fail-fast: false
       matrix:
         include:
-          - goos: darwin
-            goarch: amd64
+          - rust_target: x86_64-apple-darwin
             asset_name: agent-browser-darwin-x64
-          - goos: darwin
-            goarch: arm64
+          - rust_target: aarch64-apple-darwin
             asset_name: agent-browser-darwin-arm64
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ref/agent-browser
+          repository: ${{ env.AGENT_BROWSER_REPOSITORY }}
+          ref: ${{ env.AGENT_BROWSER_REF }}
           path: ref/agent-browser
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-node@v6
         with:
-          go-version-file: ref/agent-browser/go.mod
+          node-version: 20.19.0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
       - name: Build binary
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
         run: |
           mkdir -p dist
-          go build \
-            -trimpath \
-            -ldflags="-s -w" \
-            -o "dist/${{ matrix.asset_name }}" \
-            ./cmd/agent-browser
+          npm run version:sync
+          cargo build --release --manifest-path cli/Cargo.toml --target ${{ matrix.rust_target }}
+          cp "cli/target/${{ matrix.rust_target }}/release/agent-browser" "dist/${{ matrix.asset_name }}"
         working-directory: ref/agent-browser
       - uses: actions/upload-artifact@v7
         with:

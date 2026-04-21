@@ -32,7 +32,7 @@ Clone this repository, install prerequisites, build it, and run it locally.
    - Install sqlite3 and make sure it is on PATH.
    - Install `ffmpeg` and make sure it is on PATH. CVA uses it to turn captured browser frames into the report video replay.
    - Install the codex CLI and authenticate it so `codex app-server` can run, or install and authenticate Claude Code if you set `ASSISTANT_RUNTIME=claude` or `ASSISTANT_RUNTIME=zai`.
-   - Install the `agent-browser` CLI and browser runtime:
+   - For source builds, install the `agent-browser` CLI and browser runtime:
      - npm install -g agent-browser
      - agent-browser install
 
@@ -160,12 +160,14 @@ To run through the bundled PTY wrapper instead, run `cva runtime zai` or set `AS
 
 Use `cva runtime codex` to switch back. The command persists the choice to `<CVA home>/config.json`; `ASSISTANT_RUNTIME` still overrides the saved value when set.
 
-Install `agent-browser` on the same machine so Codex can execute browser work through the current CLI:
+When building from source or running a raw `cva` binary, install `agent-browser` on the same machine so Codex can execute browser work through the current CLI:
 
 ```bash
 npm install -g agent-browser
 agent-browser install
 ```
+
+When installed through `npm install -g @wordbricks/cva` on macOS x64/arm64, the package downloads a managed `agent-browser` binary next to the managed `cva` binary and automatically passes that path to native CVA. In that npm-installed path, a separate global `agent-browser` install is not required for the CLI binary itself.
 
 If you want browser activity to appear as an embedded replay video in the final supervisor report, `ffmpeg` must also be installed and available on `PATH`.
 
@@ -185,6 +187,9 @@ Environment variables:
 - `ASSISTANT_CODEX_APPROVAL_POLICY`: Codex approval policy, default `never`
 - `ASSISTANT_CODEX_SANDBOX`: Codex sandbox mode, default `workspace-write`
 - `ASSISTANT_CODEX_NETWORK_ACCESS`: outbound network access for Codex workspace-write turns, default `true`
+- `ASSISTANT_AGENT_BROWSER_BIN`: managed `agent-browser` CLI path used by CVA before PATH lookup
+- `CVA_AGENT_BROWSER_BIN`: compatibility override used only when `ASSISTANT_AGENT_BROWSER_BIN` is unset
+- `AGENT_BROWSER_EXECUTABLE_PATH`: browser executable path passed to `agent-browser`, for example Chrome; this is not the `agent-browser` CLI path
 
 `<CVA home>` is the app-owned directory under the current user's OS config directory, so `cva` uses the same default workspace no matter where you launch it. Relative path overrides are resolved from that directory.
 
@@ -248,11 +253,12 @@ Release flow:
 2. Push a semver tag like `v0.1.0`.
 3. The GitHub Actions workflow at [release.yml](/Users/dev/git/codex-virtual-assistant/.github/workflows/release.yml) will:
    - run verification
-   - build native `cva` binaries for supported platforms
-   - upload them to the GitHub release for that tag
+   - build native `cva` binaries for macOS x64/arm64
+   - build managed `agent-browser` binaries for macOS x64/arm64 from the pinned agent-browser source ref
+   - upload all four binaries to the GitHub release for that tag
    - publish `@wordbricks/cva` to npm with provenance
 
-The npm package installs the `cva` command and downloads the matching native binary asset from the GitHub release for the package version.
+The npm package supports macOS x64/arm64. It installs the `cva` command and downloads both matching native binary assets from the GitHub release for the package version: `cva-darwin-*` and `agent-browser-darwin-*`.
 
 For the first manual CLI-driven publish:
 
@@ -284,7 +290,7 @@ make release-npm
 - Go 1.26+
 - Node.js `^20.19.0 || >=22.12.0` for the `webapp/` Vite toolchain
 - `codex` CLI installed and authenticated; the default runtime shells out to `codex app-server`
-- `agent-browser` CLI installed and initialized with `agent-browser install`
+- `agent-browser` CLI installed and initialized with `agent-browser install` for source builds or raw CVA binaries; npm-installed macOS packages use the bundled managed binary path automatically
 - `sqlite3` available on the local machine; the current repository layer uses the system SQLite CLI for local persistence in this sandboxed environment
 - `ffmpeg` available on the local machine; browser-session report videos are generated only when `ffmpeg` is present on `PATH`
 - The npm CLI wrapper in `npm/` remains compatible with Node.js 18+, but repository development now assumes the webapp runtime above

@@ -245,6 +245,24 @@ func TestAppServerEnvForcesAgentBrowserHeaded(t *testing.T) {
 	}
 }
 
+func TestDetectAgentBrowserCLIPathPrefersAssistantManagedBinary(t *testing.T) {
+	t.Setenv("ASSISTANT_AGENT_BROWSER_BIN", "/managed/agent-browser")
+	t.Setenv("CVA_AGENT_BROWSER_BIN", "/compat/agent-browser")
+
+	if got := detectAgentBrowserCLIPath(); got != "/managed/agent-browser" {
+		t.Fatalf("detectAgentBrowserCLIPath() = %q, want ASSISTANT_AGENT_BROWSER_BIN", got)
+	}
+}
+
+func TestDetectAgentBrowserCLIPathFallsBackToCVAManagedBinary(t *testing.T) {
+	t.Setenv("ASSISTANT_AGENT_BROWSER_BIN", " ")
+	t.Setenv("CVA_AGENT_BROWSER_BIN", "/compat/agent-browser")
+
+	if got := detectAgentBrowserCLIPath(); got != "/compat/agent-browser" {
+		t.Fatalf("detectAgentBrowserCLIPath() = %q, want CVA_AGENT_BROWSER_BIN", got)
+	}
+}
+
 func TestAppServerEnvUsesProjectBrowserSettings(t *testing.T) {
 	originalLookup := lookupAgentBrowserExecutablePath
 	originalCLILookup := lookupAgentBrowserCLIPath
