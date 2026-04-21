@@ -26,6 +26,7 @@ var urlPattern = regexp.MustCompile(`https?://[^\s"'<>]+`)
 
 var lookupAgentBrowserExecutablePath = detectAgentBrowserExecutablePath
 var lookupAgentBrowserCLIPath = detectAgentBrowserCLIPath
+var lookupSelfExecutablePath = os.Executable
 
 type AppServerPhaseExecutorConfig struct {
 	BinaryPath         string
@@ -320,11 +321,31 @@ func detectAgentBrowserCLIPath() string {
 			return path
 		}
 	}
+	if path := strings.TrimSpace(detectManagedAgentBrowserSiblingPath()); path != "" {
+		return path
+	}
 	path, err := exec.LookPath("agent-browser")
 	if err != nil {
 		return ""
 	}
 	return path
+}
+
+func detectManagedAgentBrowserSiblingPath() string {
+	executable, err := lookupSelfExecutablePath()
+	if err != nil {
+		return ""
+	}
+	name := "agent-browser"
+	if runtime.GOOS == "windows" {
+		name = "agent-browser.exe"
+	}
+	candidate := filepath.Join(filepath.Dir(executable), name)
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	return candidate
 }
 
 func (s *appServerTurnSession) ensureAgentBrowserWrapperDir() string {

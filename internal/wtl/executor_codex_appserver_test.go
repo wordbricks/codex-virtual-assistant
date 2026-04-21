@@ -3,6 +3,7 @@ package wtl
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -260,6 +261,36 @@ func TestDetectAgentBrowserCLIPathFallsBackToCVAManagedBinary(t *testing.T) {
 
 	if got := detectAgentBrowserCLIPath(); got != "/compat/agent-browser" {
 		t.Fatalf("detectAgentBrowserCLIPath() = %q, want CVA_AGENT_BROWSER_BIN", got)
+	}
+}
+
+func TestDetectAgentBrowserCLIPathFallsBackToSiblingManagedBinary(t *testing.T) {
+	t.Setenv("ASSISTANT_AGENT_BROWSER_BIN", " ")
+	t.Setenv("CVA_AGENT_BROWSER_BIN", " ")
+
+	tempDir := t.TempDir()
+	executable := filepath.Join(tempDir, "cva")
+	if err := os.WriteFile(executable, []byte("cva"), 0o755); err != nil {
+		t.Fatalf("WriteFile(cva) error = %v", err)
+	}
+	agentBrowser := filepath.Join(tempDir, "agent-browser")
+	if runtime.GOOS == "windows" {
+		agentBrowser += ".exe"
+	}
+	if err := os.WriteFile(agentBrowser, []byte("agent-browser"), 0o755); err != nil {
+		t.Fatalf("WriteFile(agent-browser) error = %v", err)
+	}
+
+	originalLookupSelfExecutablePath := lookupSelfExecutablePath
+	lookupSelfExecutablePath = func() (string, error) {
+		return executable, nil
+	}
+	t.Cleanup(func() {
+		lookupSelfExecutablePath = originalLookupSelfExecutablePath
+	})
+
+	if got := detectAgentBrowserCLIPath(); got != agentBrowser {
+		t.Fatalf("detectAgentBrowserCLIPath() = %q, want sibling managed binary %q", got, agentBrowser)
 	}
 }
 

@@ -16,12 +16,16 @@ import (
 const latestReleaseURL = "https://api.github.com/repos/wordbricks/codex-virtual-assistant/releases/latest"
 
 type upgradeResult struct {
-	CurrentVersion string `json:"current_version"`
-	LatestVersion  string `json:"latest_version"`
-	Executable     string `json:"executable"`
-	AssetName      string `json:"asset_name"`
-	Upgraded       bool   `json:"upgraded"`
-	Message        string `json:"message"`
+	CurrentVersion         string `json:"current_version"`
+	LatestVersion          string `json:"latest_version"`
+	Executable             string `json:"executable"`
+	AssetName              string `json:"asset_name"`
+	AgentBrowserExecutable string `json:"agent_browser_executable,omitempty"`
+	AgentBrowserAssetName  string `json:"agent_browser_asset_name,omitempty"`
+	Upgraded               bool   `json:"upgraded"`
+	CVAUpgraded            bool   `json:"cva_upgraded"`
+	AgentBrowserUpgraded   bool   `json:"agent_browser_upgraded"`
+	Message                string `json:"message"`
 }
 
 type githubRelease struct {
@@ -85,14 +89,27 @@ func (u *upgrader) upgrade(ctx context.Context) (upgradeResult, error) {
 		return result, err
 	}
 	result.AssetName = assetName
+	agentBrowserAssetName, err := releaseAgentBrowserAssetName(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return result, err
+	}
+	result.AgentBrowserAssetName = agentBrowserAssetName
 
 	executable, err := u.executablePath()
 	if err != nil {
 		return result, fmt.Errorf("resolve executable path: %w", err)
 	}
 	result.Executable = executable
+	result.AgentBrowserExecutable = agentBrowserUpgradePath(executable, runtime.GOOS)
 
-	if normalizeVersion(version) == result.LatestVersion {
+	currentVersionIsLatest := normalizeVersion(version) == result.LatestVersion
+	agentBrowserExists := false
+	if strings.TrimSpace(result.AgentBrowserExecutable) != "" {
+		if info, err := os.Stat(result.AgentBrowserExecutable); err == nil && !info.IsDir() {
+			agentBrowserExists = true
+		}
+	}
+	if currentVersionIsLatest && agentBrowserExists {
 		result.Message = fmt.Sprintf("cva %s is already up to date", result.LatestVersion)
 		return result, nil
 	}
@@ -101,19 +118,49 @@ func (u *upgrader) upgrade(ctx context.Context) (upgradeResult, error) {
 	if err != nil {
 		return result, err
 	}
-
-	tempPath, err := u.downloadAsset(ctx, asset.BrowserDownloadURL, executable)
+	agentBrowserAsset, err := release.assetByName(agentBrowserAssetName)
 	if err != nil {
 		return result, err
 	}
-	defer os.Remove(tempPath)
 
-	if err := os.Rename(tempPath, executable); err != nil {
-		return result, fmt.Errorf("replace executable: %w", err)
+	var cvaTempPath string
+	if !currentVersionIsLatest {
+		cvaTempPath, err = u.downloadAsset(ctx, asset.BrowserDownloadURL, executable)
+		if err != nil {
+			return result, err
+		}
+		defer os.Remove(cvaTempPath)
 	}
 
-	result.Upgraded = true
-	result.Message = fmt.Sprintf("upgraded cva from %s to %s", displayVersion(version), result.LatestVersion)
+	agentBrowserTempPath, err := u.downloadAsset(ctx, agentBrowserAsset.BrowserDownloadURL, result.AgentBrowserExecutable)
+	if err != nil {
+		return result, err
+	}
+	defer os.Remove(agentBrowserTempPath)
+
+	if err := os.Rename(agentBrowserTempPath, result.AgentBrowserExecutable); err != nil {
+		return result, fmt.Errorf("replace agent-browser executable: %w", err)
+	}
+	result.AgentBrowserUpgraded = true
+
+	if cvaTempPath != "" {
+		if err := os.Rename(cvaTempPath, executable); err != nil {
+			return result, fmt.Errorf("replace executable: %w", err)
+		}
+		result.CVAUpgraded = true
+	}
+
+	result.Upgraded = result.CVAUpgraded || result.AgentBrowserUpgraded
+	switch {
+	case result.CVAUpgraded && result.AgentBrowserUpgraded:
+		result.Message = fmt.Sprintf("upgraded cva and agent-browser from %s to %s", displayVersion(version), result.LatestVersion)
+	case result.CVAUpgraded:
+		result.Message = fmt.Sprintf("upgraded cva from %s to %s", displayVersion(version), result.LatestVersion)
+	case result.AgentBrowserUpgraded:
+		result.Message = fmt.Sprintf("installed latest agent-browser for cva %s", result.LatestVersion)
+	default:
+		result.Message = fmt.Sprintf("cva %s is already up to date", result.LatestVersion)
+	}
 	return result, nil
 }
 
@@ -196,6 +243,14 @@ func (r githubRelease) assetByName(name string) (githubAsset, error) {
 }
 
 func releaseAssetName(goos string, goarch string) (string, error) {
+	return releaseBinaryAssetName("cva", goos, goarch)
+}
+
+func releaseAgentBrowserAssetName(goos string, goarch string) (string, error) {
+	return releaseBinaryAssetName("agent-browser", goos, goarch)
+}
+
+func releaseBinaryAssetName(prefix string, goos string, goarch string) (string, error) {
 	platform := goos
 	switch goos {
 	case "darwin", "linux":
@@ -218,7 +273,18 @@ func releaseAssetName(goos string, goarch string) (string, error) {
 	if platform == "win32" {
 		suffix = ".exe"
 	}
-	return fmt.Sprintf("cva-%s-%s%s", platform, arch, suffix), nil
+	return fmt.Sprintf("%s-%s-%s%s", prefix, platform, arch, suffix), nil
+}
+
+func agentBrowserExecutableName(goos string) string {
+	if goos == "windows" {
+		return "agent-browser.exe"
+	}
+	return "agent-browser"
+}
+
+func agentBrowserUpgradePath(cvaExecutable string, goos string) string {
+	return filepath.Join(filepath.Dir(cvaExecutable), agentBrowserExecutableName(goos))
 }
 
 func normalizeVersion(raw string) string {
@@ -235,7 +301,18 @@ func displayVersion(raw string) string {
 
 func formatUpgradeText(result upgradeResult) string {
 	if result.Upgraded {
-		return fmt.Sprintf("%s\nexecutable: %s\nasset: %s\n", result.Message, result.Executable, result.AssetName)
+		lines := []string{
+			result.Message,
+			fmt.Sprintf("executable: %s", result.Executable),
+			fmt.Sprintf("asset: %s", result.AssetName),
+		}
+		if strings.TrimSpace(result.AgentBrowserExecutable) != "" {
+			lines = append(lines,
+				fmt.Sprintf("agent-browser executable: %s", result.AgentBrowserExecutable),
+				fmt.Sprintf("agent-browser asset: %s", result.AgentBrowserAssetName),
+			)
+		}
+		return strings.Join(lines, "\n") + "\n"
 	}
 	return fmt.Sprintf("%s\n", result.Message)
 }
