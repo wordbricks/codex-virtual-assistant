@@ -37,6 +37,14 @@
   "cva": {
     "owner": "wordbricks",
     "repo": "codex-virtual-assistant",
-    "assetPrefix": "cva"
-  }
+    "assetPrefix": "cva",
+    "agentBrowserAssetPrefix": "agent-browser"
+  },
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
 }
