@@ -33,7 +33,7 @@ Repository references show this work spans:
 
 - [x] Milestone 1: Narrow release workflow targets to darwin `amd64`/`arm64` for CVA and add darwin `amd64`/`arm64` patched `agent-browser` asset build/upload from `ref/agent-browser`.
 - [x] Milestone 2: Update npm platform metadata/resolution so only macOS (`darwin:x64`, `darwin:arm64`) is supported, and ensure asset naming/URL resolution includes both managed `cva` and managed `agent-browser` binaries.
-- [ ] Milestone 3: Update npm install flow to download/install both binaries for supported macOS targets and keep install error handling/messages coherent for unsupported platforms.
+- [x] Milestone 3: Update npm install flow to download/install both binaries for supported macOS targets and keep install error handling/messages coherent for unsupported platforms.
 - [ ] Milestone 4: Update npm bin wrapper to pass the downloaded managed `agent-browser` path to native CVA via `ASSISTANT_AGENT_BROWSER_BIN` (and any required compatibility wiring), without changing `AGENT_BROWSER_EXECUTABLE_PATH` meaning.
 - [ ] Milestone 5: Update native CVA `agent-browser` resolver logic and tests to enforce priority order: `ASSISTANT_AGENT_BROWSER_BIN` -> `CVA_AGENT_BROWSER_BIN` -> PATH fallback; keep Chrome executable handling separate.
 - [ ] Milestone 6: Update docs (`README.md`, `npm/README.md`) and run focused Go/Node tests covering release/npm/runtime path-resolution changes.
@@ -54,8 +54,14 @@ Repository references show this work spans:
     - `agentBrowserBinaryPath`
     - `agentBrowserDownloadURL`
   - Added npm metadata field `cva.agentBrowserAssetPrefix` (default `agent-browser`) for release asset naming.
-  - Added focused Node tests in `npm/lib/platform.test.js` and ran:
-    - `node --test npm/lib/platform.test.js npm/lib/install.test.js`
+  - Added focused Node tests in `npm/lib/platform.test.js`.
+- Milestone 3 completed in npm installer flow:
+  - `npm/lib/install.js` now installs both managed binaries (`cva` + `agent-browser`) via `ensureManagedBinaries`.
+  - `ensureBinary` is retained as a compatibility wrapper and now returns the installed `cva` path while still ensuring both binaries are present.
+  - Unsupported-platform install errors are now rewritten with explicit macOS-only npm guidance (`darwin/x64`, `darwin/arm64`).
+  - Installer CLI failure text now reflects managed dual-binary install failure context.
+  - `npm/lib/install.test.js` now covers dual download behavior, force/skip behavior, compatibility `ensureBinary` return path, and unsupported-platform messaging.
+  - Focused tests run: `node --test npm/lib/platform.test.js npm/lib/install.test.js`.
 
 ## Key decisions
 
@@ -66,12 +72,13 @@ Repository references show this work spans:
 - Release assets for `cva` and patched `agent-browser` must come from the same GitHub Release tag for npm install consistency.
 - Managed `agent-browser` release asset names are `agent-browser-darwin-x64` and `agent-browser-darwin-arm64` to mirror CVA darwin naming style.
 - npm platform metadata now hard-gates package installation to macOS x64/arm64 via `os`/`cpu` fields in `npm/package.json`.
+- npm install flow now treats `cva` and `agent-browser` as a managed pair for download/install; `ensureBinary` remains for wrapper compatibility.
 
 ## Remaining issues / open questions
 
 - Verify CI has access to checkout `ref: ref/agent-browser` and that `./cmd/agent-browser` is the correct build target at that ref.
 - Confirm whether `CVA_AGENT_BROWSER_BIN` should be documented as compatibility-only or first-class override for non-wrapper invocations.
-- Decide whether release verification should include `node --test npm/lib/platform.test.js` in workflow `verify` (currently run locally in this milestone).
+- Decide whether release verification should include `node --test npm/lib/platform.test.js` and expanded `npm/lib/install.test.js` in workflow `verify` (currently run locally in milestone work).
 - Confirm minimum focused test set expected by reviewers beyond unit coverage in Go (`internal/wtl`) and Node (`npm/lib`).
 
 ## Links to related documents
