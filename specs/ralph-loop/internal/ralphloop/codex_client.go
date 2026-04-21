@@ -34,6 +34,7 @@ type runTurnOptions struct {
 	ThreadID       string
 	Prompt         string
 	Timeout        time.Duration
+	IdleTimeout    time.Duration
 	Model          string
 	Cwd            string
 	ApprovalPolicy string
@@ -215,6 +216,13 @@ func (client *appServerClient) RunTurn(ctx context.Context, options runTurnOptio
 	if timeout <= 0 {
 		timeout = 2 * time.Hour
 	}
+	idleTimeout := options.IdleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = 10 * time.Minute
+	}
+	if idleTimeout > timeout {
+		idleTimeout = timeout
+	}
 	requestCtx := ctx
 	var cancel context.CancelFunc
 	if _, ok := ctx.Deadline(); !ok {
@@ -247,8 +255,9 @@ func (client *appServerClient) RunTurn(ctx context.Context, options runTurnOptio
 		"approval_policy": strings.TrimSpace(options.ApprovalPolicy),
 		"model":           strings.TrimSpace(options.Model),
 		"timeout_ms":      int(timeout / time.Millisecond),
+		"idle_timeout_ms": int(idleTimeout / time.Millisecond),
 	})
-	client.logDiagnostic("turn/start request thread_id=%s timeout=%s", options.ThreadID, timeout)
+	client.logDiagnostic("turn/start request thread_id=%s timeout=%s idle_timeout=%s", options.ThreadID, timeout, idleTimeout)
 	client.incrementMetric("ralph_loop_codex_turn_start_total", 1)
 	startResult, err := client.request(requestCtx, "turn/start", startPayload)
 	if err != nil {
@@ -261,10 +270,27 @@ func (client *appServerClient) RunTurn(ctx context.Context, options runTurnOptio
 	client.logDiagnostic("turn/start acknowledged thread_id=%s turn_id=%s", options.ThreadID, activeTurnID)
 	client.setMetric("ralph_loop_last_turn_id", activeTurnID)
 	agentChunks := make([]string, 0, 8)
+	idleTimer := time.NewTimer(idleTimeout)
+	defer idleTimer.Stop()
+	resetIdleTimer := func() {
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+		idleTimer.Reset(idleTimeout)
+	}
 
 	for {
 		select {
 		case <-requestCtx.Done():
+			if ctx.Err() != nil {
+				err := ctx.Err()
+				client.logDiagnostic("turn wait cancelled thread_id=%s turn_id=%s error=%v", options.ThreadID, activeTurnID, err)
+				endSpan(span, "cancelled", err, map[string]any{"turn_id": activeTurnID})
+				return turnResult{}, err
+			}
 			client.logDiagnostic("turn wait timed out thread_id=%s turn_id=%s timeout=%s", options.ThreadID, activeTurnID, timeout)
 			client.incrementMetric("ralph_loop_codex_turn_timeout_total", 1)
 			if strings.TrimSpace(activeTurnID) != "" {
@@ -274,8 +300,30 @@ func (client *appServerClient) RunTurn(ctx context.Context, options runTurnOptio
 				})
 			}
 			err := fmt.Errorf("turn/start timed out after %s", timeout)
-			endSpan(span, "timeout", err, map[string]any{"turn_id": activeTurnID})
-			return turnResult{}, err
+			endSpan(span, "timeout", err, map[string]any{"turn_id": activeTurnID, "recoverable": true})
+			return turnResult{
+				Status:         "failed",
+				TurnID:         activeTurnID,
+				AgentText:      collectAgentText(agentChunks),
+				CodexErrorInfo: "TurnTimeout",
+			}, nil
+		case <-idleTimer.C:
+			client.logDiagnostic("turn idle timed out thread_id=%s turn_id=%s idle_timeout=%s", options.ThreadID, activeTurnID, idleTimeout)
+			client.incrementMetric("ralph_loop_codex_turn_idle_timeout_total", 1)
+			if strings.TrimSpace(activeTurnID) != "" {
+				_, _ = client.request(context.Background(), "turn/interrupt", map[string]any{
+					"threadId": options.ThreadID,
+					"turnId":   activeTurnID,
+				})
+			}
+			err := fmt.Errorf("turn/start had no app-server activity for %s", idleTimeout)
+			endSpan(span, "idle_timeout", err, map[string]any{"turn_id": activeTurnID, "recoverable": true})
+			return turnResult{
+				Status:         "failed",
+				TurnID:         activeTurnID,
+				AgentText:      collectAgentText(agentChunks),
+				CodexErrorInfo: "TurnIdleTimeout",
+			}, nil
 		case waitErr := <-client.waitResult:
 			client.logDiagnostic("app-server process exited while waiting thread_id=%s turn_id=%s err=%v", options.ThreadID, activeTurnID, waitErr)
 			if waitErr == nil {
@@ -296,6 +344,7 @@ func (client *appServerClient) RunTurn(ctx context.Context, options runTurnOptio
 			endSpan(span, "error", err, map[string]any{"turn_id": activeTurnID})
 			return turnResult{}, err
 		case notification := <-client.notifications:
+			resetIdleTimer()
 			if client.notification != nil {
 				client.notification(notification)
 			}

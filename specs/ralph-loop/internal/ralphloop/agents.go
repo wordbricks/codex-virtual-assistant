@@ -16,6 +16,7 @@ type setupAgentOptions struct {
 	ApprovalPolicy string
 	Sandbox        any
 	Timeout        time.Duration
+	IdleTimeout    time.Duration
 	UserPrompt     string
 	PlanPath       string
 	WorktreePath   string
@@ -32,6 +33,7 @@ type codingLoopOptions struct {
 	PlanPath      string
 	MaxIterations int
 	Timeout       time.Duration
+	IdleTimeout   time.Duration
 	Stdout        any
 	Stderr        any
 	Telemetry     *ralphTelemetry
@@ -51,6 +53,7 @@ type prAgentOptions struct {
 	ThreadSandbox  any
 	SandboxPolicy  any
 	Timeout        time.Duration
+	IdleTimeout    time.Duration
 	PlanPath       string
 	BaseBranch     string
 }
@@ -76,7 +79,8 @@ func runSetupAgent(ctx context.Context, options setupAgentOptions) error {
 			WorkBranch:   options.WorkBranch,
 			BaseBranch:   options.BaseBranch,
 		}),
-		Timeout: options.Timeout,
+		Timeout:     options.Timeout,
+		IdleTimeout: options.IdleTimeout,
 	})
 	if err != nil {
 		return err
@@ -125,9 +129,10 @@ func runCodingLoop(ctx context.Context, options codingLoopOptions) (codingLoopRe
 
 		previousHead := currentHead(options.WorktreePath)
 		result, err := options.Client.RunTurn(ctx, runTurnOptions{
-			ThreadID: options.ThreadID,
-			Prompt:   nextPrompt,
-			Timeout:  options.Timeout,
+			ThreadID:    options.ThreadID,
+			Prompt:      nextPrompt,
+			Timeout:     options.Timeout,
+			IdleTimeout: options.IdleTimeout,
 		})
 		if err != nil {
 			endSpan(iterationSpan, "error", err, map[string]any{"phase": "coding"})
@@ -263,6 +268,7 @@ func runPrAgent(ctx context.Context, options prAgentOptions) (string, error) {
 		ThreadID:       threadID,
 		Prompt:         buildPrPrompt(prPromptOptions{PlanPath: options.PlanPath, BaseBranch: options.BaseBranch}),
 		Timeout:        options.Timeout,
+		IdleTimeout:    options.IdleTimeout,
 		Cwd:            options.Cwd,
 		ApprovalPolicy: options.ApprovalPolicy,
 		SandboxPolicy:  options.SandboxPolicy,

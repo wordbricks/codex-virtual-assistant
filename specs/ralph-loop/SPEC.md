@@ -55,6 +55,7 @@ Main options:
   --max-iterations <n>     Safety cap on coding loop iterations (default: 20)
   --work-branch <name>     Name for the working branch (default: ralph-<slugified-prompt>)
   --timeout <seconds>      Max wall-clock time for entire run (default: 43200 = 12h)
+  --turn-idle-timeout <s>  Max app-server silence during one turn before interrupt (default: 600 = 10m)
   --approval-policy <p>    Codex approval policy (default: never)
   --sandbox <policy>       Codex sandbox policy (default: workspace-write)
   --preserve-worktree      Keep the generated worktree on exit for debugging
@@ -559,7 +560,8 @@ Compatibility note:
 
 - If `turn/completed` has `status: "failed"` with `codexErrorInfo: "ContextWindowExceeded"`, call `thread/compact/start` and retry.
 - If app-server process exits unexpectedly, restart it and resume the thread with `thread/resume`.
-- If a turn takes longer than a per-turn timeout (configurable, default 2 hours), send `turn/interrupt` and retry.
+- If a turn takes longer than a per-turn timeout (configurable, default 2 hours), send `turn/interrupt` and return a recoverable failed turn so the coding loop can queue a recovery turn.
+- If a turn stops producing app-server activity for longer than `turn_idle_timeout` (default 10 minutes), send `turn/interrupt` and return a recoverable `TurnIdleTimeout` failed turn instead of waiting for the full wall-clock timeout.
 
 ---
 

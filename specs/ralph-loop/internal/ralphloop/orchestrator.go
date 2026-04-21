@@ -84,10 +84,7 @@ func runMain(ctx context.Context, repoRoot string, options MainOptions, stdout i
 	}
 	sandbox := resolveSandbox(options.Sandbox, worktree.WorktreePath)
 	prSandbox := resolvePrSandbox(options.Sandbox, worktree.WorktreePath)
-	turnTimeout := time.Duration(options.TimeoutSeconds) * time.Second
-	if turnTimeout <= 0 || turnTimeout > 2*time.Hour {
-		turnTimeout = 2 * time.Hour
-	}
+	turnTimeout, turnIdleTimeout := normalizeTurnTimeouts(options.TimeoutSeconds, options.TurnIdleTimeoutSeconds)
 	var runSpan *ralphTelemetrySpan
 	if telemetry != nil {
 		telemetry.IncrementMetric("ralph_loop_runs_started_total", 1)
@@ -198,6 +195,7 @@ func runMain(ctx context.Context, repoRoot string, options MainOptions, stdout i
 		ApprovalPolicy: options.ApprovalPolicy,
 		Sandbox:        sandbox,
 		Timeout:        turnTimeout,
+		IdleTimeout:    turnIdleTimeout,
 		UserPrompt:     options.Prompt,
 		PlanPath:       planPath,
 		WorktreePath:   worktree.WorktreePath,
@@ -267,6 +265,7 @@ func runMain(ctx context.Context, repoRoot string, options MainOptions, stdout i
 		PlanPath:      planPath,
 		MaxIterations: options.MaxIterations,
 		Timeout:       turnTimeout,
+		IdleTimeout:   turnIdleTimeout,
 		Stdout:        stdout,
 		Stderr:        stderr,
 		Telemetry:     telemetry,
@@ -333,6 +332,7 @@ func runMain(ctx context.Context, repoRoot string, options MainOptions, stdout i
 		ThreadSandbox:  sandbox,
 		SandboxPolicy:  prSandbox,
 		Timeout:        turnTimeout,
+		IdleTimeout:    turnIdleTimeout,
 		PlanPath:       planPath,
 		BaseBranch:     options.BaseBranch,
 	})
@@ -364,6 +364,21 @@ func runMain(ctx context.Context, repoRoot string, options MainOptions, stdout i
 
 func ensurePlanParent(planPath string) error {
 	return os.MkdirAll(filepath.Dir(planPath), 0o755)
+}
+
+func normalizeTurnTimeouts(timeoutSeconds int, idleTimeoutSeconds int) (time.Duration, time.Duration) {
+	turnTimeout := time.Duration(timeoutSeconds) * time.Second
+	if turnTimeout <= 0 || turnTimeout > 2*time.Hour {
+		turnTimeout = 2 * time.Hour
+	}
+	idleTimeout := time.Duration(idleTimeoutSeconds) * time.Second
+	if idleTimeout <= 0 {
+		idleTimeout = 10 * time.Minute
+	}
+	if idleTimeout > turnTimeout {
+		idleTimeout = turnTimeout
+	}
+	return turnTimeout, idleTimeout
 }
 
 func withLogTail(err error, logPath string) error {

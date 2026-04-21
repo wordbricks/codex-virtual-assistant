@@ -6,7 +6,7 @@ import (
 )
 
 func TestParseMainCommandFromFlags(t *testing.T) {
-	command, err := ParseCommand([]string{"implement the feature", "--max-iterations", "5"}, strings.NewReader(""), OutputJSON)
+	command, err := ParseCommand([]string{"implement the feature", "--max-iterations", "5", "--turn-idle-timeout", "120"}, strings.NewReader(""), OutputJSON)
 	if err != nil {
 		t.Fatalf("ParseCommand() error = %v", err)
 	}
@@ -18,6 +18,19 @@ func TestParseMainCommandFromFlags(t *testing.T) {
 	}
 	if command.MainOptions.MaxIterations != 5 {
 		t.Fatalf("max iterations = %d", command.MainOptions.MaxIterations)
+	}
+	if command.MainOptions.TurnIdleTimeoutSeconds != 120 {
+		t.Fatalf("turn idle timeout = %d", command.MainOptions.TurnIdleTimeoutSeconds)
+	}
+}
+
+func TestParseMainCommandDefaultsTurnIdleTimeout(t *testing.T) {
+	command, err := ParseCommand([]string{"implement the feature"}, strings.NewReader(""), OutputJSON)
+	if err != nil {
+		t.Fatalf("ParseCommand() error = %v", err)
+	}
+	if command.MainOptions.TurnIdleTimeoutSeconds != 600 {
+		t.Fatalf("turn idle timeout = %d, want 600", command.MainOptions.TurnIdleTimeoutSeconds)
 	}
 }
 

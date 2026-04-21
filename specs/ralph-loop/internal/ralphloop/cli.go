@@ -47,17 +47,18 @@ type CommonOptions struct {
 }
 
 type MainOptions struct {
-	Prompt             string `json:"prompt"`
-	Model              string `json:"model"`
-	BaseBranch         string `json:"base_branch"`
-	MaxIterations      int    `json:"max_iterations"`
-	WorkBranch         string `json:"work_branch"`
-	WorkBranchProvided bool   `json:"-"`
-	TimeoutSeconds     int    `json:"timeout"`
-	ApprovalPolicy     string `json:"approval_policy"`
-	Sandbox            string `json:"sandbox"`
-	PreserveWorktree   bool   `json:"preserve_worktree"`
-	DryRun             bool   `json:"dry_run"`
+	Prompt                 string `json:"prompt"`
+	Model                  string `json:"model"`
+	BaseBranch             string `json:"base_branch"`
+	MaxIterations          int    `json:"max_iterations"`
+	WorkBranch             string `json:"work_branch"`
+	WorkBranchProvided     bool   `json:"-"`
+	TimeoutSeconds         int    `json:"timeout"`
+	TurnIdleTimeoutSeconds int    `json:"turn_idle_timeout"`
+	ApprovalPolicy         string `json:"approval_policy"`
+	Sandbox                string `json:"sandbox"`
+	PreserveWorktree       bool   `json:"preserve_worktree"`
+	DryRun                 bool   `json:"dry_run"`
 }
 
 type InitOptions struct {
@@ -221,13 +222,14 @@ func parseMainCommand(args []string, stdin io.Reader, defaultOutput OutputFormat
 			PageSize: 50,
 		},
 		MainOptions: MainOptions{
-			Model:            "gpt-5.3-codex",
-			BaseBranch:       "main",
-			MaxIterations:    20,
-			TimeoutSeconds:   43200,
-			ApprovalPolicy:   "never",
-			Sandbox:          "workspace-write",
-			PreserveWorktree: false,
+			Model:                  "gpt-5.3-codex",
+			BaseBranch:             "main",
+			MaxIterations:          20,
+			TimeoutSeconds:         43200,
+			TurnIdleTimeoutSeconds: 600,
+			ApprovalPolicy:         "never",
+			Sandbox:                "workspace-write",
+			PreserveWorktree:       false,
 		},
 	}
 	payload, positionals, err := parseArgsAndPayload(args, stdin, &command.Common, func(arg string, index *int, all []string) error {
@@ -273,6 +275,16 @@ func parseMainCommand(args []string, stdin io.Reader, defaultOutput OutputFormat
 				return fmt.Errorf("invalid value for --timeout: %s", value)
 			}
 			command.MainOptions.TimeoutSeconds = parsed
+		case "--turn-idle-timeout":
+			value, err := requireValue(all, index, arg)
+			if err != nil {
+				return err
+			}
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				return fmt.Errorf("invalid value for --turn-idle-timeout: %s", value)
+			}
+			command.MainOptions.TurnIdleTimeoutSeconds = parsed
 		case "--approval-policy":
 			value, err := requireValue(all, index, arg)
 			if err != nil {

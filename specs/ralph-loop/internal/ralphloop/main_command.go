@@ -19,6 +19,7 @@ func executeMainCommand(runCtx runContext) int {
 		"max_iterations":    runCtx.command.MainOptions.MaxIterations,
 		"work_branch":       runCtx.command.MainOptions.WorkBranch,
 		"timeout":           runCtx.command.MainOptions.TimeoutSeconds,
+		"turn_idle_timeout": runCtx.command.MainOptions.TurnIdleTimeoutSeconds,
 		"approval_policy":   runCtx.command.MainOptions.ApprovalPolicy,
 		"sandbox":           runCtx.command.MainOptions.Sandbox,
 		"preserve_worktree": runCtx.command.MainOptions.PreserveWorktree,
