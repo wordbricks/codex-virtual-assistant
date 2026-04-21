@@ -31,7 +31,7 @@ Repository references show this work spans:
 
 ## Milestones
 
-- [ ] Milestone 1: Narrow release workflow targets to darwin `amd64`/`arm64` for CVA and add darwin `amd64`/`arm64` patched `agent-browser` asset build/upload from `ref/agent-browser`.
+- [x] Milestone 1: Narrow release workflow targets to darwin `amd64`/`arm64` for CVA and add darwin `amd64`/`arm64` patched `agent-browser` asset build/upload from `ref/agent-browser`.
 - [ ] Milestone 2: Update npm platform metadata/resolution so only macOS (`darwin:x64`, `darwin:arm64`) is supported, and ensure asset naming/URL resolution includes both managed `cva` and managed `agent-browser` binaries.
 - [ ] Milestone 3: Update npm install flow to download/install both binaries for supported macOS targets and keep install error handling/messages coherent for unsupported platforms.
 - [ ] Milestone 4: Update npm bin wrapper to pass the downloaded managed `agent-browser` path to native CVA via `ASSISTANT_AGENT_BROWSER_BIN` (and any required compatibility wiring), without changing `AGENT_BROWSER_EXECUTABLE_PATH` meaning.
@@ -40,7 +40,11 @@ Repository references show this work spans:
 
 ## Current progress
 
-- Not started.
+- Milestone 1 completed in `.github/workflows/release.yml`.
+- Release build jobs are now split into `build-cva-binaries` and `build-agent-browser-binaries`.
+- CVA release artifacts now build only darwin targets (`cva-darwin-x64`, `cva-darwin-arm64`).
+- Added darwin-only managed `agent-browser` artifacts built from checkout ref `ref/agent-browser` as `agent-browser-darwin-x64` and `agent-browser-darwin-arm64`.
+- `create-release` now depends on both binary build jobs so both components publish into the same GitHub Release.
 
 ## Key decisions
 
@@ -49,10 +53,11 @@ Repository references show this work spans:
 - Managed `agent-browser` resolution priority in CVA is explicit: `ASSISTANT_AGENT_BROWSER_BIN`, then `CVA_AGENT_BROWSER_BIN`, then PATH fallback.
 - `AGENT_BROWSER_EXECUTABLE_PATH` remains reserved for Chrome executable path semantics.
 - Release assets for `cva` and patched `agent-browser` must come from the same GitHub Release tag for npm install consistency.
+- Managed `agent-browser` release asset names are `agent-browser-darwin-x64` and `agent-browser-darwin-arm64` to mirror CVA darwin naming style.
 
 ## Remaining issues / open questions
 
-- Confirm final release asset naming convention for managed `agent-browser` darwin artifacts to keep npm installer logic stable.
+- Verify CI has access to checkout `ref: ref/agent-browser` and that `./cmd/agent-browser` is the correct build target at that ref.
 - Confirm whether `CVA_AGENT_BROWSER_BIN` should be documented as compatibility-only or first-class override for non-wrapper invocations.
 - Confirm minimum focused test set expected by reviewers beyond unit coverage in Go (`internal/wtl`) and Node (`npm/lib`).
 

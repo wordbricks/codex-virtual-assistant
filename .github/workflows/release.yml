@@ -28,31 +28,19 @@ jobs:
       - run: npm pack --dry-run
         working-directory: npm
 
-  build-binaries:
+  build-cva-binaries:
     needs: verify
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - goos: linux
-            goarch: amd64
-            asset_name: cva-linux-x64
-          - goos: linux
-            goarch: arm64
-            asset_name: cva-linux-arm64
           - goos: darwin
             goarch: amd64
             asset_name: cva-darwin-x64
           - goos: darwin
             goarch: arm64
             asset_name: cva-darwin-arm64
-          - goos: windows
-            goarch: amd64
-            asset_name: cva-win32-x64.exe
-          - goos: windows
-            goarch: arm64
-            asset_name: cva-win32-arm64.exe
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -80,8 +68,49 @@ jobs:
           name: ${{ matrix.asset_name }}
           path: dist/${{ matrix.asset_name }}
 
+  build-agent-browser-binaries:
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: amd64
+            asset_name: agent-browser-darwin-x64
+          - goos: darwin
+            goarch: arm64
+            asset_name: agent-browser-darwin-arm64
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ref/agent-browser
+          path: ref/agent-browser
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ref/agent-browser/go.mod
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p dist
+          go build \
+            -trimpath \
+            -ldflags="-s -w" \
+            -o "dist/${{ matrix.asset_name }}" \
+            ./cmd/agent-browser
+        working-directory: ref/agent-browser
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ref/agent-browser/dist/${{ matrix.asset_name }}
+
   create-release:
-    needs: build-binaries
+    needs:
+      - build-cva-binaries
+      - build-agent-browser-binaries
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
