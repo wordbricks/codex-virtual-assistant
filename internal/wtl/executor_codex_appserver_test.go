@@ -108,6 +108,9 @@ func TestPhaseForAttemptRoleSupportsGateAnswerAndReport(t *testing.T) {
 	if got := phaseForAttemptRole(assistant.AttemptRoleScheduler); got != assistant.RunPhaseScheduling {
 		t.Fatalf("phaseForAttemptRole(scheduler) = %q, want %q", got, assistant.RunPhaseScheduling)
 	}
+	if got := phaseForAttemptRole(assistant.AttemptRoleWikiIngest); got != assistant.RunPhaseWikiIngesting {
+		t.Fatalf("phaseForAttemptRole(wiki_ingest) = %q, want %q", got, assistant.RunPhaseWikiIngesting)
+	}
 }
 
 func TestPhaseOutputSchemaSupportsGateAnswerAndReport(t *testing.T) {
@@ -162,6 +165,18 @@ func TestPhaseOutputSchemaSupportsGateAnswerAndReport(t *testing.T) {
 	if _, ok := schedulerProperties["entries"]; !ok {
 		t.Fatalf("scheduler schema properties = %#v, want entries", schedulerProperties)
 	}
+
+	wikiIngest := phaseOutputSchema(assistant.AttemptRoleWikiIngest)
+	if wikiIngest == nil {
+		t.Fatal("phaseOutputSchema(wiki_ingest) = nil")
+	}
+	wikiProperties, ok := wikiIngest["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("wiki ingest schema properties type = %T, want map[string]any", wikiIngest["properties"])
+	}
+	if _, ok := wikiProperties["changed_pages"]; !ok {
+		t.Fatalf("wiki ingest schema properties = %#v, want changed_pages", wikiProperties)
+	}
 }
 
 func TestPlannerSchemaRestrictsAutomationSafetySessionModes(t *testing.T) {
@@ -201,6 +216,7 @@ func TestPhaseOutputSchemasAreStrictStructuredOutputSchemas(t *testing.T) {
 		assistant.AttemptRoleContractor,
 		assistant.AttemptRoleEvaluator,
 		assistant.AttemptRoleScheduler,
+		assistant.AttemptRoleWikiIngest,
 		assistant.AttemptRoleReporter,
 		assistant.AttemptRoleGenerator,
 	}
@@ -321,8 +337,8 @@ func TestPhasePromptForCodexIncludesProjectBrowserProfileGuidance(t *testing.T) 
 	if !strings.Contains(prompt, "When using --auto-connect") || !strings.Contains(prompt, "return a wait_request for approval") {
 		t.Fatalf("prompt = %q, want Chrome remote debugging approval guidance", prompt)
 	}
-	if !strings.Contains(prompt, "notify the user of the result through the agent-message CLI") {
-		t.Fatalf("prompt = %q, want agent-message notification guidance", prompt)
+	if strings.Contains(prompt, "notify the user of the result through the agent-message CLI") {
+		t.Fatalf("prompt = %q, generator phases should not include report delivery guidance", prompt)
 	}
 }
 

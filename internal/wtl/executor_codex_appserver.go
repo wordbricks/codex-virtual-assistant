@@ -1105,8 +1105,12 @@ func phaseForAttemptRole(role assistant.AttemptRole) assistant.RunPhase {
 		return assistant.RunPhaseEvaluating
 	case assistant.AttemptRoleScheduler:
 		return assistant.RunPhaseScheduling
+	case assistant.AttemptRoleWikiIngest:
+		return assistant.RunPhaseWikiIngesting
 	case assistant.AttemptRoleReporter:
 		return assistant.RunPhaseReporting
+	case assistant.AttemptRoleGenerator:
+		return assistant.RunPhaseGenerating
 	default:
 		return assistant.RunPhaseGenerating
 	}
@@ -1448,10 +1452,14 @@ func phasePromptForCodex(request CodexPhaseRequest) string {
 	parts := []string{
 		"You are operating inside Codex Virtual Assistant.",
 		"Use available tools directly when needed. Do not describe hypothetical steps when you can execute them.",
-		"Carry out the request, then notify the user of the result through the agent-message CLI before you finish the phase response.",
 		"If you need login, approval, or missing business context, stop and return the required wait_request field instead of calling request_user_input.",
 		"If the task needs deferred follow-up work, create scheduled runs directly instead of expecting a separate scheduler phase.",
 		"Return only the schema-conforming final response for this phase.",
+	}
+	if request.Role == assistant.AttemptRoleReporter {
+		parts = append(parts, "Carry out the request, then notify the user of the result through the agent-message CLI before you finish the phase response.")
+	} else if request.Role == assistant.AttemptRoleWikiIngest {
+		parts = append(parts, "Do not send a direct user-facing agent-message in this phase; the reporter phase will deliver the final user-facing result.")
 	}
 	if strings.TrimSpace(request.RunID) != "" {
 		parts = append(parts,
@@ -1709,6 +1717,21 @@ func phaseOutputSchema(role assistant.AttemptRole) map[string]any {
 				},
 			},
 			"required":             []string{"entries"},
+			"additionalProperties": false,
+		}
+	case assistant.AttemptRoleWikiIngest:
+		return map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"summary":          map[string]any{"type": "string"},
+				"changed_pages":    stringArraySchema(),
+				"validation_notes": stringArraySchema(),
+			},
+			"required": []string{
+				"summary",
+				"changed_pages",
+				"validation_notes",
+			},
 			"additionalProperties": false,
 		}
 	case assistant.AttemptRoleReporter:

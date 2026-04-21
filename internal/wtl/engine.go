@@ -45,8 +45,9 @@ type ProjectManager interface {
 }
 
 type WikiManager interface {
+	EnsureProjectScaffold(assistant.ProjectContext) error
 	LoadContext(assistant.ProjectContext) (assistant.WikiContext, error)
-	IngestRun(store.RunRecord) (wiki.IngestResult, error)
+	LintProject(assistant.ProjectContext) (wiki.LintReport, error)
 }
 
 type RunEngine struct {
@@ -913,7 +914,7 @@ func (e *RunEngine) executeWikiIngest(ctx context.Context, record *store.RunReco
 		return e.publishEvent(ctx, record.Run.ID, assistant.EventTypePhaseChanged, assistant.RunPhaseReporting, summary)
 	}
 
-	if e.wiki == nil || strings.TrimSpace(record.Run.Project.Slug) == "" {
+	if e.wiki == nil || strings.TrimSpace(record.Run.Project.Slug) == "" || strings.TrimSpace(record.Run.Project.Slug) == "no_project" || strings.TrimSpace(record.Run.Project.WorkspaceDir) == "" {
 		return enterReporting("Wiki ingest skipped. Delivering the final report.")
 	}
 
@@ -933,22 +934,59 @@ func (e *RunEngine) executeWikiIngest(ctx context.Context, record *store.RunReco
 	if err != nil {
 		return err
 	}
-	result, ingestErr := e.wiki.IngestRun(latestRecord)
-	if ingestErr != nil {
-		if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypeReasoning, assistant.RunPhaseWikiIngesting, fmt.Sprintf("Project wiki ingest failed: %v", ingestErr)); err != nil {
-			return err
+	projectCtx := latestRecord.Run.Project
+	if err := e.wiki.EnsureProjectScaffold(projectCtx); err != nil {
+		if eventErr := e.publishEvent(ctx, record.Run.ID, assistant.EventTypeReasoning, assistant.RunPhaseWikiIngesting, fmt.Sprintf("Project wiki scaffold validation failed before ingest: %v", err)); eventErr != nil {
+			return eventErr
 		}
-		return enterReporting("Project wiki ingest failed. Continuing to the final report.")
+		return enterReporting("Project wiki ingest validation failed. Continuing to the final report.")
 	}
 
-	if len(result.ChangedPages) > 0 {
-		if err := e.publishEventWithData(ctx, record.Run.ID, assistant.EventTypeReasoning, assistant.RunPhaseWikiIngesting, firstNonEmpty(result.Summary, "Project wiki memory updated."), map[string]any{
-			"changed_pages": result.ChangedPages,
-		}); err != nil {
+	prompt := prompting.BuildWikiIngestPrompt(prompting.WikiIngestInput{
+		Run:              latestRecord.Run,
+		Artifacts:        latestRecord.Artifacts,
+		Evidence:         latestRecord.Evidence,
+		ToolCalls:        latestRecord.ToolCalls,
+		LatestEvaluation: latestRecord.Run.LatestEvaluation,
+		Wiki:             e.loadWikiContext(projectCtx),
+	})
+	attempt, response, ingestErr := e.executeAttempt(ctx, latestRecord.Run, latestRecord.Attempts, assistant.AttemptRoleWikiIngest, prompt, "", nil, projectCtx.WorkspaceDir)
+	if ingestErr != nil {
+		if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypeReasoning, assistant.RunPhaseWikiIngesting, fmt.Sprintf("Project wiki ingest execution failed: %v", ingestErr)); err != nil {
 			return err
 		}
+		return enterReporting("Project wiki ingest execution failed. Continuing to the final report.")
 	}
-	return enterReporting("Project wiki memory updated. Delivering the final report.")
+	if response.WaitRequest != nil {
+		return e.enterWaiting(ctx, latestRecord.Run, attempt, response.WaitRequest)
+	}
+	if err := e.wiki.EnsureProjectScaffold(projectCtx); err != nil {
+		if eventErr := e.publishEvent(ctx, record.Run.ID, assistant.EventTypeReasoning, assistant.RunPhaseWikiIngesting, fmt.Sprintf("Project wiki scaffold validation failed after ingest: %v", err)); eventErr != nil {
+			return eventErr
+		}
+		return enterReporting("Project wiki ingest validation failed. Continuing to the final report.")
+	}
+	lintReport, lintErr := e.wiki.LintProject(projectCtx)
+	if lintErr != nil {
+		if err := e.publishEvent(ctx, record.Run.ID, assistant.EventTypeReasoning, assistant.RunPhaseWikiIngesting, fmt.Sprintf("Project wiki lint validation failed: %v", lintErr)); err != nil {
+			return err
+		}
+		return enterReporting("Project wiki ingest lint validation failed. Continuing to the final report.")
+	}
+	ingestOutput, decodeErr := prompting.DecodeWikiIngestOutput([]byte(response.Output))
+	if decodeErr != nil {
+		ingestOutput.Summary = firstNonEmpty(response.Summary, "Project wiki memory updated.")
+	}
+	changedPages := uniqueTrimmedStrings(append(ingestOutput.ChangedPages, lintReport.ReportPath, "open-questions.md", "index.md", "overview.md"))
+	if err := e.publishEventWithData(ctx, record.Run.ID, assistant.EventTypeReasoning, assistant.RunPhaseWikiIngesting, firstNonEmpty(ingestOutput.Summary, response.Summary, "Project wiki memory updated."), map[string]any{
+		"changed_pages":     changedPages,
+		"validation_report": lintReport.ReportPath,
+		"validation_notes":  ingestOutput.ValidationNotes,
+		"lint_findings":     len(lintReport.Findings),
+	}); err != nil {
+		return err
+	}
+	return enterReporting("Project wiki memory updated and validated. Delivering the final report.")
 }
 
 func (e *RunEngine) executeReporter(ctx context.Context, record *store.RunRecord, resumeInput map[string]string) (Directive, error) {
@@ -1189,7 +1227,6 @@ func (e *RunEngine) completeRun(ctx context.Context, run assistant.Run, summary 
 }
 
 func (e *RunEngine) exhaustRun(ctx context.Context, run assistant.Run, summary string) error {
-	e.tryIngestTerminalRun(ctx, run.ID)
 	now := e.now().UTC()
 	run.Status = assistant.RunStatusExhausted
 	run.Phase = assistant.RunPhaseFailed
@@ -1202,7 +1239,6 @@ func (e *RunEngine) exhaustRun(ctx context.Context, run assistant.Run, summary s
 }
 
 func (e *RunEngine) failRun(ctx context.Context, run assistant.Run, summary string, cause error) error {
-	e.tryIngestTerminalRun(ctx, run.ID)
 	now := e.now().UTC()
 	run.Status = assistant.RunStatusFailed
 	run.Phase = assistant.RunPhaseFailed
@@ -1226,17 +1262,6 @@ func (e *RunEngine) loadWikiContext(project assistant.ProjectContext) assistant.
 		return assistant.WikiContext{}
 	}
 	return context
-}
-
-func (e *RunEngine) tryIngestTerminalRun(ctx context.Context, runID string) {
-	if e.wiki == nil || strings.TrimSpace(runID) == "" {
-		return
-	}
-	record, err := e.repo.GetRunRecord(ctx, runID)
-	if err != nil || strings.TrimSpace(record.Run.Project.Slug) == "" {
-		return
-	}
-	_, _ = e.wiki.IngestRun(record)
 }
 
 func (e *RunEngine) publishEvent(ctx context.Context, runID string, eventType assistant.EventType, phase assistant.RunPhase, summary string) error {

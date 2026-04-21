@@ -106,6 +106,21 @@ type SchedulerOutput struct {
 	Entries []assistant.ScheduleEntry `json:"entries"`
 }
 
+type WikiIngestInput struct {
+	Run              assistant.Run
+	Artifacts        []assistant.Artifact
+	Evidence         []assistant.Evidence
+	ToolCalls        []assistant.ToolCall
+	LatestEvaluation *assistant.Evaluation
+	Wiki             assistant.WikiContext
+}
+
+type WikiIngestOutput struct {
+	Summary         string   `json:"summary"`
+	ChangedPages    []string `json:"changed_pages"`
+	ValidationNotes []string `json:"validation_notes"`
+}
+
 type ReportInput struct {
 	Run                 assistant.Run
 	Artifacts           []assistant.Artifact
@@ -320,6 +335,85 @@ When required information is missing, the wiki is stale, or the question clearly
 	}
 }
 
+func BuildWikiIngestPrompt(input WikiIngestInput) Bundle {
+	builder := &strings.Builder{}
+	fmt.Fprintf(builder, "Project slug: %s\n", strings.TrimSpace(input.Run.Project.Slug))
+	fmt.Fprintf(builder, "Project name: %s\n", strings.TrimSpace(input.Run.Project.Name))
+	fmt.Fprintf(builder, "Project description: %s\n", strings.TrimSpace(input.Run.Project.Description))
+	fmt.Fprintf(builder, "Project workspace directory: %s\n", strings.TrimSpace(input.Run.Project.WorkspaceDir))
+	fmt.Fprintf(builder, "Project wiki directory: %s\n", strings.TrimSpace(input.Run.Project.WikiDir))
+	fmt.Fprintf(builder, "Run ID: %s\n", strings.TrimSpace(input.Run.ID))
+	fmt.Fprintf(builder, "Original user request: %s\n", strings.TrimSpace(input.Run.UserRequestRaw))
+	fmt.Fprintf(builder, "Goal: %s\n", strings.TrimSpace(input.Run.TaskSpec.Goal))
+	if len(input.Run.TaskSpec.Deliverables) > 0 {
+		fmt.Fprintf(builder, "Deliverables: %s\n", strings.Join(input.Run.TaskSpec.Deliverables, "; "))
+	}
+	if len(input.Run.TaskSpec.DoneDefinition) > 0 {
+		fmt.Fprintf(builder, "Done definition: %s\n", strings.Join(input.Run.TaskSpec.DoneDefinition, "; "))
+	}
+	if input.LatestEvaluation != nil {
+		fmt.Fprintf(builder, "Latest evaluation passed: %t\n", input.LatestEvaluation.Passed)
+		fmt.Fprintf(builder, "Latest evaluation summary: %s\n", strings.TrimSpace(input.LatestEvaluation.Summary))
+	}
+	if len(input.Artifacts) > 0 {
+		fmt.Fprintf(builder, "\nArtifacts:\n")
+		for _, artifact := range input.Artifacts {
+			fmt.Fprintf(builder, "- %s: %s", artifact.Kind, firstNonEmpty(artifact.Title, artifact.ID))
+			if source := firstNonEmpty(artifact.SourceURL, artifact.Path); source != "" {
+				fmt.Fprintf(builder, " (%s)", source)
+			}
+			if strings.TrimSpace(artifact.Content) != "" {
+				fmt.Fprintf(builder, "\n  Content: %s", summarizePromptText(artifact.Content, 700))
+			}
+			fmt.Fprintln(builder)
+		}
+	}
+	if len(input.Evidence) > 0 {
+		fmt.Fprintf(builder, "\nEvidence:\n")
+		for _, evidence := range input.Evidence {
+			fmt.Fprintf(builder, "- %s: %s\n", evidence.Kind, firstNonEmpty(evidence.Summary, summarizePromptText(evidence.Detail, 500)))
+		}
+	}
+	if len(input.ToolCalls) > 0 {
+		fmt.Fprintf(builder, "\nTool calls:\n")
+		for _, toolCall := range input.ToolCalls {
+			fmt.Fprintf(builder, "- %s: %s\n", toolCall.ToolName, firstNonEmpty(toolCall.OutputSummary, toolCall.InputSummary))
+		}
+	}
+	appendWikiSummary(builder, input.Wiki)
+
+	return Bundle{
+		System: strings.TrimSpace(`
+You are the wiki ingest phase for a WTL GAN-policy based assistant.
+Your job is to update the project wiki by directly editing files in the project workspace.
+Use the filesystem and shell tools yourself. Do not return a proposed ingest plan, patch plan, or instructions for another process.
+
+Hard requirements:
+- Work only inside the current project workspace. Wiki memory changes should stay under wiki/ unless the task explicitly needs raw imports or attachments.
+- You may create or update the appropriate wiki/ page anywhere in the project wiki scaffold, including wiki/topics/, wiki/entities/, wiki/decisions/, wiki/playbooks/, wiki/sources/, and wiki/reports/.
+- Preserve the scaffold created by the host validation: wiki/index.md, wiki/overview.md, wiki/log.md, wiki/open-questions.md, wiki/topics/, wiki/entities/, wiki/decisions/, wiki/playbooks/, wiki/sources/, wiki/reports/.
+- Before editing, inspect PROJECT.md, AGENTS.md when present, wiki/index.md, wiki/overview.md, wiki/log.md, and any relevant existing pages.
+- Every wiki markdown page you create or materially update must have YAML frontmatter with: title, page_type, updated_at, status, confidence, source_refs, related.
+- Use only valid page_type values already used by the project wiki: overview, topic, entity, decision, playbook, source, question, report.
+- Keep durable knowledge in topic/entity/decision/playbook/source pages. Do not put raw run logs, prompt dumps, or one-off execution details in durable wiki pages.
+- Keep run-specific provenance concise in reports/run-<run_id>.md when it is useful. Do not create full run-history dumps.
+- Keep wiki/log.md as a compact timeline index.
+- Update wiki/index.md and wiki/overview.md when the page set or project understanding changed.
+- Include source_refs such as run:<run_id>, artifact:<id>, evidence:<id>, and reports/run-<run_id>.md where applicable.
+- Do not write credentials, secrets, tokens, or private authentication material.
+- If the run produced no durable wiki-worthy knowledge, do not force a topic update; record only concise provenance if useful.
+
+After editing, return one strict JSON object and nothing else.
+The JSON object must contain exactly these keys:
+- summary
+- changed_pages
+- validation_notes
+changed_pages must list the wiki-relative paths you created or modified.
+validation_notes must summarize the scaffold/frontmatter/source_refs checks you performed.`),
+		User: strings.TrimSpace(builder.String()),
+	}
+}
+
 func DecodeProjectSelectorOutput(raw []byte) (assistant.ProjectContext, string, error) {
 	var output ProjectSelectorOutput
 	if err := json.Unmarshal(raw, &output); err != nil {
@@ -334,6 +428,20 @@ func DecodeProjectSelectorOutput(raw []byte) (assistant.ProjectContext, string, 
 		return assistant.ProjectContext{}, "", fmt.Errorf("decode project selector output: missing required project fields")
 	}
 	return project, strings.TrimSpace(output.Summary), nil
+}
+
+func DecodeWikiIngestOutput(raw []byte) (WikiIngestOutput, error) {
+	var output WikiIngestOutput
+	if err := json.Unmarshal(raw, &output); err != nil {
+		return WikiIngestOutput{}, fmt.Errorf("decode wiki ingest output: %w", err)
+	}
+	output.Summary = strings.TrimSpace(output.Summary)
+	output.ChangedPages = cleanList(output.ChangedPages)
+	output.ValidationNotes = cleanList(output.ValidationNotes)
+	if output.Summary == "" {
+		return WikiIngestOutput{}, fmt.Errorf("decode wiki ingest output: summary is required")
+	}
+	return output, nil
 }
 
 func DecodeGateOutput(raw []byte) (assistant.RunRoute, string, string, error) {
@@ -1007,4 +1115,29 @@ func formatOptionalSuffix(value string) string {
 		return ""
 	}
 	return " | " + value
+}
+
+func summarizePromptText(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	return strings.TrimSpace(value[:limit]) + "..."
+}
+
+func cleanList(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		cleaned = append(cleaned, value)
+	}
+	return cleaned
 }

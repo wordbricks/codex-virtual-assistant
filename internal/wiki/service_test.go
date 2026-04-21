@@ -48,7 +48,7 @@ func TestEnsureProjectScaffoldCreatesWikiLayout(t *testing.T) {
 	}
 }
 
-func TestIngestRunCreatesReportTopicAndIndexUpdates(t *testing.T) {
+func TestIngestRunCreatesReportAndIndexUpdates(t *testing.T) {
 	t.Parallel()
 
 	dataDir := t.TempDir()
@@ -107,7 +107,7 @@ func TestIngestRunCreatesReportTopicAndIndexUpdates(t *testing.T) {
 		t.Fatalf("IngestRun() error = %v", err)
 	}
 	if len(result.ChangedPages) < 4 {
-		t.Fatalf("ChangedPages = %#v, want report/topic/index/log updates", result.ChangedPages)
+		t.Fatalf("ChangedPages = %#v, want report/index/log updates", result.ChangedPages)
 	}
 
 	reportContent, err := os.ReadFile(filepath.Join(projectCtx.WorkspaceDir, "wiki", "reports", "run-run_docs_1.md"))

@@ -30,7 +30,6 @@ const (
 var (
 	ErrWikiDisabled = errors.New("wiki: project wiki is disabled")
 	linkPattern     = regexp.MustCompile(`\[[^\]]+\]\(([^)#]+?\.md)\)`)
-	slugSanitizer   = regexp.MustCompile(`[^a-z0-9]+`)
 )
 
 type Service struct {
@@ -260,20 +259,6 @@ func (s *Service) IngestRun(record store.RunRecord) (IngestResult, error) {
 
 	changedPages := []string{reportRelPath}
 
-	topicRelPath := ""
-	if topicSlug := topicSlugForRun(record.Run); topicSlug != "" {
-		topicRelPath = filepath.ToSlash(filepath.Join("topics", topicSlug+".md"))
-		topicPath := filepath.Join(projectCtx.WikiDir, filepath.FromSlash(topicRelPath))
-		topicContent, err := s.renderTopicPage(projectCtx, record, topicRelPath, now)
-		if err != nil {
-			return IngestResult{}, err
-		}
-		if err := os.WriteFile(topicPath, []byte(topicContent), 0o644); err != nil {
-			return IngestResult{}, fmt.Errorf("write topic page: %w", err)
-		}
-		changedPages = append(changedPages, topicRelPath)
-	}
-
 	if err := s.updateLogPage(projectCtx, record, changedPages, now); err != nil {
 		return IngestResult{}, err
 	}
@@ -482,34 +467,6 @@ func (s *Service) readPageFromProject(projectCtx assistant.ProjectContext, relPa
 			strings.TrimSpace(body),
 		}, "\n")),
 	}, nil
-}
-
-func (s *Service) renderTopicPage(projectCtx assistant.ProjectContext, record store.RunRecord, relPath string, now time.Time) (string, error) {
-	title := firstNonEmpty(record.Run.TaskSpec.Goal, record.Run.UserRequestRaw, relPath)
-	existing, err := s.readPageFromProject(projectCtx, relPath)
-	body := ""
-	meta := pageMeta{
-		Title:      title,
-		PageType:   "topic",
-		UpdatedAt:  now.Format(time.RFC3339),
-		Status:     "active",
-		Confidence: confidenceForRun(record),
-		SourceRefs: collectSourceRefs(record),
-		Related:    []string{filepath.ToSlash(filepath.Join("reports", fmt.Sprintf("run-%s.md", record.Run.ID)))},
-	}
-	if err == nil {
-		existingMeta, existingBody := parsePage(existing.Content)
-		meta = mergePageMeta(existingMeta, meta)
-		body = strings.TrimSpace(existingBody)
-	}
-
-	section := renderTopicSection(record)
-	if body == "" {
-		body = fmt.Sprintf("# %s\n\n%s", title, section)
-	} else {
-		body = fmt.Sprintf("%s\n\n%s", body, section)
-	}
-	return renderPage(meta, body), nil
 }
 
 func (s *Service) updateLogPage(projectCtx assistant.ProjectContext, record store.RunRecord, changedPages []string, now time.Time) error {
@@ -764,29 +721,6 @@ func renderRunReport(record store.RunRecord, reportPath string, now time.Time) s
 	return renderPage(meta, body.String())
 }
 
-func renderTopicSection(record store.RunRecord) string {
-	builder := &strings.Builder{}
-	timestamp := record.Run.UpdatedAt
-	if timestamp.IsZero() {
-		timestamp = record.Run.CreatedAt
-	}
-	fmt.Fprintf(builder, "## Update from %s (%s)\n\n", timestamp.UTC().Format("2006-01-02"), record.Run.ID)
-	fmt.Fprintf(builder, "%s\n", firstNonEmpty(runSummary(record), "Run completed without a synthesized summary."))
-	if len(record.Evidence) > 0 {
-		fmt.Fprintf(builder, "\n### Evidence Highlights\n")
-		for _, evidence := range tailEvidence(record.Evidence, 5) {
-			fmt.Fprintf(builder, "- %s\n", firstNonEmpty(evidence.Summary, evidence.Detail))
-		}
-	}
-	if len(record.Artifacts) > 0 {
-		fmt.Fprintf(builder, "\n### Artifacts\n")
-		for _, artifact := range tailArtifacts(record.Artifacts, 4) {
-			fmt.Fprintf(builder, "- %s\n", firstNonEmpty(artifact.Title, artifact.ID))
-		}
-	}
-	return strings.TrimSpace(builder.String())
-}
-
 func renderLintReport(projectCtx assistant.ProjectContext, findings []LintFinding, now time.Time) string {
 	meta := pageMeta{
 		Title:      fmt.Sprintf("Wiki Health %s", now.Format("2006-01-02")),
@@ -999,11 +933,7 @@ func collectSourceRefs(record store.RunRecord) []string {
 }
 
 func relatedRefsForRun(record store.RunRecord) []string {
-	related := []string{indexFileName, overviewFileName}
-	if topicSlug := topicSlugForRun(record.Run); topicSlug != "" {
-		related = append(related, filepath.ToSlash(filepath.Join("topics", topicSlug+".md")))
-	}
-	return dedupeStrings(related)
+	return []string{indexFileName, overviewFileName}
 }
 
 func confidenceForRun(record store.RunRecord) string {
@@ -1033,20 +963,6 @@ func runSummary(record store.RunRecord) string {
 		}
 	}
 	return strings.TrimSpace(record.Run.UserRequestRaw)
-}
-
-func topicSlugForRun(run assistant.Run) string {
-	base := firstNonEmpty(run.TaskSpec.Goal, run.UserRequestRaw)
-	base = strings.ToLower(strings.TrimSpace(base))
-	if base == "" {
-		return ""
-	}
-	base = slugSanitizer.ReplaceAllString(base, "-")
-	base = strings.Trim(base, "-")
-	if len(base) > 64 {
-		base = strings.Trim(base[:64], "-")
-	}
-	return base
 }
 
 func summarizeWikiText(value string, limit int) string {

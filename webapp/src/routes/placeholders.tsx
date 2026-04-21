@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
+import { BookOpen, ListChecks } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { apiClient } from "@/api/client";
@@ -362,15 +363,26 @@ export function ProjectOverviewPlaceholder() {
 
       {detailQuery.data && (
         <>
+          <nav className="project-shortcuts" aria-label="Project shortcuts">
+            <Link to="/projects/$slug/wiki" params={{ slug }} className="project-shortcut">
+              <span className="project-shortcut-icon">
+                <BookOpen size={34} strokeWidth={1.8} aria-hidden="true" />
+              </span>
+              <span className="project-shortcut-label">Open Wiki</span>
+            </Link>
+            <Link to="/projects/$slug/runs" params={{ slug }} className="project-shortcut">
+              <span className="project-shortcut-icon">
+                <ListChecks size={34} strokeWidth={1.8} aria-hidden="true" />
+              </span>
+              <span className="project-shortcut-label">Open Runs</span>
+            </Link>
+          </nav>
+
           <header className="project-overview-header">
             <div>
               <p className="projects-kicker">Project</p>
               <h2>{detailQuery.data.project.name}</h2>
               <p className="project-overview-subtitle">{detailQuery.data.project.description || "No description available."}</p>
-            </div>
-            <div className="project-overview-links">
-              <Link to="/projects/$slug/wiki" params={{ slug }}>Open Wiki</Link>
-              <Link to="/projects/$slug/runs" params={{ slug }}>Open Runs</Link>
             </div>
           </header>
 

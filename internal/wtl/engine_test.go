@@ -67,8 +67,8 @@ func TestRunEngineRetriesGeneratorUntilEvaluationPasses(t *testing.T) {
 	if record.Run.Status != assistant.RunStatusCompleted {
 		t.Fatalf("Run.Status = %q, want %q", record.Run.Status, assistant.RunStatusCompleted)
 	}
-	if len(record.Attempts) != 9 {
-		t.Fatalf("len(Attempts) = %d, want 9", len(record.Attempts))
+	if len(record.Attempts) != 10 {
+		t.Fatalf("len(Attempts) = %d, want 10", len(record.Attempts))
 	}
 	if len(record.Evaluations) != 2 {
 		t.Fatalf("len(Evaluations) = %d, want 2", len(record.Evaluations))
@@ -384,6 +384,7 @@ func TestRunEnginePreservesWorkflowOrderAfterGate(t *testing.T) {
 			{role: assistant.AttemptRoleContractor, response: PhaseResponse{Summary: "Contract agreed.", Output: contractJSON("agreed", []string{"Validation report"}, []string{"Workflow executes in order"}, "")}},
 			{role: assistant.AttemptRoleGenerator, response: PhaseResponse{Summary: "Generator produced output."}},
 			{role: assistant.AttemptRoleEvaluator, response: PhaseResponse{Summary: "Evaluator passed.", Output: evaluatorJSON(true, 95, "Workflow order is correct.", nil, "")}},
+			{role: assistant.AttemptRoleWikiIngest, response: PhaseResponse{Summary: "Wiki updated.", Output: wikiIngestJSON("Wiki updated.")}},
 			{role: assistant.AttemptRoleReporter, response: PhaseResponse{Summary: "Delivered final report.", Output: reportJSON("Delivered final report.", "Workflow order is correct.")}},
 		},
 	}
@@ -412,6 +413,7 @@ func TestRunEnginePreservesWorkflowOrderAfterGate(t *testing.T) {
 		assistant.AttemptRoleContractor,
 		assistant.AttemptRoleGenerator,
 		assistant.AttemptRoleEvaluator,
+		assistant.AttemptRoleWikiIngest,
 		assistant.AttemptRoleReporter,
 	}
 	if len(record.Attempts) != len(wantRoles) {
@@ -444,6 +446,7 @@ func TestRunEngineCreatesScheduledRunsBeforeReporting(t *testing.T) {
 				{ScheduledFor: "2026-04-03T13:00:00Z", Prompt: "Call the first shortlisted hospital."},
 				{ScheduledFor: "2026-04-03T13:30:00Z", Prompt: "Call the second shortlisted hospital."},
 			})}},
+			{role: assistant.AttemptRoleWikiIngest, response: PhaseResponse{Summary: "Wiki updated.", Output: wikiIngestJSON("Wiki updated.")}},
 			{role: assistant.AttemptRoleReporter, response: PhaseResponse{Summary: "Delivered final report.", Output: reportJSON("Delivered final report.", "Scheduled hospital outreach.")}},
 		},
 	}
@@ -464,8 +467,11 @@ func TestRunEngineCreatesScheduledRunsBeforeReporting(t *testing.T) {
 	if record.Attempts[len(record.Attempts)-1].Role != assistant.AttemptRoleReporter {
 		t.Fatalf("attempt roles = %#v, want reporter as final attempt", record.Attempts)
 	}
-	if record.Attempts[len(record.Attempts)-2].Role != assistant.AttemptRoleScheduler {
-		t.Fatalf("attempt roles = %#v, want scheduler before reporter", record.Attempts)
+	if record.Attempts[len(record.Attempts)-2].Role != assistant.AttemptRoleWikiIngest {
+		t.Fatalf("attempt roles = %#v, want wiki ingest before reporter", record.Attempts)
+	}
+	if record.Attempts[len(record.Attempts)-3].Role != assistant.AttemptRoleScheduler {
+		t.Fatalf("attempt roles = %#v, want scheduler before wiki ingest", record.Attempts)
 	}
 }
 
@@ -789,6 +795,10 @@ func (r *scriptedRuntime) Execute(_ context.Context, role assistant.AttemptRole,
 	}
 	roleSteps := r.steps[role]
 	idx := r.index[role]
+	if role == assistant.AttemptRoleWikiIngest && idx >= len(roleSteps) {
+		r.index[role] = idx + 1
+		return PhaseResponse{Summary: "Wiki updated.", Output: wikiIngestJSON("Wiki updated.")}, nil
+	}
 	if idx >= len(roleSteps) {
 		return PhaseResponse{}, fmt.Errorf("unexpected runtime call for role %s", role)
 	}
@@ -957,6 +967,10 @@ func schedulerJSON(entries []assistant.ScheduleEntry) string {
 		parts = append(parts, fmt.Sprintf(`{"scheduled_for":%q,"prompt":%q}`, entry.ScheduledFor, entry.Prompt))
 	}
 	return fmt.Sprintf(`{"entries":[%s]}`, strings.Join(parts, ","))
+}
+
+func wikiIngestJSON(summary string) string {
+	return fmt.Sprintf(`{"summary":%q,"changed_pages":["reports/run-test.md","index.md"],"validation_notes":["Scaffold and frontmatter checked."]}`, summary)
 }
 
 func stringsJoin(values []string) string {

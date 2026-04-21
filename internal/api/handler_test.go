@@ -892,6 +892,11 @@ func (e *sequenceExecutor) RunPhase(_ context.Context, request wtl.CodexPhaseReq
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	if request.Role == assistant.AttemptRoleWikiIngest {
+		if e.index >= len(e.steps) || e.steps[e.index].role != assistant.AttemptRoleWikiIngest {
+			return wikiIngestPhaseResult("Wiki updated."), nil
+		}
+	}
 	if e.index >= len(e.steps) {
 		return wtl.CodexPhaseResult{}, fmt.Errorf("unexpected phase request for %s", request.Role)
 	}
@@ -1084,6 +1089,18 @@ func schedulerPhaseResult(entries []assistant.ScheduleEntry) wtl.CodexPhaseResul
 	})
 	return wtl.CodexPhaseResult{
 		Summary: "Scheduler finalized the scheduled prompts.",
+		Output:  string(output),
+	}
+}
+
+func wikiIngestPhaseResult(summary string) wtl.CodexPhaseResult {
+	output, _ := json.Marshal(map[string]any{
+		"summary":          summary,
+		"changed_pages":    []string{"reports/run-test.md", "index.md"},
+		"validation_notes": []string{"Scaffold and frontmatter checked."},
+	})
+	return wtl.CodexPhaseResult{
+		Summary: summary,
 		Output:  string(output),
 	}
 }

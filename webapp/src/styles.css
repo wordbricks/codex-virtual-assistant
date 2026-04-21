@@ -507,6 +507,59 @@ input, textarea { font: inherit; }
   color: var(--ink-soft);
 }
 
+.project-shortcuts {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin: 0 0 24px;
+}
+
+.project-shortcut {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  width: 104px;
+  min-height: 112px;
+  padding: 8px 6px;
+  border-radius: 8px;
+  color: var(--ink);
+  text-align: center;
+  text-decoration: none;
+}
+
+.project-shortcut:hover,
+.project-shortcut:focus-visible {
+  background: rgba(0, 122, 255, 0.08);
+}
+
+.project-shortcut:focus-visible {
+  outline: 2px solid rgba(0, 122, 255, 0.55);
+  outline-offset: 2px;
+}
+
+.project-shortcut-icon {
+  display: grid;
+  place-items: center;
+  width: 68px;
+  height: 68px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffffff, #f3f6f8);
+  color: #005ec5;
+  box-shadow: 0 8px 20px rgba(15, 18, 20, 0.08);
+}
+
+.project-shortcut-label {
+  display: block;
+  max-width: 100%;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
 .project-overview-links {
   display: flex;
   gap: 12px;

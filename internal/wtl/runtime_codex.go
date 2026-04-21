@@ -221,6 +221,9 @@ func phaseTools(run assistant.Run, role assistant.AttemptRole) []string {
 	if role == assistant.AttemptRoleReporter {
 		return []string{"stored-artifacts", "stored-evidence", "stored-evaluations", "schedule-management"}
 	}
+	if role == assistant.AttemptRoleWikiIngest {
+		return []string{"shell", "filesystem", "project-wiki", "stored-artifacts", "stored-evidence", "stored-evaluations"}
+	}
 	tools := append([]string{}, run.TaskSpec.ToolsAllowed...)
 	tools = append(tools, "schedule-management")
 	if role == assistant.AttemptRoleEvaluator {
