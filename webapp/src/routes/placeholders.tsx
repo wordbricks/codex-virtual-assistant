@@ -5,7 +5,7 @@ import { BookOpen, ListChecks } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { apiClient } from "@/api/client";
-import type { ProjectDetailResponse, RunRecord, RunStatus, WikiPageMeta } from "@/api/types";
+import type { ProjectDetailResponse, RunRecord, RunStatus, ScheduledRun, WikiPageMeta } from "@/api/types";
 
 const statusLabel: Record<RunStatus, string> = {
   queued: "Queued",
@@ -38,6 +38,7 @@ const pageTypeOrder = [
 ] as const;
 
 type RunColumnKey = "queued" | "working" | "waiting" | "scheduled" | "completed" | "stopped";
+type RunBoardSelection = { type: "run"; id: string } | { type: "scheduled"; id: string };
 
 const runColumns: Array<{ key: RunColumnKey; title: string }> = [
   { key: "queued", title: "Queued" },
@@ -772,20 +773,22 @@ export function ProjectRunsPlaceholder() {
   const { slug } = useParams({ from: "/projects/$slug/runs" });
   const [statusFilter, setStatusFilter] = useState<RunColumnKey | "all">("all");
   const [dateRange, setDateRange] = useState<"24h" | "7d" | "30d" | "all">("7d");
-  const [selectedRunID, setSelectedRunID] = useState("");
+  const [selection, setSelection] = useState<RunBoardSelection | null>(null);
+  const selectedRunID = selection?.type === "run" ? selection.id : "";
+  const selectedScheduledRunID = selection?.type === "scheduled" ? selection.id : "";
 
   useEffect(() => {
-    setSelectedRunID("");
+    setSelection(null);
   }, [slug]);
 
   useEffect(() => {
-    if (!selectedRunID) return;
+    if (!selection) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSelectedRunID("");
+      if (event.key === "Escape") setSelection(null);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedRunID]);
+  }, [selection]);
 
   const runsQuery = useQuery({
     queryKey: ["project-runs-board", slug],
@@ -892,6 +895,18 @@ export function ProjectRunsPlaceholder() {
     refetchIntervalInBackground: true,
   });
   const selectedRun = selectedRunFromBoard ?? selectedRunQuery.data ?? null;
+  const selectedScheduledFromBoard = selectedScheduledRunID
+    ? pendingScheduled.find((scheduledRun) => scheduledRun.id === selectedScheduledRunID)
+    : undefined;
+  const selectedScheduledQuery = useQuery({
+    queryKey: ["scheduled-run", selectedScheduledRunID],
+    queryFn: () => apiClient.getScheduledRun(selectedScheduledRunID),
+    enabled: Boolean(selectedScheduledRunID) && !selectedScheduledFromBoard,
+    staleTime: 10_000,
+    refetchInterval: selectedScheduledRunID ? 10_000 : false,
+    refetchIntervalInBackground: true,
+  });
+  const selectedScheduledRun = selectedScheduledFromBoard ?? selectedScheduledQuery.data ?? null;
 
   const visibleColumns = statusFilter === "all" ? runColumns : runColumns.filter((column) => column.key === statusFilter);
   const waitingForProjectLookups = parentRunQueries.some((query) => query.isLoading);
@@ -961,7 +976,7 @@ export function ProjectRunsPlaceholder() {
                         key={scheduledRun.id}
                         type="button"
                         className="run-card run-card-scheduled"
-                        onClick={() => parentRecord && setSelectedRunID(parentRecord.run.id)}
+                        onClick={() => setSelection({ type: "scheduled", id: scheduledRun.id })}
                         disabled={!parentRecord}
                       >
                         <p className="run-card-goal">{truncate(scheduledRun.user_request_raw || "Scheduled follow-up", 120)}</p>
@@ -980,7 +995,7 @@ export function ProjectRunsPlaceholder() {
                     const changedPages = extractChangedPages(record);
                     const outcome = runOutcomeSummary(record);
                     return (
-                      <button key={run.id} type="button" className="run-card" onClick={() => setSelectedRunID(run.id)}>
+                      <button key={run.id} type="button" className="run-card" onClick={() => setSelection({ type: "run", id: run.id })}>
                         <p className="run-card-goal">{truncate(run.task_spec.goal || run.user_request_raw, 120)}</p>
                         <p className="run-card-summary">{outcome}</p>
                         <div className="run-card-meta">
@@ -1002,21 +1017,25 @@ export function ProjectRunsPlaceholder() {
         })}
       </div>
 
-      {selectedRunID && (
+      {selection && (
         <div className="run-drawer-layer" role="presentation">
-          <button type="button" className="run-drawer-backdrop" aria-label="Close run detail" onClick={() => setSelectedRunID("")} />
+          <button type="button" className="run-drawer-backdrop" aria-label="Close run detail" onClick={() => setSelection(null)} />
           <aside className="run-drawer" role="dialog" aria-modal="true" aria-label="Run details">
             <header className="run-drawer-header">
               <div>
-                <p className="projects-kicker">Run Detail</p>
-                <h3>{selectedRun?.run.id ?? selectedRunID}</h3>
+                <p className="projects-kicker">{selection.type === "scheduled" ? "Scheduled Run" : "Run Detail"}</p>
+                <h3>{selection.type === "scheduled" ? (selectedScheduledRun?.id ?? selectedScheduledRunID) : (selectedRun?.run.id ?? selectedRunID)}</h3>
               </div>
-              <button type="button" className="run-drawer-close" onClick={() => setSelectedRunID("")}>Close</button>
+              <button type="button" className="run-drawer-close" onClick={() => setSelection(null)}>Close</button>
             </header>
 
             {selectedRunQuery.isLoading && !selectedRun && <p className="projects-note">Loading run details…</p>}
             {selectedRunQuery.isError && !selectedRun && (
               <p className="projects-note">Failed to load run details: {(selectedRunQuery.error as Error).message}</p>
+            )}
+            {selectedScheduledQuery.isLoading && !selectedScheduledRun && <p className="projects-note">Loading scheduled run details…</p>}
+            {selectedScheduledQuery.isError && !selectedScheduledRun && (
+              <p className="projects-note">Failed to load scheduled run details: {(selectedScheduledQuery.error as Error).message}</p>
             )}
 
             {selectedRun && (
@@ -1155,10 +1174,67 @@ export function ProjectRunsPlaceholder() {
                 </section>
               </div>
             )}
+            {selectedScheduledRun && (
+              <ScheduledRunDrawerContent
+                scheduledRun={selectedScheduledRun}
+                parentRecord={recordByRunID.get(selectedScheduledRun.parent_run_id) ?? fallbackRecordByRunID.get(selectedScheduledRun.parent_run_id)}
+                onOpenParent={() => setSelection({ type: "run", id: selectedScheduledRun.parent_run_id })}
+              />
+            )}
           </aside>
         </div>
       )}
     </section>
+  );
+}
+
+function ScheduledRunDrawerContent({
+  scheduledRun,
+  parentRecord,
+  onOpenParent,
+}: {
+  scheduledRun: ScheduledRun;
+  parentRecord?: RunRecord;
+  onOpenParent: () => void;
+}) {
+  return (
+    <div className="run-drawer-content">
+      <section className="run-detail-section">
+        <h4>{truncate(scheduledRun.user_request_raw || "Scheduled follow-up", 140)}</h4>
+        <div className="run-detail-meta">
+          <span className="status-pill" data-status="scheduling">{humanize(scheduledRun.status)}</span>
+          <span>Scheduled: {formatDateTime(scheduledRun.scheduled_for)}</span>
+          <span>Created: {formatDateTime(scheduledRun.created_at)}</span>
+          {scheduledRun.triggered_at && <span>Triggered: {formatDateTime(scheduledRun.triggered_at)}</span>}
+        </div>
+        <p className="run-detail-user-request">{scheduledRun.user_request_raw}</p>
+        {scheduledRun.error_message && <p className="projects-note">{scheduledRun.error_message}</p>}
+      </section>
+
+      <section className="run-detail-section">
+        <h5>Schedule</h5>
+        <article className="run-detail-entry">
+          <p><strong>Scheduled run ID:</strong> {scheduledRun.id}</p>
+          <p><strong>Parent run ID:</strong> {scheduledRun.parent_run_id}</p>
+          {scheduledRun.run_id && <p><strong>Triggered run ID:</strong> {scheduledRun.run_id}</p>}
+          {scheduledRun.cron_expr && <p><strong>Repeat:</strong> {scheduledRun.cron_expr}</p>}
+          <p><strong>Max attempts:</strong> {scheduledRun.max_generation_attempts}</p>
+        </article>
+      </section>
+
+      <section className="run-detail-section">
+        <h5>Parent Run</h5>
+        {parentRecord ? (
+          <article className="run-detail-entry">
+            <p><strong>{truncate(parentRecord.run.task_spec.goal || parentRecord.run.user_request_raw, 120)}</strong></p>
+            <p>Status: {statusLabel[parentRecord.run.status]} · Updated: {formatDateTime(parentRecord.run.updated_at)}</p>
+            <button type="button" className="run-detail-action" onClick={onOpenParent}>Open parent run</button>
+          </article>
+        ) : (
+          <p className="projects-note">Parent run details are still loading.</p>
+        )}
+      </section>
+    </div>
   );
 }
 

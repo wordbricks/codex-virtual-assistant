@@ -74,6 +74,8 @@ export const apiClient = {
     return fetchJSON<ProjectRunsResponse>(`/api/v1/projects/${encodeURIComponent(slug)}/runs${suffix}`);
   },
   getRunRecord: (runId: string) => fetchJSON<RunRecord>(`/api/v1/runs/${encodeURIComponent(runId)}`),
+  getScheduledRun: (scheduledRunId: string) =>
+    fetchJSON<ScheduledRun>(`/api/v1/scheduled/${encodeURIComponent(scheduledRunId)}`),
   listScheduledRuns: (options: { chatId?: string; status?: ScheduledRunStatus } = {}) => {
     const params = new URLSearchParams();
     if (options.chatId) params.set("chat_id", options.chatId);
