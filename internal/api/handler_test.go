@@ -18,6 +18,7 @@ import (
 	"github.com/siisee11/CodexVirtualAssistant/internal/agentmessage"
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistantapp"
+	authpkg "github.com/siisee11/CodexVirtualAssistant/internal/auth"
 	"github.com/siisee11/CodexVirtualAssistant/internal/config"
 	"github.com/siisee11/CodexVirtualAssistant/internal/policy/gan"
 	"github.com/siisee11/CodexVirtualAssistant/internal/project"
@@ -741,6 +742,70 @@ func TestRunAPIServesIndexForSPARoutes(t *testing.T) {
 	}
 }
 
+func TestRunAPIRequiresAuthWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	passwordHash, err := authpkg.HashPasswordWithParams("correct horse battery staple", authpkg.PasswordParams{
+		Memory:      8 * 1024,
+		Iterations:  1,
+		Parallelism: 1,
+		SaltLength:  16,
+		KeyLength:   16,
+	})
+	if err != nil {
+		t.Fatalf("HashPasswordWithParams() error = %v", err)
+	}
+	handler := newTestAPIHandlerWithConfig(t, &sequenceExecutor{}, func(cfg *config.Config) {
+		cfg.Auth = config.AuthConfig{
+			Enabled:      true,
+			UserID:       "operator",
+			PasswordHash: passwordHash,
+		}
+	})
+
+	bootstrapResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/bootstrap", nil)
+	if bootstrapResponse.Code != http.StatusOK {
+		t.Fatalf("GET /bootstrap status = %d, want %d", bootstrapResponse.Code, http.StatusOK)
+	}
+	var bootstrap BootstrapResponse
+	if err := json.Unmarshal(bootstrapResponse.Body.Bytes(), &bootstrap); err != nil {
+		t.Fatalf("decode bootstrap: %v", err)
+	}
+	if !bootstrap.AuthRequired {
+		t.Fatal("bootstrap AuthRequired = false, want true")
+	}
+
+	projectsResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/projects", nil)
+	if projectsResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /projects without auth status = %d, want %d", projectsResponse.Code, http.StatusUnauthorized)
+	}
+
+	loginResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/login", map[string]any{
+		"user_id":  "operator",
+		"password": "correct horse battery staple",
+	})
+	if loginResponse.Code != http.StatusOK {
+		t.Fatalf("POST /auth/login status = %d, want %d; body = %s", loginResponse.Code, http.StatusOK, loginResponse.Body.String())
+	}
+	var status authpkg.Status
+	if err := json.Unmarshal(loginResponse.Body.Bytes(), &status); err != nil {
+		t.Fatalf("decode auth status: %v", err)
+	}
+	if !status.Authenticated || status.CSRFToken == "" {
+		t.Fatalf("auth status = %#v, want authenticated with csrf", status)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	for _, cookie := range loginResponse.Result().Cookies() {
+		request.AddCookie(cookie)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /projects with auth status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+}
+
 func TestRunAPIHandleArtifactServesProjectArtifact(t *testing.T) {
 	t.Parallel()
 
@@ -772,6 +837,11 @@ func TestRunAPIHandleArtifactServesProjectArtifact(t *testing.T) {
 
 func newTestAPIHandler(t *testing.T, executor *sequenceExecutor) http.Handler {
 	t.Helper()
+	return newTestAPIHandlerWithConfig(t, executor, nil)
+}
+
+func newTestAPIHandlerWithConfig(t *testing.T, executor *sequenceExecutor, mutateConfig func(*config.Config)) http.Handler {
+	t.Helper()
 
 	dataDir := t.TempDir()
 	cfg := config.Config{
@@ -781,6 +851,9 @@ func newTestAPIHandler(t *testing.T, executor *sequenceExecutor) http.Handler {
 		ArtifactDir:           filepath.Join(dataDir, "artifacts"),
 		DefaultModel:          config.FixedModel,
 		MaxGenerationAttempts: 3,
+	}
+	if mutateConfig != nil {
+		mutateConfig(&cfg)
 	}
 
 	repo, err := store.OpenSQLite(cfg)

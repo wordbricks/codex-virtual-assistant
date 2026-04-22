@@ -20,6 +20,7 @@ import (
 
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistantapp"
+	authpkg "github.com/siisee11/CodexVirtualAssistant/internal/auth"
 	"github.com/siisee11/CodexVirtualAssistant/internal/config"
 	"github.com/siisee11/CodexVirtualAssistant/internal/store"
 	"github.com/siisee11/CodexVirtualAssistant/internal/wiki"
@@ -31,6 +32,7 @@ type BootstrapResponse struct {
 	ProductTagline               string                `json:"product_tagline"`
 	DefaultModel                 string                `json:"default_model"`
 	DefaultMaxGenerationAttempts int                   `json:"default_max_generation_attempts"`
+	AuthRequired                 bool                  `json:"auth_required"`
 	RunStatuses                  []assistant.RunStatus `json:"run_statuses"`
 	RunPhases                    []assistant.RunPhase  `json:"run_phases"`
 	APIBasePath                  string                `json:"api_base_path"`
@@ -133,24 +135,39 @@ func NewHandler(cfg config.Config, runs *assistantapp.RunService, events *EventB
 		projects: projects,
 		static:   staticFS,
 	}
+	authManager, err := authpkg.NewManager(authpkg.Config{
+		Enabled:      cfg.Auth.Enabled,
+		UserID:       cfg.Auth.UserID,
+		PasswordHash: cfg.Auth.PasswordHash,
+		Password:     cfg.Auth.Password,
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", api.handleHealth)
 	mux.HandleFunc("/api/v1/bootstrap", api.handleBootstrap)
-	mux.HandleFunc("/api/v1/chats", api.handleChats)
-	mux.HandleFunc("/api/v1/chats/", api.handleChatByID)
-	mux.HandleFunc("/api/v1/runs", api.handleRuns)
-	mux.HandleFunc("/api/v1/runs/", api.handleRunByID)
-	mux.HandleFunc("/api/v1/scheduled", api.handleScheduledRuns)
-	mux.HandleFunc("/api/v1/scheduled/", api.handleScheduledRunByID)
-	mux.HandleFunc("/api/v1/projects", api.handleProjects)
-	mux.HandleFunc("/api/v1/projects/", api.handleProjectBySlug)
-	mux.HandleFunc("/artifacts/", api.handleArtifact)
+	mux.HandleFunc("/api/v1/auth/status", authManager.HandleStatus)
+	mux.HandleFunc("/api/v1/auth/login", authManager.HandleLogin)
+	mux.HandleFunc("/api/v1/auth/logout", authManager.HandleLogout)
+
+	protected := http.NewServeMux()
+	protected.HandleFunc("/api/v1/chats", api.handleChats)
+	protected.HandleFunc("/api/v1/chats/", api.handleChatByID)
+	protected.HandleFunc("/api/v1/runs", api.handleRuns)
+	protected.HandleFunc("/api/v1/runs/", api.handleRunByID)
+	protected.HandleFunc("/api/v1/scheduled", api.handleScheduledRuns)
+	protected.HandleFunc("/api/v1/scheduled/", api.handleScheduledRunByID)
+	protected.HandleFunc("/api/v1/projects", api.handleProjects)
+	protected.HandleFunc("/api/v1/projects/", api.handleProjectBySlug)
+	mux.Handle("/api/v1/", authManager.Require(protected))
+	mux.Handle("/artifacts/", authManager.Require(http.HandlerFunc(api.handleArtifact)))
 	mux.Handle("/assets/", http.StripPrefix("/", http.FileServer(http.FS(staticFS))))
 	mux.Handle("/favicon.svg", http.FileServer(http.FS(staticFS)))
 	mux.Handle("/logo.svg", http.FileServer(http.FS(staticFS)))
 	mux.HandleFunc("/", api.serveIndex)
-	return mux, nil
+	return authpkg.SecurityHeaders(mux), nil
 }
 
 func (a *RunAPI) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -163,6 +180,7 @@ func (a *RunAPI) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		ProductTagline:               "WTL GAN-policy based web personal virtual assistant",
 		DefaultModel:                 a.cfg.DefaultModel,
 		DefaultMaxGenerationAttempts: a.cfg.MaxGenerationAttempts,
+		AuthRequired:                 a.cfg.Auth.Enabled,
 		RunStatuses:                  assistant.AllRunStatuses(),
 		RunPhases:                    assistant.AllRunPhases(),
 		APIBasePath:                  "/api/v1",

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
+	authpkg "github.com/siisee11/CodexVirtualAssistant/internal/auth"
 )
 
 const (
@@ -49,11 +50,26 @@ type Config struct {
 	CodexNetworkAccess    bool
 	SchedulerInterval     time.Duration
 	AutomationSafety      AutomationSafetyConfig
+	Auth                  AuthConfig
 }
 
 type FileConfig struct {
 	RuntimeProvider  string                 `json:"runtime_provider,omitempty"`
 	AutomationSafety AutomationSafetyConfig `json:"automation_safety,omitempty"`
+	Auth             FileAuthConfig         `json:"auth,omitempty"`
+}
+
+type AuthConfig struct {
+	Enabled      bool
+	UserID       string
+	PasswordHash string
+	Password     string
+}
+
+type FileAuthConfig struct {
+	Enabled      *bool  `json:"enabled,omitempty"`
+	UserID       string `json:"user_id,omitempty"`
+	PasswordHash string `json:"password_hash,omitempty"`
 }
 
 type AutomationSafetyConfig struct {
@@ -146,6 +162,9 @@ func loadFromSources(
 		CodexSandboxMode:      defaultCodexSandboxMode,
 		CodexNetworkAccess:    true,
 		SchedulerInterval:     defaultSchedulerInterval,
+		Auth: AuthConfig{
+			UserID: "admin",
+		},
 	}
 
 	if readFileConfig != nil {
@@ -157,6 +176,17 @@ func loadFromSources(
 			cfg.RuntimeProvider = fileConfig.RuntimeProvider
 		}
 		cfg.AutomationSafety = fileConfig.AutomationSafety
+		if fileConfig.Auth.Enabled != nil {
+			cfg.Auth.Enabled = *fileConfig.Auth.Enabled
+		} else if strings.TrimSpace(fileConfig.Auth.PasswordHash) != "" {
+			cfg.Auth.Enabled = true
+		}
+		if strings.TrimSpace(fileConfig.Auth.UserID) != "" {
+			cfg.Auth.UserID = strings.TrimSpace(fileConfig.Auth.UserID)
+		}
+		if strings.TrimSpace(fileConfig.Auth.PasswordHash) != "" {
+			cfg.Auth.PasswordHash = strings.TrimSpace(fileConfig.Auth.PasswordHash)
+		}
 	}
 
 	if value := getenv("ASSISTANT_HTTP_ADDR"); value != "" {
@@ -216,11 +246,40 @@ func loadFromSources(
 		}
 		cfg.SchedulerInterval = parsed
 	}
+	authConfigured := false
+	authEnabledExplicit := false
+	if value := getenv("ASSISTANT_AUTH_ENABLED"); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse ASSISTANT_AUTH_ENABLED: %w", err)
+		}
+		cfg.Auth.Enabled = parsed
+		authEnabledExplicit = true
+	}
+	if value := strings.TrimSpace(getenv("ASSISTANT_AUTH_ID")); value != "" {
+		cfg.Auth.UserID = value
+		authConfigured = true
+	}
+	if value := strings.TrimSpace(getenv("ASSISTANT_AUTH_PASSWORD_HASH")); value != "" {
+		cfg.Auth.PasswordHash = value
+		authConfigured = true
+	}
+	if value := getenv("ASSISTANT_AUTH_PASSWORD"); value != "" {
+		cfg.Auth.Password = value
+		authConfigured = true
+	}
+	if authConfigured && !authEnabledExplicit {
+		cfg.Auth.Enabled = true
+	}
 	return cfg.Normalize(baseDir)
 }
 
 func ConfigFilePath(configDir string) string {
 	return filepath.Join(configDir, "config.json")
+}
+
+func ResolveConfigDir() (string, error) {
+	return resolveBaseDir(os.Getwd, os.UserConfigDir, os.UserHomeDir)
 }
 
 func ReadFileConfig(path string) (FileConfig, error) {
@@ -245,6 +304,9 @@ func ReadFileConfig(path string) (FileConfig, error) {
 	if err := cfg.AutomationSafety.Validate(); err != nil {
 		return FileConfig{}, fmt.Errorf("config file: automation safety %w", err)
 	}
+	if err := cfg.Auth.Validate(); err != nil {
+		return FileConfig{}, fmt.Errorf("config file: auth %w", err)
+	}
 	return cfg, nil
 }
 
@@ -263,12 +325,37 @@ func WriteRuntimeProvider(configDir, provider string) error {
 	return WriteFileConfig(path, cfg)
 }
 
+func WriteAuthConfig(configDir, userID, passwordHash string) error {
+	userID = strings.TrimSpace(userID)
+	passwordHash = strings.TrimSpace(passwordHash)
+	if err := authpkg.ValidateUserID(userID); err != nil {
+		return fmt.Errorf("user id: %w", err)
+	}
+	if err := authpkg.ValidatePasswordHash(passwordHash); err != nil {
+		return fmt.Errorf("password hash: %w", err)
+	}
+
+	path := ConfigFilePath(configDir)
+	cfg, err := ReadFileConfig(path)
+	if err != nil {
+		return err
+	}
+	enabled := true
+	cfg.Auth.Enabled = &enabled
+	cfg.Auth.UserID = userID
+	cfg.Auth.PasswordHash = passwordHash
+	return WriteFileConfig(path, cfg)
+}
+
 func WriteFileConfig(path string, cfg FileConfig) error {
 	if cfg.RuntimeProvider != "" && !ValidRuntimeProvider(cfg.RuntimeProvider) {
 		return fmt.Errorf("runtime provider must be %q, %q, or %q", "codex", "claude", "zai")
 	}
 	if err := cfg.AutomationSafety.Validate(); err != nil {
 		return fmt.Errorf("automation safety %w", err)
+	}
+	if err := cfg.Auth.Validate(); err != nil {
+		return fmt.Errorf("auth %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
@@ -429,6 +516,50 @@ func (c Config) Validate() error {
 
 	if err := c.AutomationSafety.Validate(); err != nil {
 		return fmt.Errorf("config: automation safety %w", err)
+	}
+	if err := c.Auth.ValidateRuntime(); err != nil {
+		return fmt.Errorf("config: auth %w", err)
+	}
+	return nil
+}
+
+func (c AuthConfig) ValidateRuntime() error {
+	if !c.Enabled {
+		return nil
+	}
+	userID := strings.TrimSpace(c.UserID)
+	if userID == "" {
+		userID = "admin"
+	}
+	if err := authpkg.ValidateUserID(userID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(c.PasswordHash) == "" && c.Password == "" {
+		return errors.New("password or password hash is required when auth is enabled")
+	}
+	if strings.TrimSpace(c.PasswordHash) != "" {
+		if err := authpkg.ValidatePasswordHash(strings.TrimSpace(c.PasswordHash)); err != nil {
+			return fmt.Errorf("password_hash: %w", err)
+		}
+	}
+	if c.Password != "" {
+		if err := authpkg.ValidatePasswordQuality(c.Password); err != nil {
+			return fmt.Errorf("password: %w", err)
+		}
+	}
+	return nil
+}
+
+func (c FileAuthConfig) Validate() error {
+	if strings.TrimSpace(c.UserID) != "" {
+		if err := authpkg.ValidateUserID(strings.TrimSpace(c.UserID)); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(c.PasswordHash) != "" {
+		if err := authpkg.ValidatePasswordHash(strings.TrimSpace(c.PasswordHash)); err != nil {
+			return fmt.Errorf("password_hash: %w", err)
+		}
 	}
 	return nil
 }

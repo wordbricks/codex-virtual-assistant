@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
+	authpkg "github.com/siisee11/CodexVirtualAssistant/internal/auth"
 )
 
 func TestLoadFromEnvUsesDefaults(t *testing.T) {
@@ -196,6 +197,83 @@ func TestLoadFromEnvHonorsOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvEnablesAuthFromPassword(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"ASSISTANT_AUTH_ID":       "operator",
+		"ASSISTANT_AUTH_PASSWORD": "correct horse battery staple",
+	}
+	cfg, err := loadFromEnv(
+		func(key string) string { return env[key] },
+		func() (string, error) {
+			return "/workspace/project", nil
+		},
+		func() (string, error) {
+			return "/home/test/.config", nil
+		},
+		func() (string, error) {
+			return "/home/test", nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("loadFromEnv() error = %v", err)
+	}
+
+	if !cfg.Auth.Enabled {
+		t.Fatal("Auth.Enabled = false, want true")
+	}
+	if cfg.Auth.UserID != "operator" {
+		t.Fatalf("Auth.UserID = %q, want operator", cfg.Auth.UserID)
+	}
+	if cfg.Auth.Password != "correct horse battery staple" {
+		t.Fatal("Auth.Password was not loaded from environment")
+	}
+}
+
+func TestLoadFromSourcesAutoEnablesFileAuthHash(t *testing.T) {
+	t.Parallel()
+
+	hash, err := authpkg.HashPasswordWithParams("correct horse battery staple", authpkg.PasswordParams{
+		Memory:      8 * 1024,
+		Iterations:  1,
+		Parallelism: 1,
+		SaltLength:  16,
+		KeyLength:   16,
+	})
+	if err != nil {
+		t.Fatalf("HashPasswordWithParams() error = %v", err)
+	}
+	cfg, err := loadFromSources(
+		func(string) string { return "" },
+		func() (string, error) {
+			return "/workspace/project", nil
+		},
+		func() (string, error) {
+			return "/home/test/.config", nil
+		},
+		func() (string, error) {
+			return "/home/test", nil
+		},
+		func(string) (FileConfig, error) {
+			return FileConfig{Auth: FileAuthConfig{UserID: "operator", PasswordHash: hash}}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("loadFromSources() error = %v", err)
+	}
+
+	if !cfg.Auth.Enabled {
+		t.Fatal("Auth.Enabled = false, want true")
+	}
+	if cfg.Auth.UserID != "operator" {
+		t.Fatalf("Auth.UserID = %q, want operator", cfg.Auth.UserID)
+	}
+	if cfg.Auth.PasswordHash != hash {
+		t.Fatal("Auth.PasswordHash was not loaded from file config")
+	}
+}
+
 func TestLoadFromSourcesHonorsFileRuntimeProvider(t *testing.T) {
 	t.Parallel()
 
@@ -272,6 +350,46 @@ func TestWriteRuntimeProviderPersistsFileConfig(t *testing.T) {
 	}
 	if cfg.RuntimeProvider != "claude" {
 		t.Fatalf("RuntimeProvider = %q, want claude", cfg.RuntimeProvider)
+	}
+}
+
+func TestWriteAuthConfigPersistsAndPreservesFileConfig(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	if err := WriteRuntimeProvider(configDir, "claude"); err != nil {
+		t.Fatalf("WriteRuntimeProvider() error = %v", err)
+	}
+	hash, err := authpkg.HashPasswordWithParams("correct horse battery staple", authpkg.PasswordParams{
+		Memory:      8 * 1024,
+		Iterations:  1,
+		Parallelism: 1,
+		SaltLength:  16,
+		KeyLength:   16,
+	})
+	if err != nil {
+		t.Fatalf("HashPasswordWithParams() error = %v", err)
+	}
+
+	if err := WriteAuthConfig(configDir, "operator", hash); err != nil {
+		t.Fatalf("WriteAuthConfig() error = %v", err)
+	}
+
+	cfg, err := ReadFileConfig(ConfigFilePath(configDir))
+	if err != nil {
+		t.Fatalf("ReadFileConfig() error = %v", err)
+	}
+	if cfg.RuntimeProvider != "claude" {
+		t.Fatalf("RuntimeProvider = %q, want claude", cfg.RuntimeProvider)
+	}
+	if cfg.Auth.Enabled == nil || !*cfg.Auth.Enabled {
+		t.Fatalf("Auth.Enabled = %#v, want true", cfg.Auth.Enabled)
+	}
+	if cfg.Auth.UserID != "operator" {
+		t.Fatalf("Auth.UserID = %q, want operator", cfg.Auth.UserID)
+	}
+	if cfg.Auth.PasswordHash != hash {
+		t.Fatal("Auth.PasswordHash was not persisted")
 	}
 }
 

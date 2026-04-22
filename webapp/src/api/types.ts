@@ -3,8 +3,16 @@ export type BootstrapResponse = {
   product_tagline: string;
   default_model: string;
   default_max_generation_attempts: number;
+  auth_required: boolean;
   chats_path: string;
   runs_path: string;
+};
+
+export type AuthStatus = {
+  enabled: boolean;
+  authenticated: boolean;
+  user_id?: string;
+  csrf_token?: string;
 };
 
 export type RunStatus =

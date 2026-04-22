@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
@@ -16,12 +17,16 @@ import (
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+	authID     string
+	authPass   string
 }
 
 func NewClient(baseURL string) *Client {
 	return &Client{
 		baseURL:    baseURL,
 		httpClient: &http.Client{},
+		authID:     firstNonEmpty(os.Getenv("CVA_AUTH_ID"), os.Getenv("ASSISTANT_AUTH_ID")),
+		authPass:   firstNonEmpty(os.Getenv("CVA_AUTH_PASSWORD"), os.Getenv("ASSISTANT_AUTH_PASSWORD")),
 	}
 }
 
@@ -178,6 +183,7 @@ func (c *Client) StreamEvents(ctx context.Context, runID string) (io.ReadCloser,
 		return nil, err
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	c.authorize(req)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -194,6 +200,7 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 	if err != nil {
 		return err
 	}
+	c.authorize(req)
 	return c.do(req, out)
 }
 
@@ -213,6 +220,7 @@ func (c *Client) post(ctx context.Context, path string, body any, out any) error
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	c.authorize(req)
 	return c.do(req, out)
 }
 
@@ -233,4 +241,20 @@ func (c *Client) do(req *http.Request, out any) error {
 		return json.Unmarshal(data, out)
 	}
 	return nil
+}
+
+func (c *Client) authorize(req *http.Request) {
+	if c.authID == "" && c.authPass == "" {
+		return
+	}
+	req.SetBasicAuth(c.authID, c.authPass)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

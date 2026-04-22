@@ -190,8 +190,33 @@ Environment variables:
 - `ASSISTANT_AGENT_BROWSER_BIN`: managed `agent-browser` CLI path used by CVA before PATH lookup
 - `CVA_AGENT_BROWSER_BIN`: compatibility override used only when `ASSISTANT_AGENT_BROWSER_BIN` is unset
 - `AGENT_BROWSER_EXECUTABLE_PATH`: browser executable path passed to `agent-browser`, for example Chrome; this is not the `agent-browser` CLI path
+- `ASSISTANT_AUTH_ENABLED`: enable or disable web/API authentication; auth also enables automatically when a password or password hash is configured
+- `ASSISTANT_AUTH_ID`: login ID, default `admin` when auth is enabled
+- `ASSISTANT_AUTH_PASSWORD_HASH`: Argon2id password hash for the login password
+- `ASSISTANT_AUTH_PASSWORD`: plaintext startup password alternative; prefer `ASSISTANT_AUTH_PASSWORD_HASH`
+- `CVA_AUTH_ID` and `CVA_AUTH_PASSWORD`: CLI-side Basic auth credentials for commands such as `cva run`, `cva list`, and `cva watch`
 
 `<CVA home>` is the app-owned directory under the current user's OS config directory, so `cva` uses the same default workspace no matter where you launch it. Relative path overrides are resolved from that directory.
+
+To enable ID/password auth without storing a plaintext password, run the interactive registration command:
+
+```bash
+cva auth register
+```
+
+It prompts for a user ID and password, writes an Argon2id hash to `<CVA home>/config.json`, and enables auth:
+
+```json
+{
+  "auth": {
+    "enabled": true,
+    "user_id": "admin",
+    "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$..."
+  }
+}
+```
+
+Browser sessions use HttpOnly same-site cookies plus CSRF tokens for mutating API requests. CLI commands can authenticate with `CVA_AUTH_ID` and `CVA_AUTH_PASSWORD`.
 
 ## Current scope
 

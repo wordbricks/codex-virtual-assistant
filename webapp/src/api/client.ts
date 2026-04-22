@@ -1,4 +1,5 @@
 import type {
+  AuthStatus,
   BootstrapResponse,
   ChatRecord,
   ChatSummary,
@@ -14,14 +15,27 @@ import type {
   WikiPageResponse,
 } from "@/api/types";
 
+let csrfToken = "";
+
+export function setCSRFToken(token: string | undefined) {
+  csrfToken = token ?? "";
+}
+
 export async function fetchJSON<T>(url: string, options: RequestInit = {}): Promise<T> {
+  const headers = new Headers(options.headers);
+  headers.set("Accept", "application/json");
+  if (options.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  const method = (options.method ?? "GET").toUpperCase();
+  if (csrfToken && !["GET", "HEAD", "OPTIONS"].includes(method)) {
+    headers.set("X-CVA-CSRF", csrfToken);
+  }
+
   const response = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
-      ...(options.headers ?? {}),
-    },
     ...options,
+    credentials: options.credentials ?? "same-origin",
+    headers,
   });
 
   const text = await response.text();
@@ -34,12 +48,34 @@ export async function fetchJSON<T>(url: string, options: RequestInit = {}): Prom
     }
   }
   if (!response.ok) {
+    if (response.status === 401) setCSRFToken(undefined);
+    if (payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string") {
+      throw new Error(payload.error);
+    }
     throw new Error(typeof payload === "string" ? payload.trim() : `request failed ${response.status}`);
   }
   return payload as T;
 }
 
 export const apiClient = {
+  authStatus: async () => {
+    const status = await fetchJSON<AuthStatus>("/api/v1/auth/status");
+    setCSRFToken(status.csrf_token);
+    return status;
+  },
+  login: async (body: { user_id: string; password: string }) => {
+    const status = await fetchJSON<AuthStatus>("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    setCSRFToken(status.csrf_token);
+    return status;
+  },
+  logout: async () => {
+    const status = await fetchJSON<AuthStatus>("/api/v1/auth/logout", { method: "POST" });
+    setCSRFToken(status.csrf_token);
+    return status;
+  },
   bootstrap: () => fetchJSON<BootstrapResponse>("/api/v1/bootstrap"),
   listProjects: () => fetchJSON<{ projects: ProjectSummary[] }>("/api/v1/projects"),
   createProject: (body: { slug?: string; name: string; description?: string }) =>

@@ -85,6 +85,8 @@ func main() {
 		err = cmdStatus(ctx, client, cmdArgs, jsonMode)
 	case "runtime":
 		err = cmdRuntime(cmdArgs, jsonMode)
+	case "auth":
+		err = cmdAuth(cmdArgs, jsonMode)
 	case "list":
 		client := NewClient(addr)
 		err = cmdList(ctx, client, jsonMode, interactiveMode)
@@ -626,6 +628,8 @@ Commands:
   run [--follow-up <run_id>] "request"   Create a new run and stream events
   status [run_id]                        Show local config paths or run details
   runtime [codex|claude|zai]             Show or change the execution runtime
+  auth hash-password                     Generate an Argon2id password hash
+  auth register                          Prompt for ID/password and update config
   list                                   List all chats
   chat <chat_id>                         Show chat details
   watch [<run_id>]                       Stream a run or browse recent runs
