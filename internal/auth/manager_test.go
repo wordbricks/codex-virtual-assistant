@@ -93,6 +93,18 @@ func TestManagerRejectsMissingCredentials(t *testing.T) {
 	}
 }
 
+func TestNewManagerRequiresCredentialsEvenWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewManager(Config{Enabled: false})
+	if err == nil {
+		t.Fatal("NewManager() error = nil, want missing credentials error")
+	}
+	if !strings.Contains(err.Error(), "password or password hash is required") {
+		t.Fatalf("NewManager() error = %v, want missing credentials error", err)
+	}
+}
+
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
 

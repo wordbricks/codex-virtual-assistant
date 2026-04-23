@@ -163,7 +163,8 @@ func loadFromSources(
 		CodexNetworkAccess:    true,
 		SchedulerInterval:     defaultSchedulerInterval,
 		Auth: AuthConfig{
-			UserID: "admin",
+			Enabled: true,
+			UserID:  "admin",
 		},
 	}
 
@@ -176,11 +177,6 @@ func loadFromSources(
 			cfg.RuntimeProvider = fileConfig.RuntimeProvider
 		}
 		cfg.AutomationSafety = fileConfig.AutomationSafety
-		if fileConfig.Auth.Enabled != nil {
-			cfg.Auth.Enabled = *fileConfig.Auth.Enabled
-		} else if strings.TrimSpace(fileConfig.Auth.PasswordHash) != "" {
-			cfg.Auth.Enabled = true
-		}
 		if strings.TrimSpace(fileConfig.Auth.UserID) != "" {
 			cfg.Auth.UserID = strings.TrimSpace(fileConfig.Auth.UserID)
 		}
@@ -246,30 +242,23 @@ func loadFromSources(
 		}
 		cfg.SchedulerInterval = parsed
 	}
-	authConfigured := false
-	authEnabledExplicit := false
 	if value := getenv("ASSISTANT_AUTH_ENABLED"); value != "" {
 		parsed, err := strconv.ParseBool(value)
 		if err != nil {
 			return Config{}, fmt.Errorf("parse ASSISTANT_AUTH_ENABLED: %w", err)
 		}
-		cfg.Auth.Enabled = parsed
-		authEnabledExplicit = true
+		if !parsed {
+			return Config{}, errors.New("ASSISTANT_AUTH_ENABLED=false is not supported; authentication is always enabled")
+		}
 	}
 	if value := strings.TrimSpace(getenv("ASSISTANT_AUTH_ID")); value != "" {
 		cfg.Auth.UserID = value
-		authConfigured = true
 	}
 	if value := strings.TrimSpace(getenv("ASSISTANT_AUTH_PASSWORD_HASH")); value != "" {
 		cfg.Auth.PasswordHash = value
-		authConfigured = true
 	}
 	if value := getenv("ASSISTANT_AUTH_PASSWORD"); value != "" {
 		cfg.Auth.Password = value
-		authConfigured = true
-	}
-	if authConfigured && !authEnabledExplicit {
-		cfg.Auth.Enabled = true
 	}
 	return cfg.Normalize(baseDir)
 }
@@ -410,6 +399,7 @@ func resolveBaseDir(
 
 func (c Config) Normalize(baseDir string) (Config, error) {
 	c.DefaultModel = FixedModel
+	c.Auth.Enabled = true
 
 	if c.ConfigDir == "" {
 		c.ConfigDir = baseDir
@@ -524,9 +514,6 @@ func (c Config) Validate() error {
 }
 
 func (c AuthConfig) ValidateRuntime() error {
-	if !c.Enabled {
-		return nil
-	}
 	userID := strings.TrimSpace(c.UserID)
 	if userID == "" {
 		userID = "admin"
@@ -535,7 +522,7 @@ func (c AuthConfig) ValidateRuntime() error {
 		return err
 	}
 	if strings.TrimSpace(c.PasswordHash) == "" && c.Password == "" {
-		return errors.New("password or password hash is required when auth is enabled")
+		return errors.New("password or password hash is required; run `cva auth register` to configure authentication")
 	}
 	if strings.TrimSpace(c.PasswordHash) != "" {
 		if err := authpkg.ValidatePasswordHash(strings.TrimSpace(c.PasswordHash)); err != nil {
@@ -551,6 +538,9 @@ func (c AuthConfig) ValidateRuntime() error {
 }
 
 func (c FileAuthConfig) Validate() error {
+	if c.Enabled != nil && !*c.Enabled {
+		return errors.New("enabled=false is not supported; authentication is always enabled")
+	}
 	if strings.TrimSpace(c.UserID) != "" {
 		if err := authpkg.ValidateUserID(strings.TrimSpace(c.UserID)); err != nil {
 			return err

@@ -15,7 +15,7 @@ func TestLoadFromEnvUsesDefaults(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := loadFromEnv(
-		func(string) string { return "" },
+		testAuthGetenv(nil),
 		func() (string, error) {
 			return "/tmp/cva", nil
 		},
@@ -78,13 +78,42 @@ func TestLoadFromEnvUsesDefaults(t *testing.T) {
 	if cfg.SchedulerInterval != 30*time.Second {
 		t.Fatalf("SchedulerInterval = %s, want 30s", cfg.SchedulerInterval)
 	}
+	if !cfg.Auth.Enabled {
+		t.Fatal("Auth.Enabled = false, want true")
+	}
+	if cfg.Auth.UserID != "admin" {
+		t.Fatalf("Auth.UserID = %q, want admin", cfg.Auth.UserID)
+	}
+}
+
+func TestLoadFromEnvRequiresAuthCredentialsByDefault(t *testing.T) {
+	t.Parallel()
+
+	_, err := loadFromEnv(
+		func(string) string { return "" },
+		func() (string, error) {
+			return "/tmp/cva", nil
+		},
+		func() (string, error) {
+			return "/home/test/.config", nil
+		},
+		func() (string, error) {
+			return "/home/test", nil
+		},
+	)
+	if err == nil {
+		t.Fatal("loadFromEnv() error = nil, want missing auth credentials error")
+	}
+	if !strings.Contains(err.Error(), "cva auth register") {
+		t.Fatalf("loadFromEnv() error = %v, want auth registration guidance", err)
+	}
 }
 
 func TestLoadFromEnvFallsBackToHomeDirWhenConfigDirUnavailable(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := loadFromEnv(
-		func(string) string { return "" },
+		testAuthGetenv(nil),
 		func() (string, error) {
 			return "/tmp/cva", nil
 		},
@@ -132,7 +161,7 @@ func TestLoadFromEnvHonorsOverrides(t *testing.T) {
 	}
 
 	cfg, err := loadFromEnv(
-		func(key string) string { return env[key] },
+		testAuthGetenv(env),
 		func() (string, error) {
 			return "/workspace/project", nil
 		},
@@ -197,6 +226,32 @@ func TestLoadFromEnvHonorsOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvRejectsAuthDisabled(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"ASSISTANT_AUTH_ENABLED": "false",
+	}
+	_, err := loadFromEnv(
+		testAuthGetenv(env),
+		func() (string, error) {
+			return "/workspace/project", nil
+		},
+		func() (string, error) {
+			return "/home/test/.config", nil
+		},
+		func() (string, error) {
+			return "/home/test", nil
+		},
+	)
+	if err == nil {
+		t.Fatal("loadFromEnv() error = nil, want disabled auth error")
+	}
+	if !strings.Contains(err.Error(), "authentication is always enabled") {
+		t.Fatalf("loadFromEnv() error = %v, want always-enabled auth error", err)
+	}
+}
+
 func TestLoadFromEnvEnablesAuthFromPassword(t *testing.T) {
 	t.Parallel()
 
@@ -245,7 +300,7 @@ func TestLoadFromSourcesAutoEnablesFileAuthHash(t *testing.T) {
 		t.Fatalf("HashPasswordWithParams() error = %v", err)
 	}
 	cfg, err := loadFromSources(
-		func(string) string { return "" },
+		testAuthGetenv(nil),
 		func() (string, error) {
 			return "/workspace/project", nil
 		},
@@ -279,7 +334,7 @@ func TestLoadFromSourcesHonorsFileRuntimeProvider(t *testing.T) {
 
 	configRoot := t.TempDir()
 	cfg, err := loadFromSources(
-		func(string) string { return "" },
+		testAuthGetenv(nil),
 		func() (string, error) {
 			return "/workspace/project", nil
 		},
@@ -313,7 +368,7 @@ func TestLoadFromSourcesEnvRuntimeOverridesFile(t *testing.T) {
 		"ASSISTANT_RUNTIME": "codex",
 	}
 	cfg, err := loadFromSources(
-		func(key string) string { return env[key] },
+		testAuthGetenv(env),
 		func() (string, error) {
 			return "/workspace/project", nil
 		},
@@ -393,11 +448,32 @@ func TestWriteAuthConfigPersistsAndPreservesFileConfig(t *testing.T) {
 	}
 }
 
+func TestReadFileConfigRejectsAuthDisabled(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	configPath := ConfigFilePath(configDir)
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{"auth":{"enabled":false}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := ReadFileConfig(configPath)
+	if err == nil {
+		t.Fatal("ReadFileConfig() error = nil, want disabled auth error")
+	}
+	if !strings.Contains(err.Error(), "authentication is always enabled") {
+		t.Fatalf("ReadFileConfig() error = %v, want always-enabled auth error", err)
+	}
+}
+
 func TestLoadFromEnvUsesWorkingDirectoryAsLastFallback(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := loadFromEnv(
-		func(string) string { return "" },
+		testAuthGetenv(nil),
 		func() (string, error) {
 			return "/tmp/cva", nil
 		},
@@ -427,6 +503,18 @@ type assertiveErr string
 
 func (e assertiveErr) Error() string {
 	return string(e)
+}
+
+func testAuthGetenv(overrides map[string]string) func(string) string {
+	env := map[string]string{
+		"ASSISTANT_AUTH_PASSWORD": "correct horse battery staple",
+	}
+	for key, value := range overrides {
+		env[key] = value
+	}
+	return func(key string) string {
+		return env[key]
+	}
 }
 
 func TestProjectArtifactDirUsesProjectsDir(t *testing.T) {

@@ -16,9 +16,21 @@ import (
 	"github.com/siisee11/CodexVirtualAssistant/internal/agentmessage"
 	"github.com/siisee11/CodexVirtualAssistant/internal/api"
 	"github.com/siisee11/CodexVirtualAssistant/internal/assistant"
+	authpkg "github.com/siisee11/CodexVirtualAssistant/internal/auth"
 	"github.com/siisee11/CodexVirtualAssistant/internal/config"
 	"github.com/siisee11/CodexVirtualAssistant/internal/store"
 	"github.com/siisee11/CodexVirtualAssistant/internal/wtl"
+)
+
+const (
+	appTestAuthUserID   = "operator"
+	appTestAuthPassword = "correct horse battery staple"
+)
+
+var (
+	appTestAuthHashOnce sync.Once
+	appTestAuthHash     string
+	appTestAuthHashErr  error
 )
 
 func TestNewBootstrapsHTTPSurface(t *testing.T) {
@@ -37,6 +49,7 @@ func TestNewBootstrapsHTTPSurface(t *testing.T) {
 		CodexApprovalPolicy:   "never",
 		CodexSandboxMode:      "workspace-write",
 		CodexNetworkAccess:    true,
+		Auth:                  testAuthConfig(t),
 	}
 
 	app, err := NewWithExecutor(cfg, wtl.NewHeuristicPhaseExecutor(time.Now))
@@ -81,6 +94,7 @@ func TestNewServesOperatorWorkspaceShell(t *testing.T) {
 		CodexApprovalPolicy:   "never",
 		CodexSandboxMode:      "workspace-write",
 		CodexNetworkAccess:    true,
+		Auth:                  testAuthConfig(t),
 	}
 
 	app, err := NewWithExecutor(cfg, wtl.NewHeuristicPhaseExecutor(time.Now))
@@ -124,6 +138,7 @@ func TestNewBootstrapsWorkspaceWikiManagementSchedule(t *testing.T) {
 		CodexApprovalPolicy:   "never",
 		CodexSandboxMode:      "workspace-write",
 		CodexNetworkAccess:    true,
+		Auth:                  testAuthConfig(t),
 	}
 
 	app, err := NewWithExecutor(cfg, wtl.NewHeuristicPhaseExecutor(time.Now))
@@ -250,6 +265,7 @@ func newTestApp(t *testing.T) *App {
 		CodexApprovalPolicy:   "never",
 		CodexSandboxMode:      "workspace-write",
 		CodexNetworkAccess:    true,
+		Auth:                  testAuthConfig(t),
 	}
 
 	messenger := &capturingMessenger{}
@@ -274,6 +290,7 @@ func doJSONRequest(t *testing.T, handler http.Handler, method, path string, payl
 	}
 	req := httptest.NewRequest(method, path, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	authorizeTestRequest(req)
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 	return res
@@ -287,6 +304,7 @@ func waitForRunStatus(t *testing.T, handler http.Handler, runID string, want ass
 	stableSince := time.Time{}
 	for time.Now().Before(deadline) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+runID, nil)
+		authorizeTestRequest(req)
 		res := httptest.NewRecorder()
 		handler.ServeHTTP(res, req)
 		if res.Code == http.StatusOK {
@@ -321,6 +339,32 @@ func waitForRunStatus(t *testing.T, handler http.Handler, runID string, want ass
 
 	t.Fatalf("run %s did not reach status %q", runID, want)
 	return store.RunRecord{}
+}
+
+func testAuthConfig(t *testing.T) config.AuthConfig {
+	t.Helper()
+
+	appTestAuthHashOnce.Do(func() {
+		appTestAuthHash, appTestAuthHashErr = authpkg.HashPasswordWithParams(appTestAuthPassword, authpkg.PasswordParams{
+			Memory:      8 * 1024,
+			Iterations:  1,
+			Parallelism: 1,
+			SaltLength:  16,
+			KeyLength:   16,
+		})
+	})
+	if appTestAuthHashErr != nil {
+		t.Fatalf("HashPasswordWithParams() error = %v", appTestAuthHashErr)
+	}
+	return config.AuthConfig{
+		Enabled:      true,
+		UserID:       appTestAuthUserID,
+		PasswordHash: appTestAuthHash,
+	}
+}
+
+func authorizeTestRequest(req *http.Request) {
+	req.SetBasicAuth(appTestAuthUserID, appTestAuthPassword)
 }
 
 func requiresSettledTerminalState(status assistant.RunStatus) bool {

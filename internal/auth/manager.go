@@ -38,7 +38,6 @@ type Status struct {
 }
 
 type Manager struct {
-	enabled      bool
 	userID       string
 	passwordHash string
 	now          func() time.Time
@@ -71,15 +70,11 @@ const userIDContextKey contextKey = "cva-auth-user-id"
 
 func NewManager(cfg Config) (*Manager, error) {
 	manager := &Manager{
-		enabled:    cfg.Enabled,
 		now:        time.Now,
 		sessionTTL: 12 * time.Hour,
 		idleTTL:    2 * time.Hour,
 		sessions:   make(map[string]*session),
 		failures:   make(map[string]*failureState),
-	}
-	if !cfg.Enabled {
-		return manager, nil
 	}
 
 	userID := strings.TrimSpace(cfg.UserID)
@@ -126,10 +121,6 @@ func UserIDFromContext(ctx context.Context) (string, bool) {
 
 func (m *Manager) Require(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !m.enabled {
-			next.ServeHTTP(w, r)
-			return
-		}
 		if userID, ok := m.basicUserID(r); ok {
 			next.ServeHTTP(w, withUserID(r, userID))
 			return
@@ -153,11 +144,7 @@ func (m *Manager) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	status := Status{Enabled: m.enabled, Authenticated: !m.enabled}
-	if !m.enabled {
-		writeAuthJSON(w, http.StatusOK, status)
-		return
-	}
+	status := Status{Enabled: true}
 	if userID, ok := m.basicUserID(r); ok {
 		status.Authenticated = true
 		status.UserID = userID
@@ -176,10 +163,6 @@ func (m *Manager) HandleStatus(w http.ResponseWriter, r *http.Request) {
 func (m *Manager) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !m.enabled {
-		writeAuthJSON(w, http.StatusOK, Status{Enabled: false, Authenticated: true})
 		return
 	}
 
@@ -226,20 +209,18 @@ func (m *Manager) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if m.enabled {
-		tokenHash, sess, ok := m.sessionFromRequest(r)
-		if ok {
-			if !m.validCSRF(r, sess) {
-				writeAuthError(w, http.StatusForbidden, "invalid csrf token")
-				return
-			}
-			m.mu.Lock()
-			delete(m.sessions, tokenHash)
-			m.mu.Unlock()
+	tokenHash, sess, ok := m.sessionFromRequest(r)
+	if ok {
+		if !m.validCSRF(r, sess) {
+			writeAuthError(w, http.StatusForbidden, "invalid csrf token")
+			return
 		}
+		m.mu.Lock()
+		delete(m.sessions, tokenHash)
+		m.mu.Unlock()
 	}
 	clearSessionCookie(w, r)
-	writeAuthJSON(w, http.StatusOK, Status{Enabled: m.enabled, Authenticated: !m.enabled})
+	writeAuthJSON(w, http.StatusOK, Status{Enabled: true})
 }
 
 func (m *Manager) basicUserID(r *http.Request) (string, bool) {

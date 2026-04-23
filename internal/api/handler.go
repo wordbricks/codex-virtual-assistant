@@ -122,6 +122,7 @@ func NewHandler(cfg config.Config, runs *assistantapp.RunService, events *EventB
 	if err != nil {
 		return nil, err
 	}
+	cfg.Auth.Enabled = true
 	var projects projectCreator
 	if len(projectCreators) > 0 {
 		projects = projectCreators[0]

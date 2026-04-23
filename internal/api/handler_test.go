@@ -27,6 +27,17 @@ import (
 	"github.com/siisee11/CodexVirtualAssistant/internal/wtl"
 )
 
+const (
+	apiTestAuthUserID   = "operator"
+	apiTestAuthPassword = "correct horse battery staple"
+)
+
+var (
+	apiTestAuthHashOnce sync.Once
+	apiTestAuthHash     string
+	apiTestAuthHashErr  error
+)
+
 func TestRunsAPICreateAndGetRun(t *testing.T) {
 	t.Parallel()
 
@@ -301,6 +312,7 @@ func TestRunsAPICancelAndEventsStream(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	streamRequest := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+created.Run.ID+"/events", nil).WithContext(ctx)
+	authorizeTestRequest(streamRequest)
 	streamResponse := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
@@ -742,7 +754,7 @@ func TestRunAPIServesIndexForSPARoutes(t *testing.T) {
 	}
 }
 
-func TestRunAPIRequiresAuthWhenConfigured(t *testing.T) {
+func TestRunAPIRequiresAuth(t *testing.T) {
 	t.Parallel()
 
 	passwordHash, err := authpkg.HashPasswordWithParams("correct horse battery staple", authpkg.PasswordParams{
@@ -763,7 +775,7 @@ func TestRunAPIRequiresAuthWhenConfigured(t *testing.T) {
 		}
 	})
 
-	bootstrapResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/bootstrap", nil)
+	bootstrapResponse := doUnauthJSONRequest(t, handler, http.MethodGet, "/api/v1/bootstrap", nil)
 	if bootstrapResponse.Code != http.StatusOK {
 		t.Fatalf("GET /bootstrap status = %d, want %d", bootstrapResponse.Code, http.StatusOK)
 	}
@@ -775,12 +787,12 @@ func TestRunAPIRequiresAuthWhenConfigured(t *testing.T) {
 		t.Fatal("bootstrap AuthRequired = false, want true")
 	}
 
-	projectsResponse := doJSONRequest(t, handler, http.MethodGet, "/api/v1/projects", nil)
+	projectsResponse := doUnauthJSONRequest(t, handler, http.MethodGet, "/api/v1/projects", nil)
 	if projectsResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("GET /projects without auth status = %d, want %d", projectsResponse.Code, http.StatusUnauthorized)
 	}
 
-	loginResponse := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/login", map[string]any{
+	loginResponse := doUnauthJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/login", map[string]any{
 		"user_id":  "operator",
 		"password": "correct horse battery staple",
 	})
@@ -851,6 +863,11 @@ func newTestAPIHandlerWithConfig(t *testing.T, executor *sequenceExecutor, mutat
 		ArtifactDir:           filepath.Join(dataDir, "artifacts"),
 		DefaultModel:          config.FixedModel,
 		MaxGenerationAttempts: 3,
+		Auth: config.AuthConfig{
+			Enabled:      true,
+			UserID:       apiTestAuthUserID,
+			PasswordHash: apiTestAuthPasswordHash(t),
+		},
 	}
 	if mutateConfig != nil {
 		mutateConfig(&cfg)
@@ -888,15 +905,32 @@ func newTestAPIHandlerWithConfig(t *testing.T, executor *sequenceExecutor, mutat
 func doJSONRequest(t *testing.T, handler http.Handler, method, path string, payload any) *httptest.ResponseRecorder {
 	t.Helper()
 
+	request := newJSONRequest(t, method, path, payload)
+	authorizeTestRequest(request)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func doUnauthJSONRequest(t *testing.T, handler http.Handler, method, path string, payload any) *httptest.ResponseRecorder {
+	t.Helper()
+
+	request := newJSONRequest(t, method, path, payload)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func newJSONRequest(t *testing.T, method, path string, payload any) *http.Request {
+	t.Helper()
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
 	request := httptest.NewRequest(method, path, bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	return response
+	return request
 }
 
 func waitForRunStatus(t *testing.T, handler http.Handler, runID string, want assistant.RunStatus) store.RunRecord {
@@ -905,6 +939,7 @@ func waitForRunStatus(t *testing.T, handler http.Handler, runID string, want ass
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+runID, nil)
+		authorizeTestRequest(request)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
 		body := response.Body.Bytes()
@@ -921,6 +956,28 @@ func waitForRunStatus(t *testing.T, handler http.Handler, runID string, want ass
 	}
 	t.Fatalf("run %s did not reach status %q", runID, want)
 	return store.RunRecord{}
+}
+
+func authorizeTestRequest(request *http.Request) {
+	request.SetBasicAuth(apiTestAuthUserID, apiTestAuthPassword)
+}
+
+func apiTestAuthPasswordHash(t *testing.T) string {
+	t.Helper()
+
+	apiTestAuthHashOnce.Do(func() {
+		apiTestAuthHash, apiTestAuthHashErr = authpkg.HashPasswordWithParams(apiTestAuthPassword, authpkg.PasswordParams{
+			Memory:      8 * 1024,
+			Iterations:  1,
+			Parallelism: 1,
+			SaltLength:  16,
+			KeyLength:   16,
+		})
+	})
+	if apiTestAuthHashErr != nil {
+		t.Fatalf("HashPasswordWithParams() error = %v", apiTestAuthHashErr)
+	}
+	return apiTestAuthHash
 }
 
 type sequenceExecutor struct {
